@@ -1,6 +1,6 @@
 # Azure DevOps for Orca — design
 
-Date: 2026-11-03 · Status: draft, awaiting approval · Research: [`docs/research/2026-11-03-recon.md`](../../research/2026-11-03-recon.md)
+Date: 2026-11-03 · Status: approved 2026-11-03 · Research: [`docs/research/2026-11-03-recon.md`](../../research/2026-11-03-recon.md)
 
 ## 1. Intent
 
