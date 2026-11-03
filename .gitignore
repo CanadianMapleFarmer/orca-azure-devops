@@ -1,0 +1,4 @@
+.superpowers/
+node_modules/
+.orca/
+.DS_Store
