@@ -38,7 +38,7 @@ This plugin brings those jobs into Orca so you never have to leave it. It is **o
 - **Interfering with the developer's own tooling.** The plugin must never change which account the user's terminal `az` is signed into, nor be changed by it.
 - **Hard-coding one company's setup**: org, project, team, process, state names, column names, swimlanes, branch names (`dev`/`staging`/`master`) or share format.
 - **Needing admin rights to get started.** A developer can install it and use it the same day.
-- **Leaking credentials.** No tokens in plaintext files the plugin owns, in logs, in panel state or in environment variables.
+- **Leaking credentials.** No tokens in plaintext files the plugin owns, in logs, in panel state or in environment variables. The one accepted exception, approved by the user, is the Azure CLI connection's private `az` profile (see 5.6).
 - **Hammering ADO.** It respects ADO rate limits and never makes Orca feel slow.
 - **Looking foreign.** It uses Orca's native components and theme wherever possible.
 
@@ -137,6 +137,8 @@ All of these are verified in the research notes unless marked otherwise.
   - **Vertical columns are the primary structure**, with drag-and-drop between them.
   - Horizontal swimlanes appear only when the team's board defines them, and start collapsed.
   - Filter: me / everyone.
+- **The boards project is chosen independently of the code.** Per org, the user picks the project (and team) whose board they use. It is often a dedicated project holding the epics, features and user stories for all the work, separate from the projects that hold the repos and pipelines. Work items and PRs link across projects within the org, and the plugin follows those links in both directions.
+- **Hierarchy is visible.** Cards and details show the item's parent (e.g. the Epic or Feature above a story), and the board can be filtered by it.
 - **Columns, lanes, states and transitions are always read from the team's board configuration,** never assumed.
 - **Linking PRs to items:** link existing PRs, and new PRs created from an item are linked automatically.
 
@@ -191,6 +193,11 @@ All of these are verified in the research notes unless marked otherwise.
      - Signing in runs `az login` (browser) in that profile.
      - Tokens come from `az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --tenant <org tenant>` in the same profile.
      - The terminal's `az` and the plugin can never affect each other.
+     - **Token storage (approved by the user):** `az` keeps its tokens, including refresh tokens, in a plaintext `msal_token_cache.json` on macOS and Linux; it encrypts only on Windows. The user accepted this for the zero-setup default, under three conditions:
+       - The private profile folder is created owner-only (0700, files 0600).
+       - The panel states where the tokens live.
+       - **Sign out deletes the folder.**
+     - Don't turn on az's experimental `core.encrypt_token_cache`. On macOS it uses one fixed Keychain item that the user's own `az` would share.
   2. **Sign in with Microsoft (Entra ID via MSAL Node).**
      - The app (client) ID and optional tenant are a plugin setting. The README includes a step-by-step admin guide for registering the app.
      - Flow: auth code + PKCE with a loopback redirect. The panel's button opens the URL via `shell.openExternal`.
@@ -203,20 +210,33 @@ All of these are verified in the research notes unless marked otherwise.
 - **Multiple orgs:** any org can be added by URL, each with its own pinned account and its own connection method.
 
 ### 5.7 Connecting to Orca's workspaces
-- **Start a workspace from this work item.** Creates an Orca worktree on a branch named from the item, using a template with sensible default (e.g. `feature/<id>-<slug>`). It records the item↔workspace link in plugin storage.
+- **Stay inside Orca's permission model (decided by the user).** The plugin never runs the `orca` CLI in the background. That route is undocumented and bypasses Orca's approval prompts, and a public plugin has to be trustworthy.
+- **Start a workspace from this work item.** Creates an Orca worktree on a branch named from the item, using a template with sensible default (e.g. `feature/<id>-<slug>`). It records the item↔workspace link in plugin storage. "Check out PR in Orca" works the same way for a PR's source branch.
 - **PR URLs are attached to workspaces as Orca references,** which Orca accepts natively.
+- **How these actions run on 1.4.247.** The plugin hands the user a **visible command**: text sent to an Orca terminal in the focused workspace via `terminal:send`, which the user can see and confirm. Where that isn't possible, it shows **one manual step** to copy or follow. Opening full-width tabs on 1.4.247 is likewise a visible step (the "+" new-file entry). With 1.4.248, all of these become one-click through the official APIs (`workspace:write`, `editor.open`, `agent.launch`).
 - **Branch→PR mapping for the focused workspace.** Match `workspace.list` to the read context, run local `git remote get-url`, then query ADO by `sourceRefName`. This drives context-aware views ("this workspace's item and PRs").
 
 ### 5.8 Settings (in Orca's Settings, via `contributes.settings`, plus in-panel setup)
 - Orgs and their connection method and pinned account.
-- Default project and team per org.
+- Per org: the **boards project and team**, and the **code projects** included in the PR and pipeline views. *Claude's call:* by default this is every project the user can access that has repos, and the user can narrow it.
 - Share destinations (webhook URLs stored as secrets) and the share template.
 - Auto-complete defaults.
 - Branch-name template.
 - Notification toggles.
 - Optional proxy and CA settings (because the worker env strips them).
 
-### 5.9 Repository
+### 5.9 Testing environment (decided by the user)
+- **A free personal Azure DevOps org is the sandbox for everything that writes:** card moves, votes, auto-complete, stage retries, environment approvals, wiki publishes, share posts. The user creates it.
+- **What the sandbox needs:**
+  - A boards project separate from a code project.
+  - A Kanban board with custom columns (e.g. Testing, Ready for Release) and a swimlane.
+  - A repo with three environment branches and PR policies (build validation, required reviewers).
+  - A multi-stage YAML pipeline with an environment approval before a deploy stage.
+  - A wiki.
+- **The client org is read-only during development.** It is used for read checks only, until the user starts using the plugin for real.
+- **Teams share posts are tested against a channel the user chooses for testing.**
+
+### 5.10 Repository
 - **Local:** `~/Development/dev/orca-azure-devops`.
 - **Public home:** GitHub under the **CanadianMapleFarmer** account, created and pushed only when the user asks.
 - **Catalog:** publishing (tag, `orca-plugin` topic, catalog entry) only when the user asks.
@@ -224,11 +244,14 @@ All of these are verified in the research notes unless marked otherwise.
 ## 6. Calls made by Claude (not explicitly decided by the user)
 - **"Move to next column?" nudge.** When a linked PR merges into a branch, the plugin suggests the next column. The mapping is learned from the board, or configured per team as "PR merged into ‹branch› → suggest ‹column›". It is off until configured.
 - **Release-set grouping:** PRs with the same source branch, or sharing a linked work item, form one set.
-- **Polling cadence:** fast (a few seconds) for what is visible and running, slower for the rest, paused when no panel or tab is visible. Always within ADO's rate-limit headers.
+- **Polling cadence:** fast (a few seconds) for what is visible and running, slower for the rest, paused when no panel or tab is visible. The exception is runs the user explicitly *watches*, which keep polling until they finish. Always within ADO's rate-limit headers.
+- **Which board.** "My work" and the full board use a team's **Kanban board for one backlog level**: by default the requirement level (Stories / PBIs / Requirements, whatever the process calls it), for the default team chosen per org. Assigned items that aren't on that board (e.g. Tasks) appear in an "Other" group by State and are moved by State. The sprint **Taskboard is out of v1**. Other teams' boards can be picked in the full-tab board.
+- **Notifications on 1.4.247** fire while the worker is alive: while a plugin panel or tab is open, and for runs the user explicitly *watches* until they finish. The watch's polling keeps the worker active through normal host calls, with no other keep-alive tricks. Always-on background notifications come with the 1.4.248 keep-warm hook.
+- **PR chips on work-item cards:** an open PR shows its validation build and policy status; a merged PR shows ✓. Post-merge pipeline and deploy status, including "waiting for approval", is shown on demand in the work item's detail view, not on every card. This keeps the sidebar cheap.
 - **Notification set:** failure, completion of a watched run, approval waiting, review requested, new comment on my PR.
 - **Default branch template** `feature/<id>-<slug>`.
 - **PR code review** uses Orca's native diff on a checked-out worktree for depth; the in-panel diff is read-only.
-- **Wiki editing** happens on a real Markdown file in a plugin-managed folder outside any repo, opened in Orca, with publish-and-conflict handling in the worker.
+- **Wiki editing on 1.4.247** happens in the plugin's own full-tab editor (Markdown source and preview, Publish), not on a file in the user's repo. Publish and conflict handling run in the worker. If the untitled-tab spike shows save prompts or lost tabs, fall back to a dedicated Orca folder project that holds wiki working copies. Once 1.4.248 ships, revisit editing in Orca's native Markdown editor.
 - **Horizontal swimlanes start collapsed** on the full board.
 - **The plugin id** must not start with `orca-`. Something like `azure-devops`, with display name "Azure DevOps", is the builder's choice.
 
@@ -237,7 +260,7 @@ All of these are verified in the research notes unless marked otherwise.
 - Which libraries to bundle into the frames: a diff algorithm, drag-and-drop for the board, a virtualised log view with ANSI colours.
 - How full-tab views open on 1.4.247: `newFiles` untitled documents vs plugin-managed files. Choose after the spike below.
 - **Spikes to run first.** These are the research's open unknowns, settled before committing to the affected parts:
-  - The worker can run the `orca` CLI reliably (worktree create, reference add, file open) from its environment.
+  - How the visible-command route works on 1.4.247: `terminal:send` reaches only the focused workspace's terminals, so what happens when no terminal is open there, and what the manual fallback looks like.
   - How untitled `newFiles` tabs behave: save prompts, survival across restarts.
   - Rich-text clipboard: `navigator.clipboard` inside a frame vs a worker shell-out per OS (macOS `osascript`/NSPasteboard HTML, Windows `Set-Clipboard -AsHtml`, Linux `xclip -t text/html`).
   - A board move works with only the WEF column fields plus state.
