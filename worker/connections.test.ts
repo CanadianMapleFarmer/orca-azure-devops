@@ -22,6 +22,9 @@ const TOKEN_UNKNOWN = 'az-token-unknown-e4'
 const SECRETS = [PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, basicAuth(PAT_ADA).slice(6), basicAuth(PAT_GRACE).slice(6)]
 
 const EXPIRED = 'Your sign-in expired. Reconnect to continue.'
+const WIPE_FAILED = "Couldn't delete this org's saved sign-in. Sign out to try again."
+const INTERRUPTED = 'Sign-in was interrupted. Try again.'
+const NOT_CONNECTED = 'Connect this organization first.'
 const BAD_PAT = "That token can't be used. Paste it again."
 
 const ADA: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT }
@@ -75,8 +78,21 @@ function deferred(): Deferred {
   return { promise, resolve }
 }
 
+const MAX_TURNS = 200
+
 function flush(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
+}
+
+async function settled<T>(promise: Promise<T>): Promise<T> {
+  let done = false
+  const tracked = promise.finally(() => {
+    done = true
+  })
+  tracked.catch(() => {})
+  for (let turn = 0; turn < MAX_TURNS && !done; turn++) await flush()
+  if (!done) assert.fail('the call never settled')
+  return tracked
 }
 
 function json(body: unknown, status = 200): Response {
@@ -114,6 +130,8 @@ interface FakeAz {
   loginError: Error | null
   tokenError: Error | null
   loginAborted: boolean
+  loginSawProfile: boolean[]
+  signOutError: Error | null
   profiles: Set<string>
   provider: AzCliProvider
 }
@@ -127,6 +145,8 @@ function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
     loginError: null,
     tokenError: null,
     loginAborted: false,
+    loginSawProfile: [],
+    signOutError: null,
     profiles: new Set(profiles),
     provider: {
       profileDir: (org: string) => `${HOME}/.orca-azure-devops/az/${org}`,
@@ -135,6 +155,7 @@ function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
       },
       async login(org: string, tenantId: string | null, signal?: AbortSignal) {
         az.calls.push(`login ${org} ${tenantId}`)
+        az.loginSawProfile.push(az.profiles.has(org))
         az.profiles.add(org)
         const gate = az.loginGate
         if (gate) {
@@ -158,6 +179,7 @@ function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
       },
       async signOut(org: string) {
         az.calls.push(`signOut ${org}`)
+        if (az.signOutError) throw az.signOutError
         az.profiles.delete(org)
       }
     }
@@ -196,7 +218,6 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
   const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()
   const posts: OrgStatus[][] = []
-  const waiters: { org: string; state: OrgState; resolve(): void }[] = []
   let azInstalled = true
   const stateIn = (orgs: OrgStatus[] | undefined, org: string) => orgs?.find(status => status.org === org)?.state
 
@@ -208,11 +229,6 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     fetch: ado.fetch,
     post: orgs => {
       posts.push(record(structuredClone(orgs)))
-      for (const waiter of [...waiters]) {
-        if (stateIn(orgs, waiter.org) !== waiter.state) continue
-        waiters.splice(waiters.indexOf(waiter), 1)
-        waiter.resolve()
-      }
     },
     now: () => clock.now
   })
@@ -237,13 +253,24 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     async connect(input: Parameters<Connections['connect']>[0]) {
       return record(await h.connections.connect(input))
     },
-    until(state: OrgState, org = 'contoso') {
-      if (stateIn(posts.at(-1), org) === state) return Promise.resolve()
-      return new Promise<void>(resolve => waiters.push({ org, state, resolve }))
+    async until(state: OrgState, org = 'contoso') {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        if (stateIn(posts.at(-1), org) === state) return
+        await flush()
+      }
+      assert.fail(`${org} never reached ${state}; last posted ${stateIn(posts.at(-1), org)}`)
+    },
+    async refusedWithoutCalls(message: string, org = 'contoso') {
+      const calls = az.calls.length
+      const sent = ado.requests.length
+      const error = await h.failure(h.connections.http.json({ org, path: '/_apis/projects' }))
+      assert.equal(error.message, message)
+      assert.equal(az.calls.length, calls, 'no az call')
+      assert.equal(ado.requests.length, sent, 'no ADO request')
     },
     async failure(promise: Promise<unknown>): Promise<AdoError> {
       try {
-        await promise
+        await settled(promise)
       } catch (error) {
         assert.ok(error instanceof AdoError, 'expected an AdoError')
         return record(error)
@@ -285,10 +312,10 @@ test('connect via azure-cli returns signing-in then posts connected', async () =
   assert.equal(h.last()?.account?.uniqueName, 'ada@contoso.com')
   assert.equal(h.stored()?.[0].pinned?.adoId, 'u1')
   assert.deepEqual(h.storage.get('signing-in'), [])
-  assert.deepEqual(h.az.calls, [`login contoso ${TENANT}`, 'getToken contoso'])
+  assert.deepEqual(h.az.calls, ['signOut contoso', `login contoso ${TENANT}`, 'getToken contoso'])
 
   await h.connections.http.json(PROJECTS)
-  assert.deepEqual(h.az.calls, [`login contoso ${TENANT}`, 'getToken contoso'], 'the sign-in token is reused')
+  assert.equal(h.az.calls.length, 3, 'the sign-in token is reused')
   assert.deepEqual(h.ado.requests.map(request => request.who), ['ada', 'ada'])
 })
 
@@ -304,7 +331,7 @@ test('connect refuses when the az account differs from the pinned account', asyn
   assert.equal(status?.account?.uniqueName, 'ada@contoso.com')
   assert.deepEqual(h.stored()?.[0].pinned, ADA)
   assert.deepEqual(h.stored()?.[0].boards, BOARDS)
-  assert.deepEqual(h.az.calls, [`login contoso ${TENANT}`, 'getToken contoso', 'signOut contoso'])
+  assert.deepEqual(h.az.calls, ['signOut contoso', `login contoso ${TENANT}`, 'getToken contoso', 'signOut contoso'])
   assert.deepEqual(h.storage.get('signing-in'), [])
 
   const sent = h.ado.requests.length
@@ -313,7 +340,7 @@ test('connect refuses when the az account differs from the pinned account', asyn
   assert.equal(error.status, 401)
   assert.equal(error.message, 'This org is signed in as a different account.')
   assert.equal(h.ado.requests.length, sent)
-  assert.equal(h.az.calls.length, 3)
+  assert.equal(h.az.calls.length, 4)
 })
 
 test('connect refuses a PAT for a different account and keeps the pinned one', async () => {
@@ -469,7 +496,7 @@ test('activate resets orgs left signing-in', async () => {
   }
   assert.deepEqual(h.storage.get('signing-in'), [])
   assert.deepEqual(h.az.calls, ['signOut contoso'], 'a half-finished az login is deleted')
-  assert.ok(h.secretStore.get('pat:fabrikam') === PAT_ADA, 'a PAT is only ever saved after it was verified')
+  assert.equal(h.secretStore.has('pat:fabrikam'), false, 'an interrupted sign-in keeps no credential it cannot vouch for')
   assert.deepEqual(h.posts.at(-1)?.map(status => status.state), ['disconnected', 'disconnected'])
 
   const error = await h.failure(h.connections.http.json({ org: 'fabrikam', path: '/_apis/projects' }))
@@ -555,7 +582,7 @@ test('signing out during az sign-in cancels it', async () => {
   assert.equal(status.state, 'disconnected')
   assert.equal(status.message, 'Sign-in was cancelled.')
   assert.equal(h.az.loginAborted, true)
-  assert.deepEqual(h.az.calls, [`login contoso ${TENANT}`, 'signOut contoso'])
+  assert.deepEqual(h.az.calls, ['signOut contoso', `login contoso ${TENANT}`, 'signOut contoso'])
   assert.deepEqual(h.storage.get('signing-in'), [])
 
   h.az.loginGate.resolve()
@@ -767,6 +794,177 @@ test('signOut and update refuse an unknown org', async () => {
   const h = harness()
   await assert.rejects(h.connections.signOut('contoso'), /not connected/)
   await assert.rejects(h.connections.update('contoso', { boards: BOARDS }), /not connected/)
+})
+
+test('an az connect wipes the previous profile before az login runs', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  assert.equal(h.az.profiles.has('contoso'), true)
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('connected')
+  assert.deepEqual(h.az.loginSawProfile, [false])
+  assert.deepEqual(h.az.calls.slice(0, 2), ['signOut contoso', `login contoso ${TENANT}`])
+})
+
+test('requests are refused while a pinned org signs in again', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  await h.connections.http.json(PROJECTS)
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+  h.az.loginGate.resolve()
+  await h.until('connected')
+})
+
+test('a failed reconnect leaves no cached token behind', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  await h.connections.http.json(PROJECTS)
+  h.az.loginError = new Error('Azure CLI sign-in failed')
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('error')
+  assert.equal(h.az.profiles.has('contoso'), false)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('an org left signing-in is refused before resetInterrupted runs', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })], signingIn: ['contoso'] })
+  const [status] = await h.connections.list()
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, INTERRUPTED)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('a mismatch whose profile cannot be deleted stays blocked until the wipe succeeds', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokens = [TOKEN_GRACE]
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  assert.equal(h.az.calls.at(-1), `login contoso ${TENANT}`)
+  h.az.signOutError = new Error('EPERM: operation not permitted')
+  h.az.loginGate.resolve()
+  await h.until('error')
+  assert.equal(h.last()?.message, WIPE_FAILED)
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  await h.refusedWithoutCalls(WIPE_FAILED)
+
+  h.restart()
+  assert.equal((await h.connections.list())[0].message, INTERRUPTED)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+  await h.connections.resetInterrupted()
+  assert.equal(h.last()?.message, WIPE_FAILED)
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+
+  h.az.signOutError = null
+  await h.connections.resetInterrupted()
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.equal(h.last()?.message, INTERRUPTED)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('a failed reconnect whose profile cannot be deleted never uses that profile', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  h.az.signOutError = new Error('EPERM: operation not permitted')
+  h.az.loginError = new Error('Azure CLI sign-in failed')
+  h.az.loginGate.resolve()
+  await h.until('error')
+  assert.equal(h.last()?.message, WIPE_FAILED)
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  await h.refusedWithoutCalls(WIPE_FAILED)
+
+  h.restart()
+  assert.equal((await h.connections.list())[0].state, 'disconnected')
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('a probed mismatch whose credential cannot be deleted stays blocked across a restart', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokens = [TOKEN_ADA, TOKEN_GRACE]
+  h.ado.reject = 2
+  h.az.signOutError = new Error('EPERM: operation not permitted')
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.message, 'This org is signed in as a different account.')
+  assert.equal(h.last()?.state, 'error')
+  assert.equal(h.last()?.message, WIPE_FAILED)
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  await h.refusedWithoutCalls(WIPE_FAILED)
+
+  h.restart()
+  assert.equal((await h.connections.list())[0].state, 'disconnected')
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('a connect that starts while remove waits for az keeps its org', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokenGate = deferred()
+  const request = h.failure(h.connections.http.json(PROJECTS))
+  await flush()
+  const removing = h.connections.remove('contoso')
+  await flush()
+  const status = await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  assert.equal(status.state, 'signing-in')
+
+  h.az.tokenGate.resolve()
+  await settled(removing)
+  assert.equal((await request).message, NOT_CONNECTED)
+  await h.until('connected')
+  assert.equal(h.stored()?.[0]?.pinned?.adoId, 'u1')
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.deepEqual(h.az.calls, ['getToken contoso', 'signOut contoso', 'signOut contoso', `login contoso ${TENANT}`, 'getToken contoso'])
+})
+
+test('a reconnect that starts while signOut waits for az is not undone by it', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokenGate = deferred()
+  const request = h.failure(h.connections.http.json(PROJECTS))
+  await flush()
+  const signingOut = h.connections.signOut('contoso')
+  await flush()
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+
+  h.az.tokenGate.resolve()
+  const signedOut = record(await settled(signingOut))
+  assert.equal(signedOut.state, 'signing-in')
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  assert.equal((await request).message, NOT_CONNECTED)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+
+  h.az.loginGate.resolve()
+  await h.until('connected')
+  assert.deepEqual(h.storage.get('signing-in'), [])
+})
+
+test('switching to a PAT during an az sign-in cancels the login instead of waiting for it', async () => {
+  const h = harness()
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  const status = record(await settled(h.connections.connect({ orgInput: 'contoso', method: 'pat', pat: PAT_ADA })))
+  assert.equal(status.state, 'connected')
+  assert.equal(h.az.loginAborted, true)
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+})
+
+test('remove during an az sign-in cancels it and leaves nothing behind', async () => {
+  const h = harness()
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  await h.connections.remove('contoso')
+  assert.equal(h.az.loginAborted, true)
+  h.az.loginGate.resolve()
+  await flush()
+  assert.deepEqual(h.stored(), [])
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.posts.at(-1), [])
+  assert.equal(h.ado.requests.length, 0)
 })
 
 test('no secrets in posts or logs', () => {

@@ -34,6 +34,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     },
     now: Date.now
   })
+  await connections.resetInterrupted()
 
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   orca.panels.handle('orgs.list', () => connections.list())
@@ -44,7 +45,5 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     return { ok: true as const }
   })
   orca.commands.register('status', async () => statusText(await connections.list()))
-
-  await connections.resetInterrupted()
   showStatus(await connections.list())
 }

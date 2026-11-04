@@ -49,6 +49,7 @@ const MESSAGES = {
   otherAccount: 'This org is signed in as a different account.',
   notConnected: 'Connect this organization first.',
   signedOut: 'Signed out.',
+  wipeFailed: "Couldn't delete this org's saved sign-in. Sign out to try again.",
   noAccess: "Your account can't access this in Azure DevOps.",
   unknownOrg: 'That organization is not connected.'
 }
@@ -78,6 +79,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     loading ??= (async () => {
       orgs = (await deps.store.get<OrgConfig[]>(ORGS_KEY)) ?? []
       signingIn = new Set((await deps.store.get<string[]>(SIGNING_IN_KEY)) ?? [])
+      for (const org of signingIn) transient.set(org, { state: 'disconnected', message: MESSAGES.interrupted })
     })().catch(error => {
       loading = null
       throw error
@@ -201,6 +203,21 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return serial(org, () => (method === 'pat' ? pat.forget(org) : deps.azProfiles.signOut(org)))
   }
 
+  async function wipeCredentials(org: string, methods: ConnectionMethod[]): Promise<boolean> {
+    signingIn.add(org)
+    const wiping = Promise.all(methods.map(method => forgetCredentials(org, method)))
+    const saving = saveAll()
+    const wiped = await wiping.then(() => true, () => false)
+    await saving
+    if (!attempts.has(org)) {
+      if (wiped) signingIn.delete(org)
+      else if (find(org)) setTransient(org, { state: 'error', message: MESSAGES.wipeFailed })
+    }
+    await saveAll()
+    await publish()
+    return wiped
+  }
+
   async function acquire(cfg: OrgConfig): Promise<Credential> {
     if (cfg.method === 'pat') {
       let header: string | null
@@ -242,8 +259,9 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     if (!cfg?.pinned) return MESSAGES.notConnected
     switch (stateOf(cfg)) {
       case 'connected':
-      case 'error':
         return null
+      case 'error':
+        return signingIn.has(cfg.org) ? (transient.get(cfg.org)?.message ?? MESSAGES.notConnected) : null
       case 'mismatch':
         return MESSAGES.otherAccount
       case 'expired':
@@ -324,8 +342,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     if (samePinnedAccount(pinned, account)) return new AdoError('forbidden', 403, MESSAGES.noAccess)
     invalidate(org)
     setTransient(org, mismatchOf(account, pinned))
-    await forgetCredentials(org, cfg.method).catch(() => {})
-    await publish()
+    await wipeCredentials(org, [cfg.method])
     return unauthorized(MESSAGES.otherAccount)
   }
 
@@ -368,11 +385,11 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return cfg.method === 'azure-cli' ? serial(cfg.org, () => deps.azProfiles.signOut(cfg.org)) : Promise.resolve()
   }
 
-  async function conclude(org: string, attempt: Attempt, next: Transient | null): Promise<void> {
+  async function conclude(org: string, attempt: Attempt, next: Transient | null, clearMarker = true): Promise<void> {
     if (!isCurrent(org, attempt)) return
     attempts.delete(org)
     setTransient(org, next)
-    signingIn.delete(org)
+    if (clearMarker) signingIn.delete(org)
     await saveAll()
     await publish()
   }
@@ -385,36 +402,31 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   ): Promise<void> {
     const { org } = cfg
     const { signal } = attempt.controller
+    let outcome: Transient
     try {
       const credential = await obtain(signal)
       const account = await verifiedAccount(org, credential.header, cfg.tenantId)
       if (!isCurrent(org, attempt)) return
       if (cfg.pinned && !samePinnedAccount(cfg.pinned, account)) {
-        const mismatch = mismatchOf(account, cfg.pinned)
-        transient.set(org, mismatch)
-        try {
-          await discardSignIn(cfg)
-        } finally {
-          await conclude(org, attempt, mismatch)
-        }
+        outcome = mismatchOf(account, cfg.pinned)
+      } else {
+        await serial(org, () => {
+          signal.throwIfAborted()
+          return keep()
+        })
+        if (!isCurrent(org, attempt)) return
+        cfg.pinned = account
+        credentials.set(org, credential)
+        await conclude(org, attempt, null)
         return
       }
-      await serial(org, () => {
-        signal.throwIfAborted()
-        return keep()
-      })
-      if (!isCurrent(org, attempt)) return
-      cfg.pinned = account
-      credentials.set(org, credential)
-      await conclude(org, attempt, null)
     } catch (error) {
       if (!isCurrent(org, attempt)) return
-      try {
-        await discardSignIn(cfg)
-      } finally {
-        await conclude(org, attempt, { state: 'error', message: messageOf(error) })
-      }
+      outcome = { state: 'error', message: messageOf(error) }
     }
+    transient.set(org, outcome)
+    const wiped = await discardSignIn(cfg).then(() => true, () => false)
+    await conclude(org, attempt, wiped ? outcome : { state: 'error', message: MESSAGES.wipeFailed }, wiped)
   }
 
   function draftError(parsed: { org: string; url: string } | null, method: ConnectionMethod, message: string): OrgStatus {
@@ -423,9 +435,17 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return statusOf({ ...cfg, method }, true, { state: 'error', message })
   }
 
-  async function begin(parsed: { org: string; url: string }, method: ConnectionMethod, tenantId: string | null) {
+  async function begin(
+    parsed: { org: string; url: string },
+    method: ConnectionMethod,
+    tenantId: string | null
+  ): Promise<{ cfg: OrgConfig; attempt: Attempt | null }> {
+    const existing = find(parsed.org)
+    if (existing && existing.method !== method) {
+      cancelAttempt(existing.org)
+      if (!(await wipeCredentials(existing.org, [existing.method]))) return { cfg: existing, attempt: null }
+    }
     let cfg = find(parsed.org)
-    const previousMethod = cfg?.method
     if (cfg) {
       cfg.url = parsed.url
       cfg.tenantId = tenantId ?? cfg.tenantId
@@ -438,7 +458,6 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     invalidate(cfg.org)
     transient.set(cfg.org, { state: 'signing-in' })
     signingIn.add(cfg.org)
-    if (previousMethod && previousMethod !== method) await forgetCredentials(cfg.org, previousMethod)
     await saveAll()
     await publish()
     return { cfg, attempt }
@@ -462,6 +481,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         if (!PRINTABLE_ASCII.test(token)) return draftError(parsed, method, MESSAGES.unusablePat)
         const tenantId = await discoverTenant(parsed.org, deps.fetch)
         const { cfg, attempt } = await begin(parsed, method, tenantId)
+        if (!attempt) return statusFor(cfg)
         const header = basicAuth(token)
         await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity }), () => pat.save(cfg.org, token))
         return statusFor(cfg)
@@ -471,10 +491,14 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       if (!az) return draftError(parsed, method, MESSAGES.azMissing)
       const tenantId = await discoverTenant(parsed.org, deps.fetch)
       const { cfg, attempt } = await begin(parsed, method, tenantId)
+      if (!attempt) return statusFor(cfg)
       const { org } = cfg
       void signIn(cfg, attempt, async signal => {
-        await serial(org, () => {
+        await serial(org, async () => {
           signal.throwIfAborted()
+          await deps.azProfiles.signOut(org).catch(() => {
+            throw new Error(MESSAGES.wipeFailed)
+          })
           return az.login(org, cfg.tenantId, signal)
         })
         const { token, expiresAt } = await serial(org, () => {
@@ -492,13 +516,9 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       if (!cfg) throw new Error(MESSAGES.unknownOrg)
       const cancelled = cancelAttempt(org)
       invalidate(org)
-      transient.set(org, { state: 'disconnected' })
-      await forgetCredentials(org, cfg.method)
       cfg.pinned = null
       setTransient(org, cancelled ? { state: 'disconnected', message: MESSAGES.cancelled } : null)
-      signingIn.delete(org)
-      await saveAll()
-      await publish()
+      await wipeCredentials(org, [cfg.method])
       return statusFor(cfg)
     },
 
@@ -508,13 +528,9 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       if (!cfg) return
       cancelAttempt(org)
       invalidate(org)
-      transient.set(org, { state: 'disconnected' })
-      await forgetCredentials(org, cfg.method)
       orgs = orgs.filter(item => item !== cfg)
       transient.delete(org)
-      signingIn.delete(org)
-      await saveAll()
-      await publish()
+      if (!(await wipeCredentials(org, [cfg.method]))) throw new Error(MESSAGES.wipeFailed)
     },
 
     async update(org, patch) {
@@ -532,17 +548,14 @@ export function createConnections(deps: ConnectionsDeps): Connections {
 
     async resetInterrupted() {
       await load()
-      const interrupted = [...signingIn].filter(org => !attempts.has(org))
-      if (interrupted.length === 0) return
-      for (const org of interrupted) {
-        signingIn.delete(org)
+      for (const org of [...signingIn].filter(org => !attempts.has(org))) {
         const cfg = find(org)
-        if (!cfg) continue
-        if (cfg.method === 'azure-cli') await forgetCredentials(org, cfg.method)
-        if (!attempts.has(org)) setTransient(org, { state: 'disconnected', message: MESSAGES.interrupted })
+        const wiped = await wipeCredentials(org, cfg ? [cfg.method] : ['azure-cli', 'pat'])
+        if (wiped && cfg && !attempts.has(org)) {
+          setTransient(org, { state: 'disconnected', message: MESSAGES.interrupted })
+          await publish()
+        }
       }
-      await saveAll()
-      await publish()
     }
   }
 }
