@@ -1,5 +1,11 @@
 import { assert, test } from 'orca/testing'
-import { discoverTenant, parseOrgInput } from './org'
+import { discoverTenant, isValidOrgName, parseOrgInput } from './org'
+
+test('isValidOrgName accepts lower-case names up to 50 characters and nothing else', () => {
+  for (const name of ['contoso', 'a', '0abc', 'fab-rikam', 'a'.repeat(50)]) assert.equal(isValidOrgName(name), true, name)
+  for (const name of ['', '-contoso', 'Contoso', 'con toso', 'a/b', '../x', '..', 'a.b', 'a'.repeat(51)])
+    assert.equal(isValidOrgName(name), false, JSON.stringify(name))
+})
 
 test('parseOrgInput accepts the common forms', () => {
   for (const input of ['contoso', ' Contoso ', 'https://dev.azure.com/contoso', 'https://dev.azure.com/Contoso/',

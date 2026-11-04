@@ -1,9 +1,9 @@
 import * as path from 'node:path'
+import { isValidOrgName } from '../ado/org'
 import type { RunCommand } from '../sys/run'
 
 export const ADO_RESOURCE = '499b84ac-1321-427f-aa17-267ca6975798'
 
-const ORG_NAME = /^[a-z0-9][a-z0-9-]{0,49}$/
 const PROFILE_ROOT = ['.orca-azure-devops', 'az']
 const PROFILE_MODE = 0o700
 const TOKEN_TIMEOUT_MS = 60_000
@@ -25,7 +25,7 @@ export function createAzCliProvider(deps: {
   const { azPath, run, home, fs } = deps
 
   function profileDir(org: string): string {
-    if (!ORG_NAME.test(org)) throw new Error('Invalid organisation name')
+    if (!isValidOrgName(org)) throw new Error('Invalid organisation name')
     return path.join(home, ...PROFILE_ROOT, org)
   }
 

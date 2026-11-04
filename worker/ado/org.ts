@@ -4,10 +4,14 @@ const ALL_ZERO_TENANT = '00000000-0000-0000-0000-000000000000'
 const LEGACY_HOST_SUFFIX = '.visualstudio.com'
 const DISCOVERY_TIMEOUT_MS = 10_000
 
+export function isValidOrgName(name: string): boolean {
+  return ORG_NAME.test(name)
+}
+
 export function parseOrgInput(input: string): { org: string; url: string } | null {
   const text = input.trim().toLowerCase()
-  const org = ORG_NAME.test(text) ? text : orgFromUrl(text)
-  return org && ORG_NAME.test(org) ? { org, url: `https://dev.azure.com/${org}` } : null
+  const org = isValidOrgName(text) ? text : orgFromUrl(text)
+  return org && isValidOrgName(org) ? { org, url: `https://dev.azure.com/${org}` } : null
 }
 
 function orgFromUrl(text: string): string | null {
