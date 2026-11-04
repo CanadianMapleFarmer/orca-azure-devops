@@ -3,13 +3,15 @@ import { DONE_CATEGORIES, loadTypeStates, type TypeState } from '../ado/board-co
 import { AdoError, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
-import { hydrate, queryBoardIds, queryIds, textOr, toSummary, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
-import { CHIPS_NEED_CODE_READ, showingNewest } from '../messages'
+import { hydrate, queryBoardIds, queryIds, textOr, toSummary, WIQL_TOP, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
+import { showingNewest } from '../messages'
+import type { BoardResult } from './board-views'
 
 const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
 const MAX_ITEMS = 1000
 const POST_BUDGET_BYTES = 240 * 1024
+const BOARD_BUDGET_BYTES = 900 * 1024
 
 type Base = ReturnType<typeof toSummary>
 type StatesByType = Map<string, TypeState[]>
@@ -61,9 +63,9 @@ export async function loadMine(source: ItemSource, cfg: BoardConfig): Promise<Lo
   return summarize(source, cfg, bases.filter(base => !isDone(base, states)), states)
 }
 
-export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, everyone: boolean): Promise<Loaded> {
+export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, everyone: boolean): Promise<Loaded & { truncated: boolean }> {
   const ids = await queryBoardIds(source.http, source.org, cfg.projectId, cfg.teamId, cfg, everyone)
-  return summarize(source, cfg, await hydrateBases(source, cfg, ids), new Map())
+  return { ...(await summarize(source, cfg, await hydrateBases(source, cfg, ids), new Map())), truncated: ids.length >= WIQL_TOP }
 }
 
 export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number): Promise<{ raw: RawWorkItem; item: WorkItemSummary; chips: PrChip[] } | null> {
@@ -88,15 +90,9 @@ export function movesByState(item: { type: string; column: string | null }, cfg:
 }
 
 export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
-  const newest = [...snapshot.mine, ...snapshot.other].sort((a, b) => b.changedAt - a.changedAt)
-  let budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] })
-  const kept = new Set<WorkItemSummary>()
-  for (const item of newest) {
-    budget -= byteLength(item) + 1
-    if (kept.size === MAX_ITEMS || budget < 0) break
-    kept.add(item)
-  }
-  if (kept.size === newest.length) return snapshot
+  const all = [...snapshot.mine, ...snapshot.other]
+  const kept = newestThatFit(all, POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] }), MAX_ITEMS)
+  if (kept.size === all.length) return snapshot
   const ids = new Set([...kept].map(item => item.id))
   return {
     ...snapshot,
@@ -105,6 +101,23 @@ export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
     nudges: snapshot.nudges.filter(nudge => ids.has(nudge.itemId)),
     message: joinMessages(snapshot.message, showingNewest(kept.size))
   }
+}
+
+export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
+  const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
+  const kept = newestThatFit(result.items, BOARD_BUDGET_BYTES - header)
+  if (!truncated && kept.size === result.items.length) return result
+  return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
+}
+
+function newestThatFit(items: WorkItemSummary[], budget: number, maxItems = Infinity): Set<WorkItemSummary> {
+  const kept = new Set<WorkItemSummary>()
+  for (const item of [...items].sort((a, b) => b.changedAt - a.changedAt)) {
+    budget -= byteLength(item) + 1
+    if (kept.size === maxItems || budget < 0) break
+    kept.add(item)
+  }
+  return kept
 }
 
 export function foldChips(chips: PrChip[]): PrChip[] {

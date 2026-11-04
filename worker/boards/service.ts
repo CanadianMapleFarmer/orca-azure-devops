@@ -12,7 +12,7 @@ import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
-import { capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, movesByState, restate, type ItemSource } from './snapshot'
+import { capBoard, capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, movesByState, restate, type ItemSource } from './snapshot'
 
 export type { BoardChange, BoardRef, BoardResult }
 
@@ -162,7 +162,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const source = sourceOf(status)
     const loaded = await loadBoardItems(source, board, request.everyone)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
-    return { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }
+    return capBoard({ board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }, loaded.truncated)
   }
 
   function forget(org: string): void {

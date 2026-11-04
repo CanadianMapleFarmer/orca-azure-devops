@@ -747,6 +747,29 @@ test('the board loads every 30 s while a board is visible', async () => {
   assert.equal(h.ado.count(isBoardWiql), 5, 'a board of an org that is not connected is not polled')
 })
 
+test('a board whose query returned 500 items says only the newest are shown', async () => {
+  const h = harness()
+  const ids = Array.from({ length: 500 }, (_, index) => 7000 + index)
+  for (const id of ids) h.ado.items.set(id, story(id, T0 - (id - 7000) * MINUTE))
+  boardIds(h, ids)
+  const view = await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
+  assert.equal(view.items.length, 500)
+  assert.equal(view.message, 'Showing the 500 most recently changed items.')
+})
+
+test('a board answer is capped at 900 KiB', async () => {
+  const h = harness()
+  const ids = Array.from({ length: 450 }, (_, index) => 7000 + index)
+  for (const id of ids) h.ado.items.set(id, story(id, T0 - (id - 7000) * MINUTE, `${id} ${'é'.repeat(1_500)}`))
+  boardIds(h, ids)
+  const view = await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
+  const count = view.items.length
+  assert.ok(count > 100 && count < 450, String(count))
+  assert.deepEqual(view.items.map(entry => entry.id), ids.slice(0, count))
+  assert.equal(view.message, `Showing the ${count} most recently changed items.`)
+  assert.ok(Buffer.byteLength(JSON.stringify(view)) <= 900 * 1024)
+})
+
 test('defaultBoard names the requirement board of the org boards team, or null without one', async () => {
   const h = harness()
   h.setOrgs([status()])

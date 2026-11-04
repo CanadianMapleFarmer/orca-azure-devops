@@ -65,6 +65,7 @@ The board opens in its own tab as a custom editor for `.adoboard` files.
 - Swimlanes collapse and expand. When a board has several lanes, all but the first start collapsed.
 - **Me** and **Everyone** switch between your items and the whole team's. The **Parent** list filters to the children of one parent.
 - It refreshes every 30 seconds while the tab is visible.
+- A board with more items than one answer holds (500 items, or 900 KiB) shows the most recently changed ones and says how many.
 
 **Open board** in the Work tab writes `<workspace>/.orca-ado/<org>.<teamId>.adoboard` in your focused workspace and opens it. The `.orca-ado/` folder holds a `.gitignore` containing `*`, so git never sees it. This needs a local workspace. Without one, use **+ → Azure DevOps board**, which opens the editor and asks which board.
 

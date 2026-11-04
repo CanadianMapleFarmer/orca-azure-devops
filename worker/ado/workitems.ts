@@ -13,7 +13,7 @@ export interface RawWorkItem {
 
 export interface PrRef { projectId: string; repoId: string; prId: number }
 
-const WIQL_TOP = 500
+export const WIQL_TOP = 500
 const BATCH_SIZE = 200
 export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
 

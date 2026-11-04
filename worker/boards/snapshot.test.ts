@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
-import type { PrChip, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
-import { capSnapshot, foldChips } from './snapshot'
+import type { BoardConfig, PrChip, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
+import { capBoard, capSnapshot, foldChips } from './snapshot'
 
 function tiny(id: number, changedAt: number): WorkItemSummary {
   return { id, changedAt } as WorkItemSummary
@@ -26,6 +26,34 @@ test('capSnapshot keeps the 1,000 most recently changed items across mine and ot
 test('capSnapshot returns a snapshot that fits unchanged', () => {
   const snapshot = snapshotOf([tiny(1, 1), tiny(2, 2)])
   assert.equal(capSnapshot(snapshot), snapshot)
+})
+
+const BOARD = { boardId: 'board-stories' } as BoardConfig
+const BOARD_BUDGET = 900 * 1024
+
+function wide(id: number, changedAt: number): WorkItemSummary {
+  return { id, changedAt, title: `${id} ${'é'.repeat(2_000)}` } as WorkItemSummary
+}
+
+test('capBoard keeps the newest items that fit in 900 KiB, in their order, and says how many', () => {
+  const items = Array.from({ length: 400 }, (_, index) => wide(index, index % 2 === 0 ? 10_000 - index : index))
+  const capped = capBoard({ board: BOARD, items, message: 'Linked PR status needs Code (Read) access.' }, false)
+  const count = capped.items.length
+  assert.ok(count > 100 && count < 400, String(count))
+  assert.ok(Buffer.byteLength(JSON.stringify(capped)) <= BOARD_BUDGET)
+  const newest = [...items].sort((a, b) => b.changedAt - a.changedAt).slice(0, count)
+  assert.deepEqual(capped.items, items.filter(item => newest.includes(item)))
+  assert.equal(capped.message, `Linked PR status needs Code (Read) access. Showing the ${count} most recently changed items.`)
+})
+
+test('capBoard says how many are shown when the query hit its 500-item limit', () => {
+  const items = [tiny(1, 1), tiny(2, 2)]
+  assert.deepEqual(capBoard({ board: BOARD, items }, true), { board: BOARD, items, message: 'Showing the 2 most recently changed items.' })
+})
+
+test('capBoard returns a board that fits unchanged', () => {
+  const result = { board: BOARD, items: [tiny(1, 1), tiny(2, 2)] }
+  assert.equal(capBoard(result, false), result)
 })
 
 function chip(prId: number, target: string, state: PrChip['state'], build: PrChip['build'] = 'none'): PrChip {
