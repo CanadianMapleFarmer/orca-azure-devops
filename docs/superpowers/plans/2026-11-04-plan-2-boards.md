@@ -131,6 +131,28 @@ Protocol additions in `src/protocol.ts`:
 
 ---
 
+### Task 0: Stopped commands settle on Linux (carried from Plan 1, ruling R34)
+
+**Files:**
+- Modify: `worker/sys/run.ts`.
+- Test: `worker/sys/run.test.ts`.
+
+**Why:** On Linux, az's `webbrowser` launches the browser in a new session holding az's stdout and stderr. A stopped command waits for pipe EOF and never settles. That leaves cancel, the login timeout and sign-out hanging, and the org's serial chain wedged.
+
+**Required:**
+- **Settle once the group is gone.** Once stopped (abort, timeout or `stopAllCommands`), a command settles as soon as its leader has exited and `process.kill(-pid, 0)` reports the group gone. It destroys stdout and stderr instead of waiting for EOF from a process outside the group. A command that was not stopped keeps today's behaviour.
+- **Unregister after escalation.** Track whether the SIGKILL escalation has fired. Once it has, always remove the registry entry at close, so a later `stopAllCommands` never signals a stale or recycled pgid.
+- **Spawn failures reject.** Attach the `error` listener before touching stdio, so a spawn that fails before creating stdio (EMFILE/ENFILE) rejects with the fixed message instead of crashing the worker.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `a stopped command settles even when a process outside its group holds its pipes`: a non-exec wrapper starts a detached `setsid` holder (e.g. `perl -e 'use POSIX; setsid(); sleep 60' &`) that inherits fds 1 and 2, then sleeps. Abort → settles within 5 s. `pkill` the holder in `finally`.
+  - `the registry forgets a group after SIGKILL escalation`.
+  - `a spawn that fails before stdio rejects instead of crashing`: make `spawn` injectable, e.g. `createRunCommand(spawnFn)` with `runCommand` = the real one.
+- [ ] **Step 2: Run.** `orca plugin test . --json`. Expected: the new tests FAIL (hang bounded by the test's own timeout, registry entry kept, uncaught error).
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run.** Expected: PASS, with no leftover processes (`pgrep` for the test markers is empty).
+- [ ] **Step 5: Commit** "Settle stopped commands when an outside process holds their pipes".
+
 ### Task 1: Polling scheduler
 
 **Files:**
@@ -360,6 +382,9 @@ export function moveItem(http: AdoHttp, org: string, projectId: string, item: Wo
   - On conflict it re-hydrates the item, updates the snapshot, posts, and rethrows the conflict error.
 - **`work.board`.** Loads with the 30 s cadence while a board surface is visible (job `board:<org>:<teamId>:<boardId>`).
 - **Orgs without `boards`.** `work.snapshot` returns `{ board: null, message: "Pick a boards project and team in this org's settings." }`.
+- **Jobs only for connected orgs** (Plan 1 final-review contract). The service subscribes to Plan 1's org status changes: wire `post` in `main.ts` so connections publish to both the panel and `boards.onOrgs(orgs)`. It keeps `mine:<org>` jobs only for orgs whose state is `connected`, removing them otherwise. A token cool-down or block from Plan 1 then never turns into a polling storm.
+- **Missing scope for PR chips.** A `forbidden` while loading PR chips disables chips for that org for 10 minutes and sets the snapshot `message` to "Linked PR status needs Code (Read) access." The items still show; it doesn't retry every tick (the final review's R18 cost note).
+- **Tidy `main.ts` as it grows.** Move Plan 1's board, team and project resolution helpers from `worker/main.ts` into `worker/ado/core.ts` (`resolveBoards`, `resolveProjects`), keeping the handlers' behaviour and tests green.
 
 - [ ] **Step 1: Write the failing tests** (fake `AdoHttp` returning the Task 3/4 fixtures; fake scheduler or real one with a fake clock).
   - `snapshot splits mine and other and attaches chips and parents`.
@@ -369,6 +394,8 @@ export function moveItem(http: AdoHttp, org: string, projectId: string, item: Wo
   - `move conflict refreshes the item and rethrows` (**Review Focus 1**).
   - `orgs without boards get the settings message`.
   - `visibility switches the job cadence`.
+  - `jobs follow org status: added when connected, removed otherwise`.
+  - `a forbidden PR-chip load disables chips for 10 minutes with the scope message`.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement and wire.**
 - [ ] **Step 4: Run.** Expected: PASS. Typecheck and `orca plugin check . --json` pass.
