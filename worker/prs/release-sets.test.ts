@@ -82,6 +82,25 @@ test('a shared linked work item joins PRs across repos and branches', () => {
   assert.deepEqual(sets[1].workItemIds, [55283, 55290, 60001])
 })
 
+test('a branch link and a work-item link chain into one set', () => {
+  const first = pr({ prId: 25, source: 'feature/shared', target: 'develop' })
+  const second = pr({ prId: 26, source: 'feature/shared', target: 'qa', workItemIds: [55283] })
+  const third = pr({ prId: 27, repoId: API, repoName: 'api', source: 'feature/api-login', target: 'main', workItemIds: [55283] })
+
+  const sets = releaseSets([third, first, second], NOW)
+
+  assert.deepEqual(sets.map(set => idsOf(set.prs)), [[25, 26, 27]])
+})
+
+test('the same work item number in two orgs stays two sets', () => {
+  const contoso = pr({ prId: 28, source: 'feature/contoso', workItemIds: [55283] })
+  const fabrikam = pr({ prId: 29, org: 'fabrikam', repoId: API, repoName: 'api', source: 'feature/fabrikam', workItemIds: [55283] })
+
+  const sets = releaseSets([contoso, fabrikam], NOW)
+
+  assert.deepEqual(sets.map(set => idsOf(set.prs)).sort(), [[28], [29]])
+})
+
 test('completed PRs join their set only within 14 days, and a set with no active PR is dropped', () => {
   const active = pr({ prId: 31, target: 'develop' })
   const recent = completed(COMPLETED_WINDOW_MS - HOUR, { prId: 32, target: 'qa' })
@@ -102,6 +121,16 @@ test('a completed PR outside the window does not bridge two sets', () => {
   const sets = releaseSets([first, bridge, second], NOW)
 
   assert.deepEqual(sets.map(set => idsOf(set.prs)).sort(), [[41], [43]])
+})
+
+test('an in-window completed PR bridges two active PRs through work items', () => {
+  const first = pr({ prId: 44, source: 'feature/one', workItemIds: [1] })
+  const second = pr({ prId: 46, source: 'feature/two', workItemIds: [2] })
+  const bridge = completed(COMPLETED_WINDOW_MS - HOUR, { prId: 45, source: 'feature/three', workItemIds: [1, 2] })
+
+  const sets = releaseSets([second, bridge, first], NOW)
+
+  assert.deepEqual(sets.map(set => idsOf(set.prs)), [[44, 45, 46]])
 })
 
 test('a completed PR without a closed date is ignored', () => {

@@ -51,7 +51,7 @@ function groupRelated(prs: PrSummary[]): PrSummary[][] {
 }
 
 function linksOf(pr: PrSummary): string[] {
-  return [`source:${pr.repoId}:${pr.source}`, ...pr.workItemIds.map(id => `work-item:${id}`)]
+  return [`source:${pr.repoId}:${pr.source}`, ...pr.workItemIds.map(id => `work-item:${pr.org}:${id}`)]
 }
 
 function toReleaseSet(group: PrSummary[]): ReleaseSet {
