@@ -10,6 +10,7 @@ export const UNKNOWN_LANE = "That lane isn't on this board."
 export const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
 export const MOVE_BY_COLUMN = 'Move this item by column.'
 export const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
+export const LAST_BOARD = 'Showing the last loaded board.'
 export const CHIPS_NEED_CODE_READ = 'Linked PR status needs Code (Read) access.'
 export const NOT_A_PR = "That isn't an Azure DevOps pull request link."
 export const EMPTY_COMMENT = 'Write a comment first.'
@@ -36,6 +37,10 @@ export function noBoardNamed(name: string): string {
 
 export function showingNewest(count: number): string {
   return `Showing the ${count.toLocaleString('en-US')} most recently changed items.`
+}
+
+export function joinMessages(...messages: (string | undefined)[]): string | undefined {
+  return messages.filter(Boolean).join(' ') || undefined
 }
 
 export function badRequest(message: string): AdoError {

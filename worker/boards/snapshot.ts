@@ -4,7 +4,7 @@ import { AdoError, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
 import { hydrate, queryBoardIds, queryIds, textOr, toSummary, WIQL_TOP, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
-import { showingNewest } from '../messages'
+import { joinMessages, showingNewest } from '../messages'
 import type { BoardResult } from './board-views'
 
 const TYPE_STATES_TTL_MS = 60 * 60_000
@@ -133,10 +133,6 @@ function chipRank(chip: PrChip): number {
   if (chip.state === 'merged') return 0
   if (chip.state === 'abandoned') return 4
   return chip.build === 'failed' ? 1 : chip.build === 'running' ? 2 : 3
-}
-
-export function joinMessages(...messages: (string | undefined)[]): string | undefined {
-  return messages.filter(Boolean).join(' ') || undefined
 }
 
 async function hydrateBases(source: ItemSource, cfg: BoardConfig, ids: number[]): Promise<Base[]> {

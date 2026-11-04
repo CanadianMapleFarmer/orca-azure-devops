@@ -64,7 +64,7 @@ The board opens in its own tab as a custom editor for `.adoboard` files.
 - Drag a card to another column or lane to move it. The card shows in its new place while the move is sent, and returns with a message if Azure DevOps refuses it.
 - Swimlanes collapse and expand. When a board has several lanes, all but the first start collapsed.
 - **Me** and **Everyone** switch between your items and the whole team's. The **Parent** list filters to the children of one parent.
-- It refreshes every 30 seconds while the tab is visible.
+- It refreshes every 30 seconds while the tab is visible. When a refresh fails, the board keeps the last loaded items and says why, until a refresh succeeds.
 - A board with more items than one answer holds (500 items, or 900 KiB) shows the most recently changed ones and says how many.
 
 **Open board** in the Work tab writes `<workspace>/.orca-ado/<org>.<teamId>.adoboard` in your focused workspace and opens it. The `.orca-ado/` folder holds a `.gitignore` containing `*`, so git never sees it. This needs a local workspace. Without one, use **+ → Azure DevOps board**, which opens the editor and asks which board.

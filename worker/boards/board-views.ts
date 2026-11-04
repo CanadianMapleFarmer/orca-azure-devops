@@ -1,9 +1,10 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
 import type { BoardArgs } from '../ado/board-config'
+import { failureMessage, joinMessages, LAST_BOARD } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 
 export interface BoardChange { org: string; teamId: string; boardId: string }
-export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string }
+export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean }
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
 export interface BoardView extends BoardRequest { at: number; result: BoardResult }
 export interface BoardRef { teamId: string; boardId: string }
@@ -46,12 +47,24 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   async function reload(key: string): Promise<void> {
     const view = views.get(key)
     if (!view || deps.now() - view.at < BOARD_MS.visibleMs) return
-    const result = await deps.load(view)
+    let result: BoardResult
+    try {
+      result = await deps.load(view)
+    } catch (error) {
+      if (views.get(key) === view) failed(view, error)
+      throw error
+    }
     if (views.get(key) !== view) return
     const before = JSON.stringify(view.result)
     view.result = result
     view.at = deps.now()
     if (JSON.stringify(result) !== before) changed(view)
+  }
+
+  function failed(view: BoardView, error: unknown): void {
+    view.result = { ...view.result, stale: true, message: joinMessages(failureMessage(error), LAST_BOARD) }
+    view.at = deps.now()
+    changed(view)
   }
 
   function sync(org: string): void {

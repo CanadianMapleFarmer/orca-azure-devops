@@ -747,6 +747,26 @@ test('the board loads every 30 s while a board is visible', async () => {
   assert.equal(h.ado.count(isBoardWiql), 5, 'a board of an org that is not connected is not polled')
 })
 
+test('a failed background board reload keeps the last board and says so, until a reload succeeds', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.ado.state.wiql = [1204, 1205, 1206]
+  const args = { org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true }
+  const view = await h.service.board(args)
+
+  h.ado.on(isBoardWiql, () => json(500, { message: 'TF246017: the database is unavailable.' }))
+  await h.clock.tick(30_000)
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  const calls = h.ado.calls.length
+  assert.deepEqual(await h.service.board(args), { ...view, stale: true, message: 'TF246017: the database is unavailable. Showing the last loaded board.' })
+  assert.equal(h.ado.calls.length, calls, 'the frame is answered from the stale view')
+
+  h.ado.clear()
+  await h.clock.tick(30_000)
+  assert.equal(h.boardPosts.length, 2)
+  assert.deepEqual(await h.service.board(args), view)
+})
+
 test('a board whose query returned 500 items says only the newest are shown', async () => {
   const h = harness()
   const ids = Array.from({ length: 500 }, (_, index) => 7000 + index)
