@@ -48,13 +48,13 @@ test('save stores the PAT under pat:<org> and nowhere else', async () => {
 })
 
 test('header is null when no PAT is stored', async () => {
-  assert.equal(await createPatProvider(memorySecrets()).header('contoso'), null)
+  assert((await createPatProvider(memorySecrets()).header('contoso')) === null, 'header should be null when nothing is stored')
 })
 
 test('header does not leak a PAT saved for another org', async () => {
   const provider = createPatProvider(memorySecrets())
   await provider.save('contoso', PAT)
-  assert.equal(await provider.header('fabrikam'), null)
+  assert((await provider.header('fabrikam')) === null, 'header should be null for an org with no saved PAT')
 })
 
 test('forget deletes pat:contoso', async () => {
@@ -63,7 +63,7 @@ test('forget deletes pat:contoso', async () => {
   await provider.save('contoso', PAT)
   await provider.forget('contoso')
   assert.equal(secrets.store.has('pat:contoso'), false)
-  assert.equal(await provider.header('contoso'), null)
+  assert((await provider.header('contoso')) === null, 'header should be null after forget')
 })
 
 test('save trims surrounding whitespace before storing', async () => {
