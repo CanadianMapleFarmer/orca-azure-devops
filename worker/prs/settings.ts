@@ -1,6 +1,6 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { AutoCompleteOptions, MergeStrategy } from '../../src/shared/prs'
-import { SETTINGS_READ_FAILED } from '../messages'
+import { watchSettings } from '../settings-watcher'
 
 const MERGE_STRATEGIES: readonly MergeStrategy[] = ['noFastForward', 'squash', 'rebase', 'rebaseMerge']
 
@@ -9,20 +9,12 @@ export interface PrSettings {
 }
 
 export async function watchPrSettings(settings: OrcaWorkerApi['settings'], log: (message: string) => void): Promise<PrSettings> {
-  let values: Record<string, unknown> = {}
-  const refresh = async () => {
-    values = await settings.get().catch(() => {
-      log(SETTINGS_READ_FAILED)
-      return values
-    })
-  }
-  await refresh()
-  settings.onDidChange(() => void refresh())
+  const values = await watchSettings(settings, log)
   return {
     autoComplete: () => ({
-      mergeStrategy: MERGE_STRATEGIES.find(strategy => strategy === values.autoCompleteMergeStrategy) ?? 'noFastForward',
-      deleteSourceBranch: values.autoCompleteDeleteSourceBranch === true,
-      transitionWorkItems: values.autoCompleteTransitionWorkItems === true
+      mergeStrategy: MERGE_STRATEGIES.find(strategy => strategy === values().autoCompleteMergeStrategy) ?? 'noFastForward',
+      deleteSourceBranch: values().autoCompleteDeleteSourceBranch === true,
+      transitionWorkItems: values().autoCompleteTransitionWorkItems === true
     })
   }
 }
