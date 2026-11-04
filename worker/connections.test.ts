@@ -1043,6 +1043,24 @@ test('remove deletes the org and its credentials', async () => {
   assert.deepEqual(h.posts.at(-1), [])
 })
 
+test('a remove whose credentials cannot be deleted says they will be retried when the plugin next starts', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.signOutError = new Error('EPERM: operation not permitted')
+  await assert.rejects(
+    h.connections.remove('contoso'),
+    /^Error: Couldn't delete this org's saved sign-in\. It will be retried the next time Orca starts the plugin\.$/
+  )
+  assert.deepEqual(h.stored(), [])
+  assert.deepEqual(h.posts.at(-1), [])
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+
+  h.az.signOutError = null
+  h.restart()
+  await h.connections.resetInterrupted()
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+})
+
 test('update saves boards and code projects and posts', async () => {
   const h = harness({ orgs: [config({ method: 'pat', pinned: ADA })] })
   const status = record(await h.connections.update('contoso', { boards: BOARDS }))

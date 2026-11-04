@@ -56,6 +56,7 @@ const MESSAGES = {
   notConnected: 'Connect this organization first.',
   signedOut: 'Signed out.',
   wipeFailed: "Couldn't delete this org's saved sign-in. Sign out to try again.",
+  removeWipeFailed: "Couldn't delete this org's saved sign-in. It will be retried the next time Orca starts the plugin.",
   noAccess: "Your account can't access this in Azure DevOps.",
   unknownOrg: 'That organization is not connected.',
   unknownMethod: 'Unknown sign-in method.',
@@ -668,7 +669,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       invalidate(org)
       orgs = orgs.filter(item => item !== cfg)
       transient.delete(org)
-      if (!(await wipeCredentials(org, [cfg.method]))) throw new Error(MESSAGES.wipeFailed)
+      if (!(await wipeCredentials(org, [cfg.method]))) throw new Error(MESSAGES.removeWipeFailed)
     },
 
     async update(org, patch) {

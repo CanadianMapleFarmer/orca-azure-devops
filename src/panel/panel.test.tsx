@@ -561,6 +561,24 @@ test('a failed sign out shows the message and keeps the buttons', async () => {
   assert.equal(panel.find({ text: 'Sign out' })?.disabled, false)
 })
 
+test('a failed remove of the last org still shows why once setup takes over', async () => {
+  const reason = "Couldn't delete this org's saved sign-in. It will be retried the next time Orca starts the plugin."
+  await open([org('contoso')], {
+    ...settingsRequests,
+    'orgs.remove': () => {
+      throw hostError('action_failed', reason)
+    }
+  })
+  await panel.press(SETTINGS)
+  await panel.press({ text: 'Remove organization' })
+  await panel.press({ text: 'Confirm remove' })
+  await panel.post('orgs.changed', { orgs: [] })
+  assert.ok(panel.find({ text: 'Connect Azure DevOps' }))
+  const callout = panel.find({ type: 'Callout' })
+  assert.equal(callout?.props?.tone, 'danger')
+  assert.equal(callout?.text, reason)
+})
+
 test('settings has a way back', async () => {
   await open([org('contoso')], settingsRequests)
   await panel.press(SETTINGS)

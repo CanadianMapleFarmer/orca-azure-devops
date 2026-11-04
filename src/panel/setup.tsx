@@ -92,6 +92,7 @@ export function Setup(): OrcaNode {
   const pending = read(connecting)
   const chosen = read(method)
   const error = read(setupError)
+  const failedAction = read(actionError)
   return (
     <Stack gap="md">
       <Row align="center" gap="sm">
@@ -102,6 +103,7 @@ export function Setup(): OrcaNode {
         ) : null}
         <Heading level={3}>Connect Azure DevOps</Heading>
       </Row>
+      {failedAction ? <Callout tone="danger">{failedAction}</Callout> : null}
       <Input
         label="Organization"
         placeholder="https://dev.azure.com/your-org"
