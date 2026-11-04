@@ -8,10 +8,18 @@ import { createConnections, type Connections, type StorePort } from './connectio
 
 const HOME = '/home/ada'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
+const OTHER_TENANT = '9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a'
+const OID_ADA = '6f1c2e2a-0ada-4c3e-9a1b-0d4e8c7b6a51'
+const OID_GRACE = '2b7d9f10-9ace-4e21-8d3c-71a0b5e4c9f2'
 const T0 = 1_800_000_000_000
 const HOUR = 3_600_000
 const PROFILE = `${HOME}/.orca-azure-devops/az/contoso`
 const PROJECTS: AdoRequest = { org: 'contoso', path: '/_apis/projects' }
+
+function jwt(claims: Record<string, string>): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode(claims)}.c2ln`
+}
 
 const PAT_ADA = 'pat-ada-7f3c9e2b41'
 const PAT_GRACE = 'pat-grace-41d8a0c6'
@@ -19,17 +27,26 @@ const TOKEN_ADA = 'az-token-ada-5b1e77'
 const TOKEN_GRACE = 'az-token-grace-9c2f'
 const TOKEN_ANON = 'az-token-anon-3d7a1'
 const TOKEN_UNKNOWN = 'az-token-unknown-e4'
-const SECRETS = [PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, basicAuth(PAT_ADA).slice(6), basicAuth(PAT_GRACE).slice(6)]
+const JWT_ADA = jwt({ oid: OID_ADA, tid: TENANT, upn: 'ada@contoso.com' })
+const JWT_GRACE = jwt({ oid: OID_GRACE, tid: TENANT, upn: 'grace@contoso.com' })
+const JWT_ADA_ELSEWHERE = jwt({ oid: OID_ADA, tid: OTHER_TENANT, upn: 'ada@fabrikam.com' })
+const SECRETS = [
+  PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, JWT_ADA, JWT_GRACE, JWT_ADA_ELSEWHERE,
+  basicAuth(PAT_ADA).slice(6), basicAuth(PAT_GRACE).slice(6)
+]
 
 const EXPIRED = 'Your sign-in expired. Reconnect to continue.'
 const WIPE_FAILED = "Couldn't delete this org's saved sign-in. Sign out to try again."
 const INTERRUPTED = 'Sign-in was interrupted. Try again.'
 const NOT_CONNECTED = 'Connect this organization first.'
+const OTHER_ACCOUNT = 'This org is signed in as a different account.'
 const BAD_PAT = "That token can't be used. Paste it again."
 const TOKEN_FAILED = 'Azure CLI could not get an access token'
 
-const ADA: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT }
-const GRACE: PinnedAccount = { adoId: 'u2', uniqueName: 'grace@contoso.com', displayName: 'Grace Hopper', tenantId: TENANT }
+const ADA: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT, objectId: null }
+const ADA_OID: PinnedAccount = { ...ADA, objectId: OID_ADA }
+const ADA_BEFORE_OIDS = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT } as PinnedAccount
+const GRACE: PinnedAccount = { adoId: 'u2', uniqueName: 'grace@contoso.com', displayName: 'Grace Hopper', tenantId: TENANT, objectId: null }
 const BOARDS: BoardsTarget = { projectId: 'p1', projectName: 'Web', teamId: 't1', teamName: 'Web Team' }
 const CODE_PROJECTS = [{ id: 'p1', name: 'Web' }]
 
@@ -43,6 +60,9 @@ const IDENTITIES = new Map<string, { who: string; data: ConnectionData }>([
   [`Bearer ${TOKEN_ADA}`, { who: 'ada', data: connectionData(ADA) }],
   [`Bearer ${TOKEN_GRACE}`, { who: 'grace', data: connectionData(GRACE) }],
   [`Bearer ${TOKEN_ANON}`, { who: 'anonymous', data: connectionData({ adoId: 'anon', uniqueName: 'Anonymous', displayName: 'Anonymous' }) }],
+  [`Bearer ${JWT_ADA}`, { who: 'ada', data: connectionData(ADA) }],
+  [`Bearer ${JWT_GRACE}`, { who: 'grace', data: connectionData(GRACE) }],
+  [`Bearer ${JWT_ADA_ELSEWHERE}`, { who: 'ada elsewhere', data: connectionData(ADA) }],
   [basicAuth(PAT_ADA), { who: 'ada', data: connectionData(ADA) }],
   [basicAuth(PAT_GRACE), { who: 'grace', data: connectionData(GRACE) }]
 ])
@@ -356,6 +376,100 @@ test('connect refuses a PAT for a different account and keeps the pinned one', a
   const error = await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(error.message, 'This org is signed in as a different account.')
   assert.equal(h.ado.requests.length, sent)
+})
+
+test('an az token for another object id is never sent and the org becomes a mismatch', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID, boards: BOARDS })] })
+  h.az.tokens = [JWT_GRACE]
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.code, 'unauthorized')
+  assert.equal(error.message, OTHER_ACCOUNT)
+  assert.equal(h.ado.requests.length, 0, 'the token is never sent')
+  assert.equal(h.last()?.state, 'mismatch')
+  assert.equal(h.last()?.message, 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+  assert.equal(h.az.profiles.has('contoso'), false, 'the profile that issued it is deleted')
+  await h.refusedWithoutCalls(OTHER_ACCOUNT)
+})
+
+test('an az token from another tenant is refused like another account', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID })] })
+  h.az.tokens = [JWT_ADA_ELSEWHERE]
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.message, OTHER_ACCOUNT)
+  assert.equal(h.ado.requests.length, 0)
+  assert.equal(h.last()?.state, 'mismatch')
+  assert.equal(h.last()?.message, 'Signed in as ada@fabrikam.com, but this org is pinned to ada@contoso.com.')
+})
+
+test('an az token whose claims cannot be read is refused for a pin with an object id', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID })] })
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.message, OTHER_ACCOUNT)
+  assert.equal(h.ado.requests.length, 0)
+  assert.equal(h.last()?.message, 'Signed in as another account, but this org is pinned to ada@contoso.com.')
+})
+
+test('a refreshed az token for another object id is never sent and the org becomes a mismatch', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID })] })
+  h.az.tokens = [JWT_ADA, JWT_GRACE]
+  h.ado.reject = 1
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.message, OTHER_ACCOUNT)
+  assert.deepEqual(h.ado.requests.map(request => request.who), ['ada'])
+  assert.equal(h.last()?.state, 'mismatch')
+  assert.deepEqual(h.az.calls, ['getToken contoso', 'getToken contoso', 'signOut contoso'])
+})
+
+test('a reconnect refuses an az token for another object id before asking Azure DevOps who it is', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID })] })
+  h.az.tokens = [JWT_GRACE]
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('mismatch')
+  assert.equal(h.last()?.message, 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.')
+  assert.equal(h.ado.requests.length, 0)
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.equal(h.az.profiles.has('contoso'), false)
+})
+
+test('an az sign-in pins the token object id, a PAT pins none, and a PAT keeps one already pinned', async () => {
+  const az = harness()
+  az.az.tokens = [JWT_ADA]
+  await az.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await az.until('connected')
+  assert.deepEqual(az.stored()?.[0].pinned, ADA_OID)
+
+  const fresh = harness()
+  await fresh.connect({ orgInput: 'contoso', method: 'pat', pat: PAT_ADA })
+  assert.deepEqual(fresh.stored()?.[0].pinned, ADA)
+
+  const switched = harness({ orgs: [config({ pinned: ADA_OID })] })
+  await switched.connect({ orgInput: 'contoso', method: 'pat', pat: PAT_ADA })
+  assert.deepEqual(switched.stored()?.[0].pinned, ADA_OID)
+})
+
+test('a pin made before object ids adopts one on its next verified reconnect', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_BEFORE_OIDS })] })
+  h.az.tokens = [JWT_ADA]
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('connected')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+})
+
+test('a pin made before object ids adopts one when a 401 probe verifies the pinned identity', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_BEFORE_OIDS })] })
+  h.az.tokens = [JWT_ADA]
+  h.ado.reject = 2
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.code, 'forbidden')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.last()?.account, ADA_OID)
+
+  h.az.tokens = [JWT_GRACE]
+  h.clock.now += HOUR
+  const refused = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(refused.message, OTHER_ACCOUNT, 'the adopted object id is enforced')
 })
 
 test('401 triggers one refresh then marks the org expired', async () => {

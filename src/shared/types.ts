@@ -1,5 +1,5 @@
 export type ConnectionMethod = 'azure-cli' | 'pat'
-export interface PinnedAccount { adoId: string; uniqueName: string; displayName: string; tenantId: string | null }
+export interface PinnedAccount { adoId: string; uniqueName: string; displayName: string; tenantId: string | null; objectId: string | null }
 export interface BoardsTarget { projectId: string; projectName: string; teamId: string; teamName: string }
 export interface OrgConfig {
   org: string                      // canonical, lower-case: "contoso"

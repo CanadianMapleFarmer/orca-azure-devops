@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { PinnedAccount } from '../../src/shared/types'
 import type { ConnectionData } from '../ado/core'
-import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount } from './identity'
+import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './identity'
 
 function base64url(text: string): string {
   const binary = String.fromCharCode(...new TextEncoder().encode(text))
@@ -16,7 +16,8 @@ const ADA: ConnectionData = {
   authenticatedUser: { id: 'u1', providerDisplayName: 'Ada Lovelace', properties: { Account: { $value: 'ada@contoso.com' } } }
 }
 
-const PINNED: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: 't1' }
+const PINNED: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: 't1', objectId: null }
+const PINNED_OID: PinnedAccount = { ...PINNED, objectId: 'o1' }
 
 test('decodeTokenClaims reads oid, tid, upn and exp from an unsigned JWT', () => {
   const token = jwt({ oid: 'o1', tid: 't1', upn: 'ada@contoso.com', exp: 1_900_000_000, aud: 'ignored' })
@@ -99,8 +100,29 @@ test('accountFromConnectionData returns null for an anonymous or invalid credent
 })
 
 test('samePinnedAccount compares by adoId only', () => {
-  const renamed: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@fabrikam.com', displayName: 'A. Lovelace', tenantId: null }
+  const renamed: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@fabrikam.com', displayName: 'A. Lovelace', tenantId: null, objectId: 'o9' }
   const other: PinnedAccount = { ...PINNED, adoId: 'u2' }
   assert.equal(samePinnedAccount(PINNED, renamed), true)
   assert.equal(samePinnedAccount(PINNED, other), false)
+})
+
+test('tokenMatchesPin accepts a token with the pinned object id and the org tenant', () => {
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', { oid: 'o1', tid: 't1' }), true)
+  assert.equal(tokenMatchesPin(PINNED_OID, null, { oid: 'o1', tid: 't9' }), true, 'an org without a tenant checks the object id only')
+})
+
+test('tokenMatchesPin refuses another object id, another tenant or unreadable claims', () => {
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', { oid: 'o2', tid: 't1' }), false)
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', { oid: 'o1', tid: 't2' }), false)
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', { oid: 'o1' }), false)
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', { tid: 't1' }), false)
+  assert.equal(tokenMatchesPin(PINNED_OID, 't1', null), false)
+})
+
+test('tokenMatchesPin leaves a pin made before object ids to the identity check', () => {
+  const legacy = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: 't1' } as PinnedAccount
+  for (const pinned of [PINNED, legacy]) {
+    assert.equal(tokenMatchesPin(pinned, 't1', { oid: 'o2', tid: 't2' }), true)
+    assert.equal(tokenMatchesPin(pinned, 't1', null), true)
+  }
 })

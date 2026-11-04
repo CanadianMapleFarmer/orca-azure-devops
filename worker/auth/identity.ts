@@ -22,11 +22,17 @@ export function accountFromConnectionData(cd: ConnectionData, tenantId: string |
   const user = cd?.authenticatedUser
   const uniqueName = user?.properties?.Account?.$value?.trim()
   if (!user?.id || !uniqueName || user.providerDisplayName === ANONYMOUS) return null
-  return { adoId: user.id, uniqueName, displayName: user.providerDisplayName || uniqueName, tenantId }
+  return { adoId: user.id, uniqueName, displayName: user.providerDisplayName || uniqueName, tenantId, objectId: null }
 }
 
 export function samePinnedAccount(a: PinnedAccount, b: PinnedAccount): boolean {
   return a.adoId === b.adoId
+}
+
+export function tokenMatchesPin(pinned: PinnedAccount, tenantId: string | null, claims: TokenClaims | null): boolean {
+  if (!pinned.objectId) return true
+  if (claims?.oid !== pinned.objectId) return false
+  return !tenantId || claims.tid === tenantId
 }
 
 function decodeBase64Url(segment: string): string {

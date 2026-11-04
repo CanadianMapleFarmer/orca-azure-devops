@@ -8,7 +8,7 @@ function org(name: string, state: OrgState, message?: string): OrgStatus {
     url: `https://dev.azure.com/${name}`,
     method: 'pat',
     state,
-    account: state === 'disconnected' ? null : { adoId: 'u1', uniqueName: `ada@${name}.com`, displayName: 'Ada', tenantId: null },
+    account: state === 'disconnected' ? null : { adoId: 'u1', uniqueName: `ada@${name}.com`, displayName: 'Ada', tenantId: null, objectId: null },
     ...(message ? { message } : {}),
     tokenStore: { kind: 'orca-secrets' },
     boards: null,

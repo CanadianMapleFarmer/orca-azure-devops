@@ -7,7 +7,7 @@ function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
     url: `https://dev.azure.com/${name}`,
     method: 'azure-cli',
     state: 'connected',
-    account: { adoId: `u-${name}`, uniqueName: `ada@${name}.com`, displayName: 'Ada Lovelace', tenantId: null },
+    account: { adoId: `u-${name}`, uniqueName: `ada@${name}.com`, displayName: 'Ada Lovelace', tenantId: null, objectId: null },
     tokenStore: { kind: 'az-profile', path: `/Users/ada/.orca-azure-devops/az/${name}` },
     boards: null,
     codeProjects: 'all',

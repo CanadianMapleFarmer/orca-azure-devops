@@ -3,7 +3,7 @@ import { getConnectionData } from './ado/core'
 import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest } from './ado/http'
 import { discoverTenant, parseOrgInput } from './ado/org'
 import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
-import { accountFromConnectionData, samePinnedAccount } from './auth/identity'
+import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
 
 export interface StorePort {
@@ -54,16 +54,23 @@ const MESSAGES = {
   wipeFailed: "Couldn't delete this org's saved sign-in. Sign out to try again.",
   noAccess: "Your account can't access this in Azure DevOps.",
   unknownOrg: 'That organization is not connected.',
-  unknownMethod: 'Unknown sign-in method.'
+  unknownMethod: 'Unknown sign-in method.',
+  anotherAccount: 'another account'
 }
 
 type Transient = { state: Exclude<OrgState, 'connected'>; message?: string }
-type Credential = { header: string; expiresAt: number }
+type Credential = { header: string; expiresAt: number; objectId: string | null }
 type Attempt = { controller: AbortController }
 
 class NoCredentialError extends Error {}
 class SignInNeeded extends Error {}
 class TokenUnavailable extends Error {}
+
+class OtherAccount extends Error {
+  constructor(readonly account: string) {
+    super(MESSAGES.otherAccount)
+  }
+}
 
 export function createConnections(deps: ConnectionsDeps): Connections {
   const pat = createPatProvider(deps.secrets)
@@ -272,7 +279,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       throw new Error(MESSAGES.unusablePat)
     }
     if (!header) throw new NoCredentialError()
-    return { header, expiresAt: Infinity }
+    return { header, expiresAt: Infinity, objectId: null }
   }
 
   async function acquireAz(cfg: OrgConfig): Promise<Credential> {
@@ -285,7 +292,15 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     } catch (error) {
       throw needsSignIn(error) ? new SignInNeeded() : new TokenUnavailable(messageOf(error))
     }
-    return { header: `Bearer ${issued.token}`, expiresAt: issued.expiresAt }
+    return azCredential(cfg, issued)
+  }
+
+  function azCredential(cfg: OrgConfig, issued: { token: string; expiresAt: number }): Credential {
+    const claims = decodeTokenClaims(issued.token)
+    if (cfg.pinned && !tokenMatchesPin(cfg.pinned, cfg.tenantId, claims)) {
+      throw new OtherAccount(claims?.upn ?? claims?.preferredUsername ?? MESSAGES.anotherAccount)
+    }
+    return { header: `Bearer ${issued.token}`, expiresAt: issued.expiresAt, objectId: claims?.oid ?? null }
   }
 
   function credentialFor(cfg: OrgConfig): Promise<Credential> {
@@ -343,6 +358,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         await expire(org)
         throw unauthorized(blockedMessage(find(org)) ?? MESSAGES.notConnected)
       }
+      if (error instanceof OtherAccount && cfg.pinned) throw await refuseAccount(cfg, cfg.pinned, error.account)
       const message = messageOf(error)
       if (error instanceof TokenUnavailable) coolDowns.set(org, deps.now() + TOKEN_COOL_DOWN_MS)
       if (setTransient(org, { state: 'error', message })) await publish()
@@ -365,6 +381,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     } catch (error) {
       if (epochOf(org) !== epoch) return false
       if (error instanceof NoCredentialError) await publish()
+      else if (error instanceof OtherAccount && cfg.pinned) await refuseAccount(cfg, cfg.pinned, error.account)
       else await expire(org)
       return false
     }
@@ -397,10 +414,19 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     }
     if (epochOf(org) !== epoch) return rejection
     if (!account) return (await expire(org)) ? unauthorized(MESSAGES.expired) : rejection
-    if (samePinnedAccount(pinned, account)) return new AdoError('forbidden', 403, MESSAGES.noAccess)
-    invalidate(org)
-    setTransient(org, mismatchOf(account, pinned))
-    await wipeCredentials(org, [cfg.method])
+    if (!samePinnedAccount(pinned, account)) return refuseAccount(cfg, pinned, account.uniqueName)
+    if (!pinned.objectId && credential.objectId) {
+      cfg.pinned = { ...pinned, objectId: credential.objectId }
+      await saveAll()
+      await publish()
+    }
+    return new AdoError('forbidden', 403, MESSAGES.noAccess)
+  }
+
+  async function refuseAccount(cfg: OrgConfig, pinned: PinnedAccount, account: string): Promise<AdoError> {
+    invalidate(cfg.org)
+    setTransient(cfg.org, mismatchOf(account, pinned))
+    await wipeCredentials(cfg.org, [cfg.method])
     return unauthorized(MESSAGES.otherAccount)
   }
 
@@ -423,7 +449,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         if (!rejected || !(error instanceof AdoError) || error.code !== 'unauthorized') throw error
         if (refreshed) throw await diagnose(req.org, error)
         const cfg = find(req.org)
-        throw cfg && stateOf(cfg) === 'expired' ? unauthorized(MESSAGES.expired) : error
+        const blocked = cfg && stateOf(cfg) !== 'connected' ? blockedMessage(cfg) : null
+        throw blocked ? unauthorized(blocked) : error
       }
     }
   }
@@ -473,21 +500,21 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       const account = await verifiedAccount(org, credential.header, cfg.tenantId)
       if (!isCurrent(org, attempt)) return
       if (cfg.pinned && !samePinnedAccount(cfg.pinned, account)) {
-        outcome = mismatchOf(account, cfg.pinned)
+        outcome = mismatchOf(account.uniqueName, cfg.pinned)
       } else {
         await serial(org, () => {
           signal.throwIfAborted()
           return keep()
         })
         if (!isCurrent(org, attempt)) return
-        cfg.pinned = account
+        cfg.pinned = { ...account, objectId: credential.objectId ?? cfg.pinned?.objectId ?? null }
         credentials.set(org, credential)
         await conclude(org, attempt, null)
         return
       }
     } catch (error) {
       if (!isCurrent(org, attempt)) return
-      outcome = { state: 'error', message: messageOf(error) }
+      outcome = error instanceof OtherAccount && cfg.pinned ? mismatchOf(error.account, cfg.pinned) : { state: 'error', message: messageOf(error) }
     }
     transient.set(org, outcome)
     const wiped = await discardSignIn(cfg).then(() => true, () => false)
@@ -536,7 +563,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     const { cfg, attempt } = await begin(parsed, 'pat', tenantId)
     if (!attempt) return statusFor(cfg)
     const header = basicAuth(token)
-    await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity }), () => pat.save(cfg.org, token))
+    await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity, objectId: null }), () => pat.save(cfg.org, token))
     return statusFor(cfg)
   }
 
@@ -555,11 +582,11 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         })
         return az.login(org, cfg.tenantId, signal)
       })
-      const { token, expiresAt } = await serial(org, () => {
+      const issued = await serial(org, () => {
         signal.throwIfAborted()
         return az.getToken(org, cfg.tenantId)
       })
-      return { header: `Bearer ${token}`, expiresAt }
+      return azCredential(cfg, issued)
     }).catch(() => {})
     return statusFor(cfg)
   }
@@ -643,8 +670,8 @@ function unknownMethod(method: never): never {
   throw new Error(MESSAGES.unknownMethod)
 }
 
-function mismatchOf(account: PinnedAccount, pinned: PinnedAccount): Transient {
-  return { state: 'mismatch', message: `Signed in as ${account.uniqueName}, but this org is pinned to ${pinned.uniqueName}.` }
+function mismatchOf(account: string, pinned: PinnedAccount): Transient {
+  return { state: 'mismatch', message: `Signed in as ${account}, but this org is pinned to ${pinned.uniqueName}.` }
 }
 
 function messageOf(error: unknown): string {
