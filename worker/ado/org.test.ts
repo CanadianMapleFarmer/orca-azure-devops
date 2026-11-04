@@ -53,3 +53,11 @@ test('discoverTenant returns null when the request fails', async () => {
   }
   assert.equal(await discoverTenant('contoso', fake as typeof fetch), null)
 })
+
+test('discoverTenant returns null when the request outlives the timeout', async () => {
+  const hanging = (_input: RequestInfo, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+    })
+  assert.equal(await discoverTenant('contoso', hanging as typeof fetch, 20), null)
+})
