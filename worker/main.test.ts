@@ -29,6 +29,9 @@ const TEAMS: Record<string, { id: string; name: string }[]> = {
   'proj-web': [{ id: 'team-web', name: 'Web Team' }]
 }
 
+const LISTED_BUT_DELETED = 'proj-infra'
+const outage = { projects: false }
+
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
 
 const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -37,9 +40,11 @@ const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.hostname === 'vssps.dev.azure.com') return new Response(null, { headers: { 'x-vss-resourcetenant': TENANT } })
   if (request.headers.get('authorization') !== basicAuth(PAT)) return new Response('', { status: 401 })
   if (url.pathname === '/contoso/_apis/connectionData') return json(ADA_DATA)
-  if (url.pathname === '/contoso/_apis/projects') return json({ count: PROJECTS.length, value: PROJECTS })
+  if (url.pathname === '/contoso/_apis/projects') {
+    return outage.projects ? new Response('', { status: 404 }) : json({ count: PROJECTS.length, value: PROJECTS })
+  }
   const teams = /^\/contoso\/_apis\/projects\/([^/]+)\/teams$/.exec(url.pathname)
-  if (teams) return json({ value: TEAMS[teams[1]] ?? [] })
+  if (teams) return teams[1] === LISTED_BUT_DELETED ? new Response('', { status: 404 }) : json({ value: TEAMS[teams[1]] ?? [] })
   return new Response('', { status: 404 })
 }) as typeof fetch
 
@@ -190,6 +195,23 @@ test('orgs.setBoards refuses an unknown project or team and saves nothing', asyn
   })
 })
 
+test('orgs.setBoards reports a project or team deleted mid-call as no longer existing and saves nothing', async () => {
+  await withFakeFetch(async () => {
+    const w = await connected()
+    const posts = w.posts.length
+    const gone = adoErrorWith('bad_request', 400, 'That project or team no longer exists.')
+    await assert.rejects(w.request('orgs.setBoards', { org: 'contoso', projectId: LISTED_BUT_DELETED, teamId: 'team-ops' }), gone)
+    outage.projects = true
+    try {
+      await assert.rejects(w.request('orgs.setBoards', { org: 'contoso', projectId: 'proj-boards', teamId: 'team-ops' }), gone)
+    } finally {
+      outage.projects = false
+    }
+    assert.equal(storedOrg(w).boards, null)
+    assert.equal(w.posts.length, posts)
+  })
+})
+
 test('orgs.setCodeProjects stores all, or the named projects resolved by id', async () => {
   await withFakeFetch(async () => {
     const w = await connected()
@@ -218,5 +240,29 @@ test('orgs.setCodeProjects refuses an unknown project id and saves nothing', asy
     )
     assert.deepEqual(storedOrg(w).codeProjects, [{ id: 'proj-web', name: 'Web' }])
     assert.equal(w.posts.length, posts)
+  })
+})
+
+test('orgs.setCodeProjects refuses an empty list and saves nothing', async () => {
+  await withFakeFetch(async () => {
+    const w = await connected()
+    await w.request('orgs.setCodeProjects', { org: 'contoso', projects: ['proj-web'] })
+    const posts = w.posts.length
+    await assert.rejects(
+      w.request('orgs.setCodeProjects', { org: 'contoso', projects: [] }),
+      adoErrorWith('bad_request', 400, 'Pick at least one project, or choose all projects.')
+    )
+    assert.deepEqual(storedOrg(w).codeProjects, [{ id: 'proj-web', name: 'Web' }])
+    assert.equal(w.posts.length, posts)
+  })
+})
+
+test('orgs.setCodeProjects stores each project once, in first-seen order', async () => {
+  await withFakeFetch(async () => {
+    const w = await connected()
+    const status = await w.request('orgs.setCodeProjects', { org: 'contoso', projects: ['proj-web', 'proj-infra', 'proj-web', 'proj-infra'] })
+    const expected = [{ id: 'proj-web', name: 'Web' }, { id: 'proj-infra', name: 'infra' }]
+    assert.deepEqual(status.codeProjects, expected)
+    assert.deepEqual(storedOrg(w).codeProjects, expected)
   })
 })

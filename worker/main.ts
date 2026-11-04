@@ -2,10 +2,10 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
-import type { OrgStatus } from '../src/shared/types'
+import type { BoardsTarget, OrgStatus } from '../src/shared/types'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
 import { listProjects, listTeams } from './ado/core'
-import { AdoError } from './ado/http'
+import { AdoError, type AdoHttp } from './ado/http'
 import { createConnections } from './connections'
 import { statusBarFor, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
@@ -49,18 +49,31 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('ado.projects', input => listProjects(connections.http, input.org))
   orca.panels.handle('ado.teams', input => listTeams(connections.http, input.org, input.projectId))
   orca.panels.handle('orgs.setBoards', async ({ org, projectId, teamId }) => {
-    const project = (await listProjects(connections.http, org)).find(item => item.id === projectId)
-    const team = project && (await listTeams(connections.http, org, projectId)).find(item => item.id === teamId)
-    if (!project || !team) throw new AdoError('bad_request', 400, 'That project or team no longer exists.')
-    return connections.update(org, { boards: { projectId, projectName: project.name, teamId, teamName: team.name } })
+    const boards = await findBoards(connections.http, org, projectId, teamId)
+    if (!boards) throw new AdoError('bad_request', 400, 'That project or team no longer exists.')
+    return connections.update(org, { boards })
   })
   orca.panels.handle('orgs.setCodeProjects', async ({ org, projects }) => {
     if (projects === 'all') return connections.update(org, { codeProjects: 'all' })
+    if (projects.length === 0) throw new AdoError('bad_request', 400, 'Pick at least one project, or choose all projects.')
     const known = new Map((await listProjects(connections.http, org)).map(project => [project.id, project]))
-    const chosen = projects.flatMap(id => known.get(id) ?? [])
-    if (chosen.length !== projects.length) throw new AdoError('bad_request', 400, 'One or more projects no longer exist.')
+    const ids = [...new Set(projects)]
+    const chosen = ids.flatMap(id => known.get(id) ?? [])
+    if (chosen.length !== ids.length) throw new AdoError('bad_request', 400, 'One or more projects no longer exist.')
     return connections.update(org, { codeProjects: chosen })
   })
   orca.commands.register('status', async () => statusText(await connections.list()))
   showStatus(await connections.list())
+}
+
+async function findBoards(http: AdoHttp, org: string, projectId: string, teamId: string): Promise<BoardsTarget | null> {
+  try {
+    const project = (await listProjects(http, org)).find(item => item.id === projectId)
+    if (!project) return null
+    const team = (await listTeams(http, org, projectId)).find(item => item.id === teamId)
+    return team ? { projectId, projectName: project.name, teamId, teamName: team.name } : null
+  } catch (error) {
+    if (error instanceof AdoError && error.code === 'not_found') return null
+    throw error
+  }
 }

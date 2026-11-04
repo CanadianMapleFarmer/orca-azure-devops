@@ -77,4 +77,38 @@ test('listTeams reads the teams of one project and sorts by name ignoring case',
   assert.equal(calls.length, 1)
   assert.equal(calls[0].origin + calls[0].pathname, 'https://dev.azure.com/contoso/_apis/projects/p%2F1/teams')
   assert.equal(calls[0].searchParams.get('$top'), '500')
+  assert.equal(calls[0].searchParams.get('$skip'), '0')
+})
+
+function teamsHttp(totalTeams: number) {
+  const calls: URL[] = []
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(new Request(input, init).url)
+    calls.push(url)
+    const skip = Number(url.searchParams.get('$skip'))
+    const top = Number(url.searchParams.get('$top'))
+    const value = Array.from({ length: Math.max(0, Math.min(top, totalTeams - skip)) }, (_, i) => ({ id: `t${skip + i}`, name: `Team ${skip + i}` }))
+    return new Response(JSON.stringify({ count: value.length, value }), { headers: { 'content-type': 'application/json' } })
+  }
+  return { calls, http: createAdoHttp({ fetch: fetch as typeof globalThis.fetch, authHeader: async () => 'Bearer t' }) }
+}
+
+test('listTeams pages with $top and $skip until a page comes back short', async () => {
+  const { calls, http } = teamsHttp(1203)
+  const teams = await listTeams(http, 'contoso', 'p1')
+  assert.deepEqual(calls.map(url => url.searchParams.get('$skip')), ['0', '500', '1000'])
+  assert.equal(teams.length, 1203)
+  assert.equal(new Set(teams.map(team => team.id)).size, 1203)
+})
+
+test('listTeams asks once more after an exactly full page, then stops on the empty one', async () => {
+  const { calls, http } = teamsHttp(500)
+  assert.equal((await listTeams(http, 'contoso', 'p1')).length, 500)
+  assert.deepEqual(calls.map(url => url.searchParams.get('$skip')), ['0', '500'])
+})
+
+test('listTeams stops after 20 pages and returns what it has', async () => {
+  const { calls, http } = teamsHttp(500 * 30)
+  assert.equal((await listTeams(http, 'contoso', 'p1')).length, 500 * 20)
+  assert.equal(calls.length, 20)
 })
