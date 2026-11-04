@@ -1,0 +1,301 @@
+{
+  "value": [
+    {
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4101,
+      "codeReviewId": 4101,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "creationDate": "2026-11-03T14:20:11.5Z",
+      "title": "Add vehicle search filters",
+      "description": "",
+      "sourceRefName": "refs/heads/feature/1204-vehicle-search",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": false,
+      "mergeStatus": "succeeded",
+      "mergeId": "00004101-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 10,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "Grace Hopper",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "uniqueName": "grace@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        },
+        {
+          "reviewerUrl": null,
+          "vote": 0,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "[Fabrikam Web]\\Fabrikam Web Team",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/c3d4e5f6-5555-4c8d-8e9f-1a2b3c4d5e6f",
+          "id": "c3d4e5f6-5555-4c8d-8e9f-1a2b3c4d5e6f",
+          "uniqueName": "vstfs:///Classification/TeamProject/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d\\Fabrikam Web Team",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.c3d4e5f6-5555-4c8d-8e9f-1a2b3c4d5e6f",
+          "isContainer": true
+        },
+        {
+          "reviewerUrl": null,
+          "vote": -5,
+          "hasDeclined": false,
+          "isRequired": false,
+          "isFlagged": false,
+          "displayName": "Dennis Ritchie",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "uniqueName": "dennis@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4101",
+      "supportsIterations": true,
+      "autoCompleteSetBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "completionOptions": {
+        "mergeCommitMessage": "Add vehicle search filters",
+        "deleteSourceBranch": false,
+        "mergeStrategy": "noFastForward",
+        "transitionWorkItems": false,
+        "bypassPolicy": false
+      }
+    },
+    {
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4102,
+      "codeReviewId": 4102,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "creationDate": "2026-11-03T14:22:40.1Z",
+      "title": "Add vehicle search filters",
+      "description": "",
+      "sourceRefName": "refs/heads/feature/1204-vehicle-search",
+      "targetRefName": "refs/heads/qa",
+      "isDraft": false,
+      "mergeStatus": "succeeded",
+      "mergeId": "00004102-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 0,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "Grace Hopper",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "uniqueName": "grace@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4102",
+      "supportsIterations": true
+    },
+    {
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4103,
+      "codeReviewId": 4103,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "creationDate": "2026-11-03T14:25:03.9Z",
+      "title": "Add vehicle search filters",
+      "description": "",
+      "sourceRefName": "refs/heads/feature/1204-vehicle-search",
+      "targetRefName": "refs/heads/main",
+      "isDraft": false,
+      "mergeStatus": "conflicts",
+      "mergeId": "00004103-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 0,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "Grace Hopper",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "uniqueName": "grace@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4103",
+      "supportsIterations": true
+    },
+    {
+      "repository": {
+        "id": "8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+        "name": "api",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/api",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4104,
+      "codeReviewId": 4104,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "creationDate": "2026-11-04T08:12:30.7Z",
+      "title": "Fix pagination offset",
+      "description": "",
+      "sourceRefName": "refs/heads/bugfix/1205-pagination-offset",
+      "targetRefName": "refs/heads/main",
+      "isDraft": false,
+      "mergeStatus": "queued",
+      "mergeId": "00004104-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 0,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "Dennis Ritchie",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "uniqueName": "dennis@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90/pullRequests/4104",
+      "supportsIterations": true
+    },
+    {
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4105,
+      "codeReviewId": 4105,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "creationDate": "2026-11-04T10:02:15.0Z",
+      "title": "Draft: saved searches",
+      "description": "",
+      "sourceRefName": "refs/heads/feature/1210-saved-searches",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": true,
+      "mergeStatus": "notSet",
+      "mergeId": "00004105-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4105",
+      "supportsIterations": true
+    }
+  ],
+  "count": 5
+}

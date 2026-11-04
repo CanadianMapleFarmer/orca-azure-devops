@@ -1,0 +1,125 @@
+{
+  "value": [
+    {
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4110,
+      "codeReviewId": 4110,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Grace Hopper",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "uniqueName": "grace@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+      },
+      "creationDate": "2026-11-04T07:45:00.0Z",
+      "title": "Harden the login redirect",
+      "description": "",
+      "sourceRefName": "refs/heads/hotfix/1211-login-redirect",
+      "targetRefName": "refs/heads/main",
+      "isDraft": false,
+      "mergeStatus": "succeeded",
+      "mergeId": "00004110-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 0,
+          "hasDeclined": false,
+          "isRequired": true,
+          "isFlagged": false,
+          "displayName": "Alex Contoso",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+          "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+          "uniqueName": "alex@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+        },
+        {
+          "reviewerUrl": null,
+          "vote": 10,
+          "hasDeclined": false,
+          "isRequired": false,
+          "isFlagged": false,
+          "displayName": "Dennis Ritchie",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "uniqueName": "dennis@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110",
+      "supportsIterations": true
+    },
+    {
+      "repository": {
+        "id": "8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+        "name": "api",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "state": "wellFormed",
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        },
+        "size": 1048576,
+        "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+        "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/api",
+        "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+        "isDisabled": false,
+        "isInMaintenance": false
+      },
+      "pullRequestId": 4111,
+      "codeReviewId": 4111,
+      "status": "active",
+      "createdBy": {
+        "displayName": "Dennis Ritchie",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+        "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+        "uniqueName": "dennis@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+      },
+      "creationDate": "2026-11-04T09:30:00.0Z",
+      "title": "Add the health endpoint",
+      "description": "",
+      "sourceRefName": "refs/heads/feature/1212-health-endpoint",
+      "targetRefName": "refs/heads/develop",
+      "isDraft": false,
+      "mergeStatus": "succeeded",
+      "mergeId": "00004111-6666-4a7b-8c9d-0e1f2a3b4c5d",
+      "reviewers": [
+        {
+          "reviewerUrl": null,
+          "vote": 5,
+          "hasDeclined": false,
+          "isRequired": false,
+          "isFlagged": false,
+          "displayName": "Alex Contoso",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+          "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+          "uniqueName": "alex@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90/pullRequests/4111",
+      "supportsIterations": true
+    }
+  ],
+  "count": 2
+}

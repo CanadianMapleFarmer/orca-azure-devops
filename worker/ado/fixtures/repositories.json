@@ -1,0 +1,59 @@
+{
+  "value": [
+    {
+      "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+      "name": "web-app",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "state": "wellFormed",
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "size": 1048576,
+      "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+      "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+      "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+      "isDisabled": false,
+      "isInMaintenance": false
+    },
+    {
+      "id": "8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+      "name": "api",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "state": "wellFormed",
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "size": 1048576,
+      "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+      "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/api",
+      "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+      "isDisabled": false,
+      "isInMaintenance": false
+    },
+    {
+      "id": "9f0a1b2c-3333-4e7f-8a8b-5c6d7e8f9a01",
+      "name": "infra",
+      "url": "https://dev.azure.com/contoso/2b3c4d5e-7777-4f8a-9b0c-1d2e3f4a5b6c/_apis/git/repositories/9f0a1b2c-3333-4e7f-8a8b-5c6d7e8f9a01",
+      "project": {
+        "id": "2b3c4d5e-7777-4f8a-9b0c-1d2e3f4a5b6c",
+        "name": "Fabrikam Platform",
+        "state": "wellFormed",
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "size": 1048576,
+      "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Platform/_git/infra",
+      "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Platform/infra",
+      "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Platform/_git/infra",
+      "isDisabled": false,
+      "isInMaintenance": false
+    }
+  ],
+  "count": 3
+}

@@ -62,7 +62,7 @@ export async function resolveProjects(http: AdoHttp, org: string, ids: string[])
   return chosen.length === unique.length ? chosen : null
 }
 
-function byName(items: NamedItem[]): NamedItem[] {
+export function byName(items: NamedItem[]): NamedItem[] {
   return items
     .map(({ id, name }) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
