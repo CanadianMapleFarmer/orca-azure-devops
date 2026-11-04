@@ -21,14 +21,14 @@ Azure DevOps boards, pull requests, pipelines and wikis inside [Orca](https://gi
 
 Open the Azure DevOps panel in the Orca sidebar, enter the organisation URL (`https://dev.azure.com/your-org`) and pick a method:
 
-- **Azure CLI (no setup).** On macOS and Linux the plugin runs `az login` in your browser, where you pick the account. On Windows, `az` may use the system broker instead.
+- **Azure CLI (no setup).** Works on macOS and Linux: the plugin runs `az login` in your browser, where you pick the account. On Windows, use a personal access token for now.
 - **Personal access token.** Paste a PAT.
 
 Each organisation is pinned to the account you sign in with. The panel shows `signed in as <account>`, and a token for a different account is refused.
 
 ### Where credentials live
 
-- **Azure CLI:** the plugin uses its own private `az` profile in `~/.orca-azure-devops/az/<org>`, owner-only (mode 0700) on macOS and Linux. It never touches your terminal's `az` or `~/.azure`. Azure CLI keeps its tokens, refresh tokens included, in a plain file there on macOS and Linux (it encrypts them on Windows). Sign out deletes the folder.
+- **Azure CLI:** the plugin uses its own private `az` profile in `~/.orca-azure-devops/az/<org>`, owner-only (mode 0700) on macOS and Linux. It never touches your terminal's `az` or `~/.azure`. Azure CLI keeps its tokens, refresh tokens included, in a plain file there. Sign out deletes the folder.
 - **PAT:** stored in Orca's encrypted secrets for this plugin. Sign out deletes it. This needs an OS keyring for Orca's encrypted secrets, which may be unavailable on some Linux setups.
 
 ### PAT scopes
