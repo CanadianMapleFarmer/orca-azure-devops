@@ -34,6 +34,21 @@ test('layoutBoard flips the open or collapsed default of the toggled lanes', () 
   assert.deepEqual(layout.lanes.map(lane => lane.collapsed), [true, false])
 })
 
+test('layoutBoard puts items without a known lane in the default lane wherever it sits', () => {
+  const lanes = [
+    { id: EXPEDITE, name: 'Expedite' },
+    { id: DEFAULT_LANE, name: '' }
+  ]
+  const layout = layoutBoard(boardConfig({ lanes }), [item(1), item(2, { lane: 'Hotfix' }), item(3, { lane: 'Expedite' })], new Set())
+  assert.deepEqual(
+    layout.lanes.map(lane => [lane.id, lane.cells.Active.map(entry => entry.id)]),
+    [
+      [EXPEDITE, [3]],
+      [DEFAULT_LANE, [1, 2]]
+    ]
+  )
+})
+
 test('layoutBoard hides lanes when the board has one', () => {
   const items = [item(1, { column: 'New' }), item(2, { column: 'Active', lane: 'Expedite' })]
   for (const lanes of [[{ id: DEFAULT_LANE, name: '' }], []]) {

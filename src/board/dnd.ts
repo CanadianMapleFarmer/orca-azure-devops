@@ -1,5 +1,5 @@
 import type { BoardConfig, MoveTarget, WorkItemSummary } from '../shared/work'
-import { cellOf, shownLanes, type Cell } from './layout'
+import { cellOf, type Cell } from './layout'
 
 export interface Rect { left: number; top: number; width: number; height: number }
 
@@ -12,7 +12,7 @@ export function moveFor(item: WorkItemSummary, target: Cell, cfg: BoardConfig): 
   const column = cfg.columns.find(entry => entry.name === target.column)
   if (!column || !Object.hasOwn(column.stateMappings, item.type)) return null
   const own = cellOf(item, cfg)
-  const lane = shownLanes(cfg).length > 1 ? cfg.lanes.find(entry => entry.id === target.lane) : undefined
+  const lane = cfg.lanes.find(entry => entry.id === target.lane)
   const move: MoveTarget = {
     ...(own.column === column.name ? {} : { column: column.name }),
     ...(lane && own.lane !== lane.id ? { lane: lane.name } : {})
