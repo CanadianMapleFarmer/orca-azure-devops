@@ -2,14 +2,13 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
-import type { OrgStatus } from '../src/shared/types'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { registerOrgHandlers } from './org-handlers'
 import { createScheduler, realClock } from './poll/scheduler'
-import { statusBarFor, statusText } from './status-bar'
+import { createStatusBar, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
 import type { HostCall } from './workspace/focused'
@@ -26,9 +25,7 @@ export function deactivate(): Promise<void> {
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const home = os.homedir()
-  const showStatus = (orgs: OrgStatus[]) => {
-    orca.host.call('statusBar.update', { id: 'status', ...statusBarFor(orgs) }).catch(() => {})
-  }
+  const bar = createStatusBar(state => void orca.host.call('statusBar.update', { id: 'status', ...state }).catch(() => {}))
 
   const store: StorePort = {
     get: async <T,>(key: string) => (await orca.storage.get(key)) as T | null,
@@ -47,7 +44,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     fetch: globalThis.fetch,
     post: orgs => {
       orca.panels.post('orgs.changed', { orgs })
-      showStatus(orgs)
+      bar.setOrgs(orgs)
       boards.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
@@ -71,8 +68,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
-  orca.commands.register('status', async () => statusText(await connections.list()))
+  orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
-  showStatus(orgs)
+  bar.setOrgs(orgs)
 }

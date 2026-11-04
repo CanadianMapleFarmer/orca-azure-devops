@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { OrgState, OrgStatus } from '../src/shared/types'
-import { statusBarFor, statusText } from './status-bar'
+import { createStatusBar, statusBarFor, statusText, type OrgCounts, type StatusBarState } from './status-bar'
 
 function org(name: string, state: OrgState, message?: string): OrgStatus {
   return {
@@ -64,4 +64,78 @@ test('statusText lists each org on its own line', () => {
 
 test('statusText tells the user how to connect when there are no orgs', () => {
   assert.equal(statusText([]), 'Not connected. Open the Azure DevOps panel to connect.')
+})
+
+function counts(entries: Record<string, number>): OrgCounts {
+  return new Map(Object.entries(entries).map(([name, toReview]) => [name, { toReview }]))
+}
+
+test('a to-review count shows in the text and tooltip and lifts the tone to accent', () => {
+  const item = statusBarFor([org('contoso', 'connected'), org('fabrikam', 'connected'), org('adatum', 'connected')], counts({ contoso: 2, fabrikam: 1, adatum: 0 }))
+  assert.deepEqual(item, {
+    text: 'ADO · 3 to review',
+    tone: 'accent',
+    tooltip: 'Azure DevOps: contoso (ada@contoso.com)\nfabrikam (ada@fabrikam.com)\nadatum (ada@adatum.com)\n3 pull requests to review: contoso 2, fabrikam 1'
+  })
+  assert.deepEqual(statusBarFor([org('contoso', 'connected')], counts({ contoso: 0 })), statusBarFor([org('contoso', 'connected')]))
+})
+
+test('a count lifts a neutral connection tone to accent', () => {
+  const orgs = [org('contoso', 'connected'), org('fabrikam', 'signing-in')]
+  assert.equal(statusBarFor(orgs).tone, 'neutral')
+  assert.equal(statusBarFor(orgs, counts({ contoso: 1 })).tone, 'accent')
+})
+
+test('danger and warning connection tones win over the count', () => {
+  const withCount = counts({ contoso: 4 })
+  const warning = statusBarFor([org('contoso', 'connected'), org('fabrikam', 'expired', 'Your sign-in expired. Reconnect to continue.')], withCount)
+  assert.equal(warning.tone, 'warning')
+  assert.equal(warning.text, 'ADO · 4 to review')
+  const danger = statusBarFor([org('contoso', 'connected'), org('fabrikam', 'error', 'No.')], withCount)
+  assert.equal(danger.tone, 'danger')
+  assert.ok(danger.tooltip.endsWith('\n4 pull requests to review: contoso 4'))
+})
+
+test("counts of orgs that aren't connected are ignored, and an org that is gone loses its count", () => {
+  const stale = counts({ fabrikam: 5, ghost: 2 })
+  assert.deepEqual(statusBarFor([org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')], stale), statusBarFor([org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')]))
+
+  const seen: StatusBarState[] = []
+  const bar = createStatusBar(state => seen.push(state))
+  bar.setOrgs([org('contoso', 'connected'), org('fabrikam', 'connected')])
+  bar.setCount('contoso', 'toReview', 2)
+  bar.setCount('fabrikam', 'toReview', 1)
+  bar.setOrgs([org('contoso', 'connected')])
+  assert.deepEqual([...bar.counts()], [['contoso', { toReview: 2 }]])
+  assert.equal(seen.at(-1)?.text, 'ADO · 2 to review')
+  bar.setOrgs([org('contoso', 'connected'), org('fabrikam', 'connected')])
+  assert.equal(seen.at(-1)?.text, 'ADO · 2 to review')
+})
+
+test('createStatusBar calls update only when the state changes, and null clears a count', () => {
+  const seen: StatusBarState[] = []
+  const bar = createStatusBar(state => seen.push(state))
+  const orgs = [org('contoso', 'connected')]
+  bar.setOrgs(orgs)
+  bar.setOrgs([...orgs])
+  assert.equal(seen.length, 1)
+  bar.setCount('contoso', 'toReview', 2)
+  bar.setCount('contoso', 'toReview', 2)
+  assert.equal(seen.length, 2)
+  assert.equal(seen.at(-1)?.text, 'ADO · 2 to review')
+  bar.setCount('contoso', 'toReview', null)
+  assert.equal(seen.length, 3)
+  assert.deepEqual(seen.at(-1), statusBarFor(orgs))
+  assert.equal(bar.counts().size, 0)
+  bar.setCount('contoso', 'toReview', null)
+  assert.equal(seen.length, 3)
+})
+
+test('statusText adds the review line', () => {
+  const orgs = [org('contoso', 'connected'), org('fabrikam', 'connected')]
+  assert.equal(
+    statusText(orgs, counts({ contoso: 2, fabrikam: 1 })),
+    'contoso — connected as ada@contoso.com\nfabrikam — connected as ada@fabrikam.com\n3 pull requests to review: contoso 2, fabrikam 1'
+  )
+  assert.equal(statusText(orgs, counts({ contoso: 0 })), statusText(orgs))
 })

@@ -157,6 +157,26 @@ test('orgs handlers connect, sign out and remove an org', async () => {
   })
 })
 
+test('the status bar item still follows org changes', async () => {
+  await withFakeFetch(async () => {
+    const host = mockHost({ capabilities: CAPABILITIES })
+    await withWorker(worker, { host }, async w => {
+      await w.request('orgs.connect', { orgInput: 'contoso', method: 'pat', pat: PAT })
+      await w.request('orgs.signOut', { org: 'contoso' })
+      await w.request('orgs.remove', { org: 'contoso' })
+      const item = (tone: string, tooltip: string) => ({ id: 'status', text: 'ADO', tone, tooltip })
+      assert.deepEqual(host.callsOf('statusBar.update'), [
+        item('neutral', 'Azure DevOps: not connected'),
+        item('neutral', 'Azure DevOps: contoso: signing in'),
+        item('success', 'Azure DevOps: contoso (ada@contoso.com)'),
+        item('neutral', 'Azure DevOps: contoso: not connected'),
+        item('neutral', 'Azure DevOps: not connected')
+      ])
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
 test('a failed first connect posts orgs.connectFailed and leaves no org behind', async () => {
   await withFakeFetch(async () => {
     await withWorker(worker, {}, async w => {
