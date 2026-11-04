@@ -131,7 +131,9 @@ test('Connect stays disabled while a connection request is in flight', async () 
   await open([], { 'orgs.connect': () => new Promise<OrgStatus>(resolve => (release = resolve)) })
   await panel.type({ label: 'Organization' }, 'contoso')
   const pressing = panel.press({ text: 'Connect' })
-  await new Promise(resolve => setTimeout(resolve, 0))
+  for (let turn = 0; turn < 20 && panel.find({ text: 'Connect' })?.disabled !== true; turn++) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
   assert.equal(panel.find({ text: 'Connect' })?.disabled, true)
   assert.ok(panel.find({ type: 'Spinner' }))
   release(org('contoso', { state: 'signing-in', account: null }))
