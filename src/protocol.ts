@@ -37,7 +37,10 @@ declare module 'orca' {
     }
     'work.startWorkspace': { input: { org: string; id: number }; output: { branch: string; armedUntil: number } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
-    'ui.visibility': { input: { surface: 'work' | 'board'; org: string; visible: boolean }; output: { ok: true } }
+    'ui.visibility': {
+      input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
+      output: { ok: true }
+    }
   }
   interface PluginPanelEvents {
     'orgs.changed': { orgs: OrgStatus[] }

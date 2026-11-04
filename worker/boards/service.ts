@@ -7,14 +7,12 @@ import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import type { Scheduler } from '../poll/scheduler'
-import { boardKey, createBoardViews, type BoardChange, type BoardRequest, type BoardResult } from './board-views'
+import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { createNudgeStore, findNudges } from './nudges'
 import { createRecentWrites } from './recent'
 import { capSnapshot, CHIPS_NEED_CODE_READ, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, restate, type ItemSource } from './snapshot'
 
-export type { BoardChange, BoardResult }
-
-export interface BoardRef { teamId: string; boardId: string }
+export type { BoardChange, BoardRef, BoardResult }
 
 export interface BoardsServiceDeps {
   http: AdoHttp
@@ -37,7 +35,7 @@ export interface BoardsService {
   board(input: BoardArgs & { everyone: boolean }): Promise<BoardResult>
   defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
   dismissNudge(input: { org: string; itemId: number; prId: number }): Promise<{ ok: true }>
-  visibility(input: { surface: 'work' | 'board'; org: string; visible: boolean }): { ok: true }
+  visibility(input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: BoardRef }): { ok: true }
 }
 
 interface OrgWork {
@@ -353,9 +351,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       return { ok: true }
     },
 
-    visibility({ surface, org, visible }) {
+    visibility({ surface, org, visible, board }) {
       if (surface === 'board') {
-        boardViews.setVisible(org, visible)
+        boardViews.setVisible(org, visible, board)
         return { ok: true }
       }
       if (visible) workVisible.add(org)

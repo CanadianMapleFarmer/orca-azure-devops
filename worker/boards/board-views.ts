@@ -6,6 +6,7 @@ export interface BoardChange { org: string; teamId: string; boardId: string }
 export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string }
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
 export interface BoardView extends BoardRequest { at: number; result: BoardResult }
+export interface BoardRef { teamId: string; boardId: string }
 
 export interface BoardViewsDeps {
   scheduler: Scheduler
@@ -21,7 +22,7 @@ export interface BoardViews {
   get(key: string): BoardView | undefined
   of(org: string): BoardView[]
   update(view: BoardView, result: BoardResult): void
-  setVisible(org: string, visible: boolean): void
+  setVisible(org: string, visible: boolean, board?: BoardRef): void
   syncAll(): void
   forget(org: string): void
 }
@@ -35,6 +36,7 @@ export function boardKey(org: string, teamId: string, boardId: string): string {
 export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   const views = new Map<string, BoardView>()
   const hidden = new Set<string>()
+  const hiddenViews = new Set<string>()
   const generations = new Map<string, number>()
 
   function changed(view: BoardView): void {
@@ -56,7 +58,7 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     const active = deps.polls(org) && !hidden.has(org)
     for (const view of views.values()) {
       if (view.org !== org) continue
-      if (!active) {
+      if (!active || hiddenViews.has(view.key)) {
         deps.scheduler.remove(view.key)
         continue
       }
@@ -65,14 +67,24 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     }
   }
 
+  function bump(key: string): void {
+    generations.set(key, (generations.get(key) ?? 0) + 1)
+  }
+
+  function generationOf(org: string, key: string): string {
+    return `${generations.get(org) ?? 0}:${generations.get(key) ?? 0}`
+  }
+
+  function drop(key: string): void {
+    bump(key)
+    if (!views.delete(key)) return
+    deps.scheduler.remove(key)
+    deps.dropped(key)
+  }
+
   function forget(org: string): void {
-    generations.set(org, (generations.get(org) ?? 0) + 1)
-    for (const [key, view] of views) {
-      if (view.org !== org) continue
-      deps.scheduler.remove(key)
-      views.delete(key)
-      deps.dropped(key)
-    }
+    bump(org)
+    for (const view of [...views.values()]) if (view.org === org) drop(view.key)
   }
 
   return {
@@ -81,9 +93,9 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       const cached = views.get(key)
       if (cached && cached.everyone === everyone && deps.now() - cached.at < BOARD_MS.visibleMs) return cached.result
       const request = { key, org, args, everyone }
-      const generation = generations.get(org)
+      const generation = generationOf(org, key)
       const result = await deps.load(request)
-      if (generations.get(org) !== generation) return result
+      if (generationOf(org, key) !== generation) return result
       views.set(key, { ...request, at: deps.now(), result })
       sync(org)
       return result
@@ -99,10 +111,15 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       changed(view)
     },
 
-    setVisible(org, visible) {
+    setVisible(org, visible, board) {
+      const key = board ? boardKey(org, board.teamId, board.boardId) : null
       if (visible) {
-        hidden.delete(org)
+        if (key) hiddenViews.delete(key)
+        else hidden.delete(org)
         sync(org)
+      } else if (key) {
+        hiddenViews.add(key)
+        drop(key)
       } else {
         hidden.add(org)
         forget(org)

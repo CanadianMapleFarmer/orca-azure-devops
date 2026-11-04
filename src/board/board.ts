@@ -54,7 +54,7 @@ const drag = attachDrag(scroller, {
 
 let state: State | null = null
 let shownText: string | null = null
-let reportedOrg: string | null = null
+let reported: BoardRef | null = null
 let seq = 0
 let deferred = false
 
@@ -111,7 +111,7 @@ async function load(): Promise<void> {
   paint()
   const { org, projectId, teamId, boardId } = current.ref
   try {
-    const result = await orca.plugin.request('work.board', { org, projectId, teamId, ...(boardId ? { boardId } : {}), everyone: current.everyone })
+    const result = await orca.plugin.request('work.board', { org, projectId, teamId, boardId, everyone: current.everyone })
     if (mine !== seq || state !== current) return
     current.board = result.board
     current.base = result.items
@@ -146,15 +146,20 @@ async function move(id: number, cell: Cell): Promise<void> {
   }
 }
 
-function tell(org: string, visible: boolean): void {
-  orca.plugin.request('ui.visibility', { surface: 'board', org, visible }).catch(() => {})
+function tell(ref: BoardRef, visible: boolean): void {
+  const board = { teamId: ref.teamId, boardId: ref.boardId }
+  orca.plugin.request('ui.visibility', { surface: 'board', org: ref.org, visible, board }).catch(() => {})
 }
 
 function reportVisibility(): void {
-  const org = state?.ref.org ?? null
-  if (reportedOrg && reportedOrg !== org) tell(reportedOrg, false)
-  if (org) tell(org, document.visibilityState === 'visible')
-  reportedOrg = org
+  const next = state?.ref ?? null
+  if (reported && !sameBoard(reported, next)) tell(reported, false)
+  if (next) tell(next, document.visibilityState === 'visible')
+  reported = next
+}
+
+function sameBoard(a: BoardRef, b: BoardRef | null): boolean {
+  return b !== null && a.org === b.org && a.teamId === b.teamId && a.boardId === b.boardId
 }
 
 function openRef(ref: BoardRef): void {
@@ -194,7 +199,7 @@ async function start(): Promise<void> {
     if (document.visibilityState === 'visible') void load()
   })
   window.addEventListener('pagehide', () => {
-    if (reportedOrg) tell(reportedOrg, false)
+    if (reported) tell(reported, false)
   })
   const doc = orca.document
   if (!doc) {

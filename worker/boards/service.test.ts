@@ -808,6 +808,78 @@ test('a board that lands after the boards were hidden is neither kept nor polled
   assert.equal(h.ado.count(isStoriesWiql), 2, 'its view was not kept, so asking again loads it')
 })
 
+const STORIES_REF = { teamId: TEAM, boardId: STORIES }
+
+test('hiding one board drops only that view and its job; another board of the org keeps polling', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2], 'only Features polls')
+
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  assert.equal(h.ado.count(isFeaturesWiql), 2, 'the Features view was kept and serves from its cache')
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'the Stories view was dropped, so asking again loads it')
+})
+
+test('showing a hidden board polls only it again, once it is asked for again', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2])
+
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [3, 3])
+})
+
+test('a board asked for while it is hidden is not polled until it is shown', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.setOrgs([status()])
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'a hidden board is not polled')
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  await h.clock.tick(0)
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'shown again, its stale view reloads at once')
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isStoriesWiql), 3, 'and keeps polling')
+})
+
+test('a board load in flight across that board being hidden is neither kept nor polled', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  const held = h.ado.hold(isStoriesWiql)
+  const opening = h.service.board({ ...STORIES_BOARD, everyone: true })
+  await drain()
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  held.release()
+  await opening
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2], 'no job was armed for Stories')
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'its view was not kept, so asking again loads it')
+})
+
 test('without a board, a move prefers a board holding the item that maps its type', async () => {
   const h = harness()
   boardIds(h, [1204, 1205], [1204])

@@ -6,8 +6,6 @@ const REF = { org: 'contoso', projectId: 'proj-web', teamId: 'team-web', boardId
 test('parseBoardRef reads the board a backing file names', () => {
   assert.deepEqual(parseBoardRef(JSON.stringify(REF, null, 2)), REF)
   assert.deepEqual(parseBoardRef(JSON.stringify({ ...REF, note: 'ignored' })), REF)
-  const { boardId: _, ...withoutBoard } = REF
-  assert.deepEqual(parseBoardRef(JSON.stringify(withoutBoard)), withoutBoard)
 })
 
 test('parseBoardRef answers null for an empty, invalid or incomplete document', () => {
@@ -16,5 +14,7 @@ test('parseBoardRef answers null for an empty, invalid or incomplete document', 
   }
   const { projectId: _, ...withoutProject } = REF
   assert.equal(parseBoardRef(JSON.stringify(withoutProject)), null)
+  const { boardId: __, ...withoutBoard } = REF
+  assert.equal(parseBoardRef(JSON.stringify(withoutBoard)), null)
   assert.equal(parseBoardRef(JSON.stringify({ ...REF, boardId: 12 })), null)
 })
