@@ -3,7 +3,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
 import { AdoError } from '../ado/http'
-import { boardFilePath, openBoard, writeBoardFile, type HostCall } from './board-file'
+import type { HostCall } from '../workspace/focused'
+import { boardFilePath, openBoard, writeBoardFile } from './board-file'
 
 const TEAM = '6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e'
 const BOARD = { projectId: '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d', teamId: TEAM, boardId: 'e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091' }

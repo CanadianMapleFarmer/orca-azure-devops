@@ -1002,3 +1002,21 @@ test('without a board, a move prefers a board holding the item that maps its typ
   assert.equal(h.ado.calls.find(isPatch)?.body[2].path, `/fields/${WEF}.Column`)
   assert.equal(moved.column, 'Resolved')
 })
+
+test('cachedItem reads the snapshot, then the open board views, and never calls Azure DevOps', async () => {
+  const h = harness()
+  assert.equal(h.service.cachedItem(ORG, 1204), null, 'nothing is cached before the first load')
+  await h.service.refresh(ORG)
+  const calls = h.ado.calls.length
+  assert.equal(h.service.cachedItem(ORG, 1204)?.title, 'Add vehicle search filters', 'a "mine" item')
+  assert.equal(h.service.cachedItem(ORG, 1207)?.title, 'Write the filter tests', 'an "other" item')
+  assert.equal(h.service.cachedItem(ORG, 1100), null, 'a Feature that is on no loaded list')
+  assert.equal(h.service.cachedItem('fabrikam', 1204), null, 'another org')
+
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  const viewCalls = h.ado.calls.length
+  assert.equal(h.service.cachedItem(ORG, 1100)?.title, 'Vehicle search', 'an item only an open board view holds')
+  assert.equal(h.ado.calls.length, viewCalls)
+  assert.ok(viewCalls > calls)
+})

@@ -14,6 +14,12 @@ import { createScheduler, realClock } from './poll/scheduler'
 import { statusBarFor, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
+import { createContextCache, startAgent } from './workspace/agents'
+import { branchFor, createArm } from './workspace/arm'
+import type { HostCall } from './workspace/focused'
+import { registerWorkspaceHooks } from './workspace/hooks'
+import { createLinkStore } from './workspace/links'
+import { watchWorkspaceSettings } from './workspace/settings'
 
 const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
 
@@ -66,6 +72,22 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   await connections.resetInterrupted()
 
+  const hostCall: HostCall = (method, params) => orca.host.call(method as never, params as never)
+  const workspaceSettings = await watchWorkspaceSettings(orca.settings)
+  const arm = createArm(Date.now)
+  const links = await createLinkStore(store, Date.now)
+  const context = createContextCache()
+  registerWorkspaceHooks(orca, {
+    arm,
+    links,
+    context,
+    itemInfo: (org, itemId) => {
+      const item = boards.cachedItem(org, itemId)
+      return item && { type: item.type, title: item.title, url: item.url }
+    },
+    agentContext: workspaceSettings.agentContext
+  })
+
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   orca.panels.handle('orgs.list', () => connections.list())
   orca.panels.handle('orgs.connect', input => connections.connect(input))
@@ -97,8 +119,14 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('work.linkPr', input => boards.linkPr(input))
   orca.panels.handle('work.board', input => boards.board(input))
   orca.panels.handle('work.boards', input => listTeamBoards(connections.http, input))
-  orca.panels.handle('work.openBoard', input =>
-    openBoard({ call: (method, params) => orca.host.call(method as never, params as never), fs, boardOf: org => boards.defaultBoard(org) }, input.org)
+  orca.panels.handle('work.openBoard', input => openBoard({ call: hostCall, fs, boardOf: org => boards.defaultBoard(org) }, input.org))
+  orca.panels.handle('work.startWorkspace', async ({ org, id }) => {
+    const item = boards.cachedItem(org, id) ?? (await boards.details(org, id)).item
+    const branch = branchFor(workspaceSettings.branchTemplate(), item)
+    return { branch, armedUntil: arm.arm({ org, itemId: id, branch }) }
+  })
+  orca.panels.handle('work.startAgent', input =>
+    startAgent({ call: hostCall, links, context, details: (org, id) => boards.details(org, id), defaultAgent: workspaceSettings.defaultAgent }, input)
   )
   orca.panels.handle('work.dismissNudge', input => boards.dismissNudge(input))
   orca.panels.handle('work.nudgeRules', input => boards.nudgeRules(input))

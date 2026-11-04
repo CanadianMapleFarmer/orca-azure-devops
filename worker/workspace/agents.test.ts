@@ -1,0 +1,60 @@
+import { assert, test } from 'orca/testing'
+import type { WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
+import { createContextCache, itemLink, itemPrompt } from './agents'
+
+const URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/1204'
+const LINK = `[ADO User Story #1204: Add vehicle search filters](${URL})`
+
+function details(over: Partial<WorkItemDetails> = {}): WorkItemDetails {
+  const item = { org: 'contoso', id: 1204, type: 'User Story', title: 'Add vehicle search filters', url: URL } as WorkItemSummary
+  return { item, descriptionMd: '', acceptanceMd: '', comments: [], links: [], ...over }
+}
+
+test('itemLink is the one-line ADO reference', () => {
+  assert.equal(itemLink(1204, { type: 'User Story', title: 'Add vehicle search filters', url: URL }), LINK)
+})
+
+test('itemPrompt opens with the reference, then the description and acceptance criteria', () => {
+  const prompt = itemPrompt(details({ descriptionMd: 'Filter by **make**.', acceptanceMd: '- Filters persist', comments: [{ id: 1, author: 'Ada', createdAt: 1, textMd: 'Secret comment' }] }))
+  assert.equal(prompt, `${LINK}\n\n## Description\n\nFilter by **make**.\n\n## Acceptance criteria\n\n- Filters persist`)
+})
+
+test('itemPrompt leaves out an empty section and is just the reference when both are empty', () => {
+  assert.equal(itemPrompt(details({ descriptionMd: 'Only this.' })), `${LINK}\n\n## Description\n\nOnly this.`)
+  assert.equal(itemPrompt(details({ acceptanceMd: 'Only that.' })), `${LINK}\n\n## Acceptance criteria\n\nOnly that.`)
+  assert.equal(itemPrompt(details()), LINK)
+})
+
+const HEAD = `${LINK}\n\n## Description\n\n`
+const REST = `\n\n… open in Azure DevOps for the rest: ${URL}`
+
+test('itemPrompt keeps a text that fits and cuts one that does not, pointing at Azure DevOps', () => {
+  const room = 4000 - HEAD.length
+  assert.equal(itemPrompt(details({ descriptionMd: 'a'.repeat(room) })), HEAD + 'a'.repeat(room))
+
+  const prompt = itemPrompt(details({ descriptionMd: 'a'.repeat(room + 1), acceptanceMd: 'Never shown' }))
+  assert.equal(prompt, HEAD + 'a'.repeat(4000 - HEAD.length - REST.length) + REST)
+  assert.equal(prompt.length, 4000)
+})
+
+test('itemPrompt honours maxChars and never leaves half a surrogate pair', () => {
+  const prompt = itemPrompt(details({ descriptionMd: '😀'.repeat(200) }), HEAD.length + 3 + REST.length)
+  assert.equal(prompt, `${HEAD}😀${REST}`)
+  assert.ok(itemPrompt(details({ descriptionMd: 'c'.repeat(500) }), 1000).length <= 1000)
+})
+
+test('the context cache maps a terminal to its workspace, the newest record winning', () => {
+  const cache = createContextCache()
+  assert.equal(cache.workspaceOf('term-1'), null)
+  cache.record('term-1', 'ws-1')
+  cache.record('term-1', 'ws-2')
+  assert.equal(cache.workspaceOf('term-1'), 'ws-2')
+})
+
+test('the context cache keeps at most 500 terminals and drops the oldest', () => {
+  const cache = createContextCache()
+  for (let index = 1; index <= 501; index += 1) cache.record(`term-${index}`, `ws-${index}`)
+  assert.equal(cache.workspaceOf('term-1'), null)
+  assert.equal(cache.workspaceOf('term-2'), 'ws-2')
+  assert.equal(cache.workspaceOf('term-501'), 'ws-501')
+})

@@ -64,6 +64,46 @@
         "type": "string",
         "default": "",
         "placeholder": "/opt/homebrew/bin/az"
+      },
+      {
+        "key": "defaultAgent",
+        "title": "Default agent",
+        "description": "The agent \"Start agent\" launches, such as claude or codex.",
+        "type": "string",
+        "default": "claude",
+        "placeholder": "claude"
+      },
+      {
+        "key": "agentContext",
+        "title": "Add work item context to agent prompts",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "branchTemplate",
+        "title": "Branch name template",
+        "description": "{id} is the work item id and {slug} its title.",
+        "type": "string",
+        "default": "feature/{id}-{slug}"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "workspace.create.before"
+      },
+      {
+        "event": "workspace.create.after"
+      },
+      {
+        "event": "agent.prompt.before"
+      },
+      {
+        "event": "agent.launch.before"
+      }
+    ],
+    "events": [
+      {
+        "on": "agent.status.changed"
       }
     ]
   },
@@ -82,6 +122,12 @@
     },
     {
       "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:read"
+    },
+    {
+      "kind": "agent:launch"
     }
   ]
 }

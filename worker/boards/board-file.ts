@@ -2,12 +2,10 @@ import * as path from 'node:path'
 import { NO_BOARDS } from '../../src/shared/messages'
 import { AdoError } from '../ado/http'
 import { isValidOrgName } from '../ado/org'
+import { focusedWorkspace, type HostCall } from '../workspace/focused'
 
-export type HostCall = (method: string, params?: unknown) => Promise<any>
 export type BoardFileFs = Pick<typeof import('node:fs/promises'), 'mkdir' | 'writeFile' | 'readFile'>
 export interface BoardFileContent { org: string; projectId: string; teamId: string; boardId: string }
-
-interface WorkspaceEntry { id: string; kind: 'worktree' | 'folder'; name: string; path: string; branch: string | null; hostId: string | null }
 
 const FOLDER = '.orca-ado'
 const NO_WORKSPACE = 'Open a local workspace first, or use + → Azure DevOps board.'
@@ -47,13 +45,4 @@ export async function openBoard(
   await writeBoardFile(deps.fs, workspace.path, { org, ...board })
   await deps.call('editor.open', { workspaceId: workspace.id, path: `${FOLDER}/${fileName(org, board.teamId)}` })
   return { opened: true }
-}
-
-async function focusedWorkspace(call: HostCall): Promise<WorkspaceEntry | null> {
-  const context: { branch: string; displayName: string } | null = await call('workspace.readContext')
-  if (!context) return null
-  const { workspaces }: { workspaces: WorkspaceEntry[] } = await call('workspace.list')
-  // Folder workspaces have no branch, so they match by name alone.
-  const matches = workspaces.filter(entry => entry.name === context.displayName && (entry.kind === 'folder' || entry.branch === context.branch))
-  return matches.length === 1 ? matches[0] : null
 }

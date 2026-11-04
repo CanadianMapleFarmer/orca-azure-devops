@@ -30,6 +30,7 @@ export interface BoardsService {
   snapshot(org: string): Promise<WorkSnapshot>
   refresh(org: string): Promise<WorkSnapshot>
   details(org: string, id: number): Promise<WorkItemDetails>
+  cachedItem(org: string, id: number): WorkItemSummary | null
   move(input: { org: string; id: number; rev: number; to: MoveTarget; board?: BoardRef }): Promise<WorkItemSummary>
   comment(org: string, id: number, text: string): Promise<WorkComment>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
@@ -306,6 +307,12 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const { cfg } = await target(status, id)
       const { raw, item } = await reload(status, cfg, id)
       return loadDetails(http, org, cfg.projectId, item, raw)
+    },
+
+    cachedItem(org, id) {
+      const snapshot = work.get(org)?.snapshot
+      const listed = [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(item => item.id === id)
+      return listed ?? boardViews.of(org).flatMap(view => view.result.items).find(item => item.id === id) ?? null
     },
 
     async move({ org, id, rev, to, board }) {
