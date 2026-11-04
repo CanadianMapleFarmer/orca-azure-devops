@@ -20,7 +20,7 @@ import {
   type PanelContext
 } from 'orca'
 import type { OrgState, OrgStatus } from '../shared/types'
-import { OrgSettings, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
+import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
 import { Setup, connecting, openSetup, reconnect } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
 
@@ -105,6 +105,11 @@ function SigningIn({ org }: { org: OrgStatus }): OrcaNode {
           {`Pick the account you use for Azure DevOps. Tokens stay in a private Azure CLI folder: ${org.tokenStore.path}. Sign out deletes it.`}
         </Callout>
       ) : null}
+      <Row gap="sm">
+        <Button variant="outline" disabled={read(busy) !== null} onPress={() => cancelSignIn(org.org)}>
+          Cancel
+        </Button>
+      </Row>
     </Stack>
   )
 }

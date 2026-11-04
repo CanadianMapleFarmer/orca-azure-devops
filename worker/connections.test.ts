@@ -5,6 +5,7 @@ import { AdoError, type AdoRequest } from './ado/http'
 import type { AzCliProvider } from './auth/azcli'
 import { basicAuth, type SecretsPort } from './auth/pat'
 import { createConnections, type Connections, type StorePort } from './connections'
+import { CommandTimeoutError } from './sys/run'
 
 const HOME = '/home/ada'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
@@ -734,6 +735,61 @@ test('signing out during az sign-in cancels it', async () => {
   assert.equal(h.last()?.message, 'Sign-in was cancelled.')
   assert.equal(h.ado.requests.length, 0)
   assert.equal(h.stored()?.[0].pinned, null)
+})
+
+test('an az sign-in that times out is signed out with a hint, keeps the pin and deletes the profile', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID, boards: BOARDS })] })
+  h.az.loginError = new CommandTimeoutError('az timed out after 300000ms')
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('disconnected')
+  assert.equal(h.last()?.message, 'Sign-in timed out. Try again.')
+  assert.deepEqual(h.last()?.account, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('cancel stops an az sign-in, keeps the pin and says it was cancelled', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID, boards: BOARDS })] })
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  const status = record(await h.connections.cancel('contoso'))
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, 'Sign-in was cancelled.')
+  assert.deepEqual(status.account, ADA_OID)
+  assert.equal(h.az.loginAborted, true)
+  assert.deepEqual(h.az.calls, ['signOut contoso', `login contoso ${TENANT}`, 'signOut contoso'])
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.equal(h.last()?.message, 'Sign-in was cancelled.')
+
+  h.az.loginGate.resolve()
+  await flush()
+  assert.equal(h.last()?.state, 'disconnected')
+  assert.equal(h.ado.requests.length, 0)
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+
+  h.az.tokens = [JWT_ADA]
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('connected')
+})
+
+test('cancel with no sign-in in flight changes nothing', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  const status = await h.connections.cancel('contoso')
+  assert.equal(status.state, 'connected')
+  assert.equal(status.message, undefined)
+  assert.deepEqual(h.az.calls, [])
+  assert.equal(h.posts.length, 0)
+})
+
+test('cancel refuses an unknown org', async () => {
+  const h = harness()
+  await assert.rejects(h.connections.cancel('contoso'), /not connected/)
 })
 
 test('a failed first az connect reports the reason and deletes the profile', async () => {

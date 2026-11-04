@@ -5,6 +5,7 @@ import { discoverTenant, parseOrgInput } from './ado/org'
 import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
 import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
+import { CommandTimeoutError } from './sys/run'
 
 export interface StorePort {
   get<T>(key: string): Promise<T | null>
@@ -14,6 +15,7 @@ export interface StorePort {
 export interface Connections {
   list(): Promise<OrgStatus[]>
   connect(input: { orgInput: string; method: ConnectionMethod; pat?: string }): Promise<OrgStatus>
+  cancel(org: string): Promise<OrgStatus>
   signOut(org: string): Promise<OrgStatus>
   remove(org: string): Promise<void>
   update(org: string, patch: Partial<Pick<OrgConfig, 'boards' | 'codeProjects'>>): Promise<OrgStatus>
@@ -46,6 +48,7 @@ const MESSAGES = {
   anonymous: "Azure DevOps didn't accept that sign-in.",
   signInFailed: 'Sign-in failed.',
   cancelled: 'Sign-in was cancelled.',
+  timedOut: 'Sign-in timed out. Try again.',
   interrupted: 'Sign-in was interrupted. Try again.',
   expired: 'Your sign-in expired. Reconnect to continue.',
   otherAccount: 'This org is signed in as a different account.',
@@ -65,6 +68,7 @@ type Attempt = { controller: AbortController }
 class NoCredentialError extends Error {}
 class SignInNeeded extends Error {}
 class TokenUnavailable extends Error {}
+class SignInTimedOut extends Error {}
 
 class OtherAccount extends Error {
   constructor(readonly account: string) {
@@ -514,7 +518,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       }
     } catch (error) {
       if (!isCurrent(org, attempt)) return
-      outcome = error instanceof OtherAccount && cfg.pinned ? mismatchOf(error.account, cfg.pinned) : { state: 'error', message: messageOf(error) }
+      outcome = failedSignIn(error, cfg.pinned)
     }
     transient.set(org, outcome)
     const wiped = await discardSignIn(cfg).then(() => true, () => false)
@@ -580,7 +584,9 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         await deps.azProfiles.signOut(org).catch(() => {
           throw new Error(MESSAGES.wipeFailed)
         })
-        return az.login(org, cfg.tenantId, signal)
+        return az.login(org, cfg.tenantId, signal).catch((error: unknown) => {
+          throw error instanceof CommandTimeoutError ? new SignInTimedOut() : error
+        })
       })
       const issued = await serial(org, () => {
         signal.throwIfAborted()
@@ -610,6 +616,17 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         default:
           return unknownMethod(method)
       }
+    },
+
+    async cancel(org) {
+      await load()
+      const cfg = find(org)
+      if (!cfg) throw new Error(MESSAGES.unknownOrg)
+      if (!cancelAttempt(org)) return statusFor(cfg)
+      invalidate(org)
+      setTransient(org, { state: 'disconnected', message: MESSAGES.cancelled })
+      await wipeCredentials(org, [cfg.method])
+      return statusFor(cfg)
     },
 
     async signOut(org) {
@@ -672,6 +689,12 @@ function unknownMethod(method: never): never {
 
 function mismatchOf(account: string, pinned: PinnedAccount): Transient {
   return { state: 'mismatch', message: `Signed in as ${account}, but this org is pinned to ${pinned.uniqueName}.` }
+}
+
+function failedSignIn(error: unknown, pinned: PinnedAccount | null): Transient {
+  if (error instanceof OtherAccount && pinned) return mismatchOf(error.account, pinned)
+  if (error instanceof SignInTimedOut) return { state: 'disconnected', message: MESSAGES.timedOut }
+  return { state: 'error', message: messageOf(error) }
 }
 
 function messageOf(error: unknown): string {

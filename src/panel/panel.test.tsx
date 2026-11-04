@@ -176,6 +176,26 @@ test('signing-in shows the browser hint and token location', async () => {
   assert.equal(panel.find({ type: 'Tabs' }), null)
 })
 
+test('signing in offers Cancel, which cancels the sign-in with a long timeout and keeps the pin', async () => {
+  const host = await open([org('contoso', { state: 'signing-in' })], {
+    'orgs.cancel': () => org('contoso', { state: 'disconnected', message: 'Sign-in was cancelled.' })
+  })
+  await panel.press({ text: 'Cancel' })
+  assert.deepEqual(requestsTo(host, 'orgs.cancel'), [{ name: 'orgs.cancel', input: { org: 'contoso' }, timeoutMs: 90000 }])
+  assert.deepEqual(requestsTo(host, 'orgs.signOut'), [])
+})
+
+test('a failed cancel shows the message', async () => {
+  await open([org('contoso', { state: 'signing-in' })], {
+    'orgs.cancel': () => {
+      throw hostError('action_failed', "Couldn't delete this org's saved sign-in. Sign out to try again.")
+    }
+  })
+  await panel.press({ text: 'Cancel' })
+  assert.ok(panel.find({ text: "Couldn't delete this org's saved sign-in. Sign out to try again." }))
+  assert.equal(panel.find({ text: 'Cancel' })?.disabled, false)
+})
+
 test('mismatch shows a danger callout with both accounts and signs out', async () => {
   const message = 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.'
   const host = await open([org('contoso', { state: 'mismatch', message })], {

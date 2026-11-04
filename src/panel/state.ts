@@ -3,8 +3,10 @@ import type { OrgStatus } from '../shared/types'
 
 export type TabId = 'work' | 'pipelines' | 'prs' | 'wiki'
 export type View = 'hub' | 'setup' | 'settings'
-export type Busy = 'sign-out' | 'remove' | null
+export type Busy = 'sign-out' | 'remove' | 'cancel' | null
 export type Listing = { status: 'loading' | 'ready' } | { status: 'failed'; message: string }
+
+export const LONG_WAIT = { timeoutMs: 90_000 }
 
 export const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'work', label: 'Work' },

@@ -7,6 +7,7 @@ export const NOT_SIGNED_IN = 'Not signed in.'
 
 const PROFILE_ROOT = ['.orca-azure-devops', 'az']
 const PROFILE_MODE = 0o700
+const LOGIN_TIMEOUT_MS = 5 * 60_000
 const TOKEN_TIMEOUT_MS = 60_000
 const TOKEN_FAILED = 'Azure CLI could not get an access token'
 const JWT_LIKE = /eyJ[\w-]*(?:\.[\w-]*)*/g
@@ -78,7 +79,7 @@ export function createAzCliProvider(deps: {
       await fs.mkdir(dir, { recursive: true, mode: PROFILE_MODE })
       await fs.chmod(dir, PROFILE_MODE)
       const args = ['login', ...tenantArgs(tenantId), '--allow-no-subscriptions', '--output', 'none']
-      const result = await run(azPath, args, { env: azEnv(dir), signal })
+      const result = await run(azPath, args, { env: azEnv(dir), signal, timeoutMs: LOGIN_TIMEOUT_MS })
       if (result.code !== 0) throw failure('Azure CLI sign-in failed', result.stderr)
     },
 

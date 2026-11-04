@@ -18,12 +18,16 @@ import {
   type OrcaNode
 } from 'orca'
 import type { OrgStatus } from '../shared/types'
-import { actionError, busy, messageOf, view, type Busy } from './state'
+import { actionError, busy, LONG_WAIT, messageOf, view, type Busy } from './state'
 
 type Named = { id: string; name: string }
 
-const LONG_WAIT = { timeoutMs: 90_000 }
 const MAX_LISTED = 500
+const WORKING: Record<Exclude<Busy, null>, string> = {
+  'sign-out': 'Signing out…',
+  remove: 'Removing…',
+  cancel: 'Cancelling…'
+}
 
 export const settingsOrg = atom<string | null>(null)
 const projects = atom<Named[]>([])
@@ -160,6 +164,9 @@ async function leaveAfter(kind: Exclude<Busy, null>, run: () => Promise<unknown>
 export const signOut = (org: string): Promise<void> =>
   leaveAfter('sign-out', () => plugin.request('orgs.signOut', { org }, LONG_WAIT))
 
+export const cancelSignIn = (org: string): Promise<void> =>
+  leaveAfter('cancel', () => plugin.request('orgs.cancel', { org }, LONG_WAIT))
+
 const removeOrg = (org: string): Promise<void> => leaveAfter('remove', () => plugin.request('orgs.remove', { org }, LONG_WAIT))
 
 function CapNote({ total }: { total: number }): OrcaNode {
@@ -242,7 +249,7 @@ export function OrgSettings({ org }: { org: OrgStatus }): OrcaNode {
       {error ? <Callout tone="danger">{error}</Callout> : null}
       {org.state === 'connected' ? <Targets org={org.org} /> : null}
       <Separator />
-      {working ? <Spinner label={working === 'sign-out' ? 'Signing out…' : 'Removing…'} /> : null}
+      {working ? <Spinner label={WORKING[working]} /> : null}
       <Row gap="sm" wrap>
         <Button tone="danger" disabled={working !== null} onPress={() => signOut(org.org)}>
           Sign out

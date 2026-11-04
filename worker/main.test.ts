@@ -1,8 +1,38 @@
+import { spawnSync } from 'node:child_process'
+import * as fs from 'node:fs/promises'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import * as worker from './main'
+
+function running(pattern: string): boolean {
+  return spawnSync('pgrep', ['-f', pattern]).status === 0
+}
+
+async function until(condition: () => boolean, ms = 5_000): Promise<boolean> {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (condition()) return true
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  return condition()
+}
+
+async function withHome(run: (home: string) => Promise<void>): Promise<void> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-home-'))
+  const realHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    await run(home)
+  } finally {
+    if (realHome === undefined) delete process.env.HOME
+    else process.env.HOME = realHome
+    await fs.rm(home, { recursive: true, force: true })
+  }
+}
 
 const PAT = 'pat-main-test-6e1f0b'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
@@ -119,6 +149,32 @@ test('orgs handlers connect, sign out and remove an org', async () => {
 
     const seen = JSON.stringify([w.posts, w.logs, w.host.calls.filter(call => !call.method.startsWith('secrets.')), w.host.data().storage])
     assert.ok(!seen.includes(PAT) && !seen.includes(basicAuth(PAT).slice(6)), 'the PAT leaked outside orca.secrets')
+  })
+})
+
+test('orgs.cancel stops a running az login, wrapper and all, and keeps none of its profile', async () => {
+  const sleep = `sleep 30.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`
+  await withHome(async home => {
+    const az = path.join(home, 'az')
+    await fs.writeFile(az, `#!/bin/sh\n${sleep}\n`, { mode: 0o755 })
+    try {
+      await withFakeFetch(async () => {
+        const w = await mountWorker(worker, { host: mockHost({ capabilities: CAPABILITIES, settings: { azPath: az } }) })
+        const started = await w.request('orgs.connect', { orgInput: 'contoso', method: 'azure-cli' })
+        assert.equal(started.state, 'signing-in')
+        assert.ok(await until(() => running(sleep)), 'az login is running')
+
+        const cancelled = await w.request('orgs.cancel', { org: 'contoso' })
+        assert.equal(cancelled.state, 'disconnected')
+        assert.equal(cancelled.message, 'Sign-in was cancelled.')
+        assert.equal(running(sleep), false, 'nothing az started is left running')
+        await assert.rejects(fs.stat(path.join(home, '.orca-azure-devops', 'az', 'contoso')), /ENOENT/)
+        assert.equal(orgsChanged(w.posts).at(-1)?.[0].message, 'Sign-in was cancelled.')
+        assert.equal(w.refusals.length, 0)
+      })
+    } finally {
+      spawnSync('pkill', ['-9', '-f', sleep])
+    }
   })
 })
 

@@ -41,6 +41,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   orca.panels.handle('orgs.list', () => connections.list())
   orca.panels.handle('orgs.connect', input => connections.connect(input))
+  orca.panels.handle('orgs.cancel', input => connections.cancel(input.org))
   orca.panels.handle('orgs.signOut', input => connections.signOut(input.org))
   orca.panels.handle('orgs.remove', async input => {
     await connections.remove(input.org)

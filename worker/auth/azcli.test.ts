@@ -110,6 +110,12 @@ test('login passes the abort signal to az', async () => {
   assert.equal(runs[0].opts.signal, controller.signal)
 })
 
+test('login gives az five minutes', async () => {
+  const { provider, runs } = harness()
+  await provider.login('contoso', 't1')
+  assert.equal(runs[0].opts.timeoutMs, 5 * 60_000)
+})
+
 test('login does not start az for an invalid org', async () => {
   const { provider, events } = harness()
   await failure(provider.login('../escape', null))

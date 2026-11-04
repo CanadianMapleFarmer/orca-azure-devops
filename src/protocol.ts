@@ -4,6 +4,7 @@ declare module 'orca' {
     'plugin.ping': { input: {}; output: { version: string } }
     'orgs.list': { input: {}; output: OrgStatus[] }
     'orgs.connect': { input: { orgInput: string; method: ConnectionMethod; pat?: string }; output: OrgStatus }
+    'orgs.cancel': { input: { org: string }; output: OrgStatus }
     'orgs.signOut': { input: { org: string }; output: OrgStatus }
     'orgs.remove': { input: { org: string }; output: { ok: true } }
     'ado.projects': { input: { org: string }; output: { id: string; name: string }[] }
