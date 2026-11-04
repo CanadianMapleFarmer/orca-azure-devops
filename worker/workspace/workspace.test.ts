@@ -1,9 +1,9 @@
-import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, test, type TestWorker } from 'orca/testing'
 import type { OrgConfig } from '../../src/shared/types'
 import { basicAuth } from '../auth/pat'
 import { BOARDS, fakeAdo, ORG_URL, type FakeAdo } from '../boards/fake-ado'
 import * as worker from '../main'
-import { drain } from '../test-support'
+import { drain, withWorker } from '../test-support'
 
 const PAT = 'pat-workspace-test-8a41'
 const BRANCH = 'feature/1204-add-vehicle-search-filters'
@@ -31,7 +31,7 @@ interface Options { settings?: Record<string, string | boolean>; desk?: Partial<
 
 async function withDesk(
   options: Options,
-  run: (desk: { w: Awaited<ReturnType<typeof mountWorker>>; host: ReturnType<typeof mockHost>; desk: Desk; ado: FakeAdo; block(): void; blockedCalls(): number }) => Promise<void>
+  run: (desk: { w: TestWorker; host: ReturnType<typeof mockHost>; desk: Desk; ado: FakeAdo; block(): void; blockedCalls(): number }) => Promise<void>
 ): Promise<void> {
   const ado = fakeAdo()
   const realFetch = globalThis.fetch
@@ -56,11 +56,9 @@ async function withDesk(
       'agent.launch': options.launch ?? (() => ({ terminalId: 'term-new' }))
     }
   })
-  const w = await mountWorker(worker, { host })
   try {
-    await run({ w, host, desk, ado, block: () => void (guard.blocked = true), blockedCalls: () => guard.hits })
+    await withWorker(worker, { host }, w => run({ w, host, desk, ado, block: () => void (guard.blocked = true), blockedCalls: () => guard.hits }))
   } finally {
-    await w.deactivate()
     globalThis.fetch = realFetch
   }
 }
@@ -170,7 +168,7 @@ test('a workspace started from an item is linked, and its agent launches there w
   })
 })
 
-async function startLinked(w: Awaited<ReturnType<typeof mountWorker>>, desk: Desk): Promise<void> {
+async function startLinked(w: TestWorker, desk: Desk): Promise<void> {
   await w.request('work.snapshot', { org: 'contoso' })
   await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
   await w.hooks.fire('workspace.create.before', CREATE)

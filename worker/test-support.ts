@@ -1,3 +1,4 @@
+import { mountWorker, type MountWorkerOptions, type TestWorker, type WorkerModule } from 'orca/testing'
 import type { StorePort } from './connections'
 
 export async function drain(turns = 100): Promise<void> {
@@ -13,4 +14,13 @@ export function memoryStore(initial: Record<string, unknown> = {}): { data: Reco
     }
   }
   return { data, store }
+}
+
+export async function withWorker(module: WorkerModule, options: MountWorkerOptions, run: (w: TestWorker) => Promise<void>): Promise<void> {
+  const w = await mountWorker(module, options)
+  try {
+    await run(w)
+  } finally {
+    await w.deactivate()
+  }
 }
