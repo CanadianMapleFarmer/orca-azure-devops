@@ -2,7 +2,7 @@ import * as realFs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
-import type { RunCommand, RunResult } from '../sys/run'
+import { CommandTimeoutError, type RunCommand, type RunResult } from '../sys/run'
 import { ADO_RESOURCE, createAzCliProvider, createAzProfiles } from './azcli'
 
 const HOME = '/home/ada'
@@ -114,6 +114,12 @@ test('login gives az five minutes', async () => {
   const { provider, runs } = harness()
   await provider.login('contoso', 't1')
   assert.equal(runs[0].opts.timeoutMs, 5 * 60_000)
+})
+
+test('login passes a timeout through as the timeout error Connections recognises', async () => {
+  const timeout = new CommandTimeoutError('az timed out after 300000ms')
+  const { provider } = harness(timeout)
+  assert.equal(await failure(provider.login('contoso', 't1')), timeout)
 })
 
 test('login does not start az for an invalid org', async () => {
