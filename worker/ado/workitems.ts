@@ -14,7 +14,7 @@ export interface PrRef { projectId: string; repoId: string; prId: number }
 
 const WIQL_TOP = 500
 const BATCH_SIZE = 200
-const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
+export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
 const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected work item response.'
 
 export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
@@ -94,7 +94,7 @@ export function toSummary(raw: RawWorkItem, cfg: BoardConfig, orgUrl: string): O
     assignedTo: displayName(fields['System.AssignedTo']),
     parentId: typeof fields['System.Parent'] === 'number' ? fields['System.Parent'] : null,
     changedAt: timestamp(fields['System.ChangedDate']),
-    url: `${orgUrl}/${encodeURIComponent(project)}/_workitems/edit/${raw.id}`,
+    url: workItemUrl(orgUrl, project, raw.id),
     prRefs: (raw.relations ?? []).filter(link => link.rel === 'ArtifactLink').flatMap(link => parsePrRef(link.url) ?? [])
   }
 }
@@ -113,6 +113,10 @@ export function parsePrRef(artifactUrl: string): PrRef | null {
   const prId = Number(id)
   if (!projectId || !repoId || !/^\d+$/.test(id) || !Number.isSafeInteger(prId) || prId < 1) return null
   return { projectId, repoId, prId }
+}
+
+export function workItemUrl(orgUrl: string, project: string, id: number): string {
+  return `${orgUrl}/${encodeURIComponent(project)}/_workitems/edit/${id}`
 }
 
 function select(conditions: (string | undefined)[]): string {
@@ -138,7 +142,7 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function textOr<F>(value: unknown, fallback: F): string | F {
+export function textOr<F>(value: unknown, fallback: F): string | F {
   return typeof value === 'string' ? value : fallback
 }
 
@@ -147,7 +151,7 @@ function displayName(identity: unknown): string | null {
   return textOr((identity as { displayName?: unknown }).displayName, null)
 }
 
-function timestamp(value: unknown): number {
+export function timestamp(value: unknown): number {
   const ms = Date.parse(textOr(value, ''))
   return Number.isNaN(ms) ? 0 : ms
 }

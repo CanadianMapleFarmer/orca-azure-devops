@@ -86,10 +86,11 @@ async function fetchPullRequest(http: AdoHttp, org: string, ref: PrRef): Promise
 
 function pullRequestUrl(pullRequest: RawPullRequest, org: string, ref: PrRef): string {
   const webUrl = pullRequest.repository?.webUrl
-  const repository = typeof webUrl === 'string' && webUrl !== ''
-    ? webUrl
-    : `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(ref.projectId)}/_git/${encodeURIComponent(ref.repoId)}`
-  return `${repository}/pullrequest/${ref.prId}`
+  return typeof webUrl === 'string' && webUrl !== '' ? `${webUrl}/pullrequest/${ref.prId}` : pullRequestWebUrl(org, ref)
+}
+
+export function pullRequestWebUrl(org: string, ref: PrRef): string {
+  return `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(ref.projectId)}/_git/${encodeURIComponent(ref.repoId)}/pullrequest/${ref.prId}`
 }
 
 function prState(status: string): PrChip['state'] {
