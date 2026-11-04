@@ -1,0 +1,11 @@
+{
+  "name": "orca-azure-devops",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Azure DevOps in the Orca sidebar.",
+  "license": "MIT",
+  "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "manifestVersion": 2,
+  "id": "azure-devops",
+  "name": "Azure DevOps",
+  "version": "0.1.0",
+  "description": "Azure DevOps work items, pipelines, pull requests and wikis in the Orca sidebar.",
+  "license": "MIT",
+  "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "worker/main.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "ado",
+        "title": "Azure DevOps",
+        "icon": "cloud",
+        "entry": "src/panel/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "settings": [
+      {
+        "key": "azPath",
+        "title": "Azure CLI path",
+        "description": "Leave empty to find az automatically.",
+        "type": "string",
+        "default": "",
+        "placeholder": "/opt/homebrew/bin/az"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "secrets:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
+}
