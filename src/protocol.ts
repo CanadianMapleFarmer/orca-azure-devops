@@ -1,4 +1,4 @@
-import type { BoardsTarget, ConnectionMethod, OrgConfig, OrgStatus } from './shared/types'
+import type { ConnectionMethod, OrgStatus } from './shared/types'
 declare module 'orca' {
   interface PluginRequests {
     'plugin.ping': { input: {}; output: { version: string } }

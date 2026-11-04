@@ -5,6 +5,10 @@
   "description": "Azure DevOps in the Orca sidebar.",
   "license": "MIT",
   "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "scripts": {
+    "types": "node scripts/orca-types.mjs",
+    "typecheck": "node scripts/orca-types.mjs && tsc -p ."
+  },
   "devDependencies": {
     "typescript": "^7.0.2"
   }
