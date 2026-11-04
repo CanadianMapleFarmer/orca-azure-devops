@@ -35,6 +35,7 @@ export function boardKey(org: string, teamId: string, boardId: string): string {
 export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   const views = new Map<string, BoardView>()
   const hidden = new Set<string>()
+  const generations = new Map<string, number>()
 
   function changed(view: BoardView): void {
     deps.changed({ org: view.org, teamId: view.result.board.teamId, boardId: view.result.board.boardId })
@@ -65,6 +66,7 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   }
 
   function forget(org: string): void {
+    generations.set(org, (generations.get(org) ?? 0) + 1)
     for (const [key, view] of views) {
       if (view.org !== org) continue
       deps.scheduler.remove(key)
@@ -79,7 +81,9 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       const cached = views.get(key)
       if (cached && cached.everyone === everyone && deps.now() - cached.at < BOARD_MS.visibleMs) return cached.result
       const request = { key, org, args, everyone }
+      const generation = generations.get(org)
       const result = await deps.load(request)
+      if (generations.get(org) !== generation) return result
       views.set(key, { ...request, at: deps.now(), result })
       sync(org)
       return result

@@ -115,15 +115,10 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return `mine:${org}`
   }
 
-  async function nudgesFor(org: string, cfg: BoardConfig, mine: WorkItemSummary[]) {
-    const [rules, dismissed] = await Promise.all([nudges.rules(org, cfg.teamId), nudges.dismissed(org)])
-    return findNudges(cfg, mine, rules, dismissed)
-  }
-
   async function build(status: OrgStatus): Promise<WorkSnapshot> {
     const cfg = await defaultConfig(status)
     const source = sourceOf(status)
-    const loaded = await loadMine(source, cfg)
+    const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
     const mine = items.filter(item => isOnBoard(item, cfg))
     return capSnapshot({
@@ -131,7 +126,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       board: cfg,
       mine,
       other: items.filter(item => !isOnBoard(item, cfg)),
-      nudges: await nudgesFor(status.org, cfg, mine),
+      nudges: findNudges(cfg, mine, rules, dismissed),
       updatedAt: now(),
       stale: false,
       ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {})
@@ -202,10 +197,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     if (ref) {
       cfg = await namedConfig(status, ref)
     } else {
-      const known = all.find(holder => holder.items.some(item => item.id === id))
-      const type = known?.items.find(item => item.id === id)?.type
-      const mapping = type === undefined ? undefined : all.find(holder => isOnBoard({ type }, holder.board))
-      cfg = mapping?.board ?? known?.board ?? (await defaultConfig(status))
+      const holding = all.filter(holder => holder.items.some(item => item.id === id))
+      const type = holding[0]?.items.find(item => item.id === id)?.type ?? ''
+      cfg = (holding.find(holder => isOnBoard({ type }, holder.board)) ?? holding[0])?.board ?? (await defaultConfig(status))
     }
     const cached = all
       .filter(holder => holder.board.teamId === cfg.teamId && holder.board.boardId === cfg.boardId)

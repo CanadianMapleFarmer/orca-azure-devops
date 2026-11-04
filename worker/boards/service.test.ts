@@ -90,8 +90,14 @@ function harness() {
   const ado = fakeAdo()
   const clock = fakeClock()
   const storage: Record<string, unknown> = {}
+  const heldReads = new Map<string, Promise<void>>()
   const store: StorePort = {
-    get: async <T,>(key: string) => (key in storage ? (structuredClone(storage[key]) as T) : null),
+    get: async <T,>(key: string) => {
+      const gate = heldReads.get(key)
+      heldReads.delete(key)
+      await gate
+      return key in storage ? (structuredClone(storage[key]) as T) : null
+    },
     set: async (key, value) => {
       storage[key] = structuredClone(value)
     }
@@ -119,6 +125,11 @@ function harness() {
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
+    },
+    holdRead(key: string): { release(): void } {
+      let release = () => {}
+      heldReads.set(key, new Promise<void>(resolve => (release = resolve)))
+      return { release: () => release() }
     }
   }
 }
@@ -726,4 +737,71 @@ test('without a board, a move prefers an open board over the "mine" board when b
 
   await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
   assert.equal(h.ado.calls.find(isPatch)?.body[2].path, `/fields/${otherWef}.Column`)
+})
+
+test('a panel move of a "mine" item ignores an open board in another project that does not hold it', async () => {
+  const h = harness()
+  const project = '5e6f7a8b-7777-4a8b-9c0d-1e2f3a4b5c6d'
+  const team = '8c9d0e1f-8888-4d5e-8f60-7a8b9c0d1e2f'
+  const boardId = 'a5b6c7d8-9999-4e6f-9a7b-4c5d6e7f8092'
+  const otherWef = 'WEF_1B2C3D4E5F6A4B7C8D9E0F1A2B3C4D5E_Kanban'
+  const stories = JSON.parse(JSON.stringify(fixture('board-stories')).replaceAll(WEF, otherWef))
+  const base = `/${ORG}/${project}`
+  h.ado.on(call => call.path === `${base}/${team}/_apis/work/boards/${boardId}`, () => json(200, { ...stories, id: boardId }))
+  h.ado.on(call => call.path === `${base}/${team}/_apis/work/teamsettings/teamfieldvalues`, () => json(200, fixture('team-field-values')))
+  h.ado.on(call => call.path === `${base}/_apis/wit/workitemtypes/User Story/states`, () => json(200, fixture('states-user-story')))
+  h.ado.on(call => call.path === `${base}/_apis/wit/workitemtypes/Bug/states`, () => json(200, fixture('states-bug')))
+  h.ado.on(call => call.path === `${base}/${team}/_apis/wit/wiql`, () => json(200, { workItems: [] }))
+  await h.service.refresh(ORG)
+  await h.service.board({ org: ORG, projectId: project, teamId: team, boardId, everyone: true })
+
+  await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  await h.service.details(ORG, 1204)
+  await h.service.comment(ORG, 1204, 'Ready')
+  const patch = h.ado.calls.find(isPatch)
+  assert.equal(patch?.path, `/${ORG}/${PROJECT}/_apis/wit/workitems/1204`)
+  assert.equal(patch?.body[2].path, `/fields/${WEF}.Column`)
+  const comments = h.ado.calls.filter(call => call.path.endsWith('/1204/comments'))
+  assert.deepEqual(comments.map(call => [call.method, call.path.startsWith(`/${ORG}/${PROJECT}/`)]), [['GET', true], ['POST', true]])
+})
+
+test('a move published while a load reads the nudge rules is not overwritten', async () => {
+  const h = harness()
+  await h.service.refresh(ORG)
+  const rules = h.holdRead(`nudgeRules:${ORG}:${TEAM}`)
+  const polling = h.service.refresh(ORG)
+  await drain()
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  rules.release()
+  assert.deepEqual(item(await polling, 1204), moved)
+  assert.deepEqual(item(h.posts.at(-1), 1204), moved)
+})
+
+test('a board that lands after the boards were hidden is neither kept nor polled', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  const held = h.ado.hold(isStoriesWiql)
+  const opening = h.service.board({ ...STORIES_BOARD, everyone: false })
+  await drain()
+  h.service.visibility({ surface: 'board', org: ORG, visible: false })
+  held.release()
+  await opening
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true })
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'no job was armed for it')
+  await h.service.board({ ...STORIES_BOARD, everyone: false })
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'its view was not kept, so asking again loads it')
+})
+
+test('without a board, a move prefers a board holding the item that maps its type', async () => {
+  const h = harness()
+  boardIds(h, [1204, 1205], [1204])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  assert.equal(h.ado.calls.find(isPatch)?.body[2].path, `/fields/${WEF}.Column`)
+  assert.equal(moved.column, 'Resolved')
 })
