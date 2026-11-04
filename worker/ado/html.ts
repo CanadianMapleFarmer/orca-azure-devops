@@ -244,5 +244,5 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
   closeSpansTo(0)
 
   const markdown = parts.join('').split('\n').map((line) => line.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
-  return capMarkdown(markdown, opts.maxChars)
+  return capMarkdown(markdown, opts.maxChars, html.length > MAX_INPUT)
 }

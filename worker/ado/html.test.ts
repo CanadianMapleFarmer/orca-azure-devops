@@ -114,12 +114,19 @@ test('moved whitespace collapses to one space or up to two newlines', () => {
   assert.equal(md('<b>a  \t </b>b'), '**a** b')
 })
 
+test('a cut input ends with the open-in-Azure-DevOps note even when the Markdown fits', () => {
+  assert.equal(md('<p>short</p>' + '<br>'.repeat(200_000), 1_000), 'short' + SUFFIX)
+  assert.equal(md('<p>short</p>' + '<br>'.repeat(100_000), 1_000), 'short')
+  const capped = md('<p>' + 'word '.repeat(200_000) + '</p>', 1_000)
+  assert.ok(capped.endsWith(SUFFIX) && capped.indexOf(SUFFIX) === capped.length - SUFFIX.length)
+})
+
 test('input beyond 512 KB is cut before parsing', () => {
-  assert.equal(timed('x'.repeat(2_000_000), 5_000_000).length, 512 * 1024)
+  assert.equal(timed('x'.repeat(2_000_000), 5_000_000), 'x'.repeat(512 * 1024) + SUFFIX)
   assert.ok(md('<p>kept</p>' + 'x'.repeat(600_000), 5_000_000).startsWith('kept'))
   const cutInsideTag = timed('a'.repeat(512 * 1024 - 3) + '<b>bold</b>', 5_000_000)
-  assert.equal(cutInsideTag, 'a'.repeat(512 * 1024 - 3))
-  assert.equal(timed('a'.repeat(512 * 1024 - 1) + '<b>x', 5_000_000), 'a'.repeat(512 * 1024 - 1))
+  assert.equal(cutInsideTag, 'a'.repeat(512 * 1024 - 3) + SUFFIX)
+  assert.equal(timed('a'.repeat(512 * 1024 - 1) + '<b>x', 5_000_000), 'a'.repeat(512 * 1024 - 1) + SUFFIX)
   const huge = '<b>x'.repeat(40_000) + '<br>'.repeat(130_000) + '</b>'.repeat(40_000)
   assert.ok(huge.length > 800_000)
   assert.equal(typeof timed(huge), 'string')

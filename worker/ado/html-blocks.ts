@@ -13,15 +13,18 @@ function openFence(markdown: string): string {
   return open
 }
 
-export function capMarkdown(markdown: string, maxChars: number): string {
-  if (markdown.length <= maxChars) return markdown
+export function capMarkdown(markdown: string, maxChars: number, inputCut = false): string {
+  if (markdown.length <= maxChars) return inputCut ? withRestNote(markdown) : markdown
   let cut = markdown.lastIndexOf('\n', maxChars - 1)
   if (cut <= 0) {
     cut = maxChars
     const before = markdown.charCodeAt(cut - 1)
     if (before >= 0xd800 && before <= 0xdbff) cut--
   }
-  const head = markdown.slice(0, cut).trimEnd()
+  return withRestNote(markdown.slice(0, cut).trimEnd())
+}
+
+function withRestNote(head: string): string {
   const fence = openFence(head)
   return head + (fence ? `\n${fence}` : '') + SUFFIX
 }
