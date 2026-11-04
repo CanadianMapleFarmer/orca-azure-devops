@@ -80,7 +80,7 @@ These use the workspace and agent permissions Orca asks you to approve.
 
 - My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise.
 - An open board: every 30 seconds while visible.
-- PR chip status: cached for 2 minutes.
+- PR chip status: cached for 2 minutes, or an hour once the pull request is merged or abandoned.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.
 
 ## Settings

@@ -106,7 +106,7 @@ async function failure(promise: Promise<unknown>): Promise<AdoError> {
   return assert.fail('expected the call to fail')
 }
 
-test('loadPrChips maps status and build policy, and caches for 2 min', async () => {
+test('loadPrChips maps status and build policy, and caches an open pull request for 2 min', async () => {
   const routes = {
     [prUrl(321)]: fixture('pull-request-completed'),
     [evaluationsUrl(321)]: fixture('policy-evaluations'),
@@ -129,7 +129,20 @@ test('loadPrChips maps status and build policy, and caches for 2 min', async () 
 
   now += 1
   assert.deepEqual(await loadPrChips(http, ORG, [ref(321), ref(322)], cache, () => now), first)
-  assert.equal(requested.length, 6)
+  assert.deepEqual(requested.slice(3), [prUrl(322), evaluationsUrl(322)], 'the merged one is still cached')
+})
+
+test('loadPrChips caches a merged or abandoned pull request for an hour', async () => {
+  const { http, requested } = server({ ...routesFor(1, 'completed'), ...routesFor(2, 'abandoned') })
+  const cache = newCache()
+  await loadPrChips(http, ORG, [ref(1), ref(2)], cache, () => 0)
+  assert.deepEqual(requested, [prUrl(1), prUrl(2)])
+
+  await loadPrChips(http, ORG, [ref(1), ref(2)], cache, () => 60 * MINUTE - 1)
+  assert.equal(requested.length, 2)
+
+  await loadPrChips(http, ORG, [ref(1), ref(2)], cache, () => 60 * MINUTE)
+  assert.deepEqual(requested.slice(2), [prUrl(1), prUrl(2)])
 })
 
 test('loadPrChips asks for policy evaluations only for open pull requests', async () => {

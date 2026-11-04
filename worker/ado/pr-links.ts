@@ -24,6 +24,7 @@ type BuildState = PrChip['build']
 export type PrChipCache = Map<string, { at: number; chip: PrChip | null }>
 
 const CACHE_TTL_MS = 2 * 60 * 1000
+const TERMINAL_TTL_MS = 60 * 60 * 1000
 const MAX_CONCURRENT = 6
 const HEADS_PREFIX = /^refs\/heads\//
 const BUILD_POLICY_TYPE = 'Build'
@@ -40,12 +41,16 @@ export async function loadPrChips(
   const chips = await mapLimit(distinct, MAX_CONCURRENT, async ref => {
     const key = String(ref.prId)
     const cached = cache.get(key)
-    if (cached && now() - cached.at < CACHE_TTL_MS) return cached.chip ?? undefined
+    if (cached && now() - cached.at < ttlOf(cached.chip)) return cached.chip ?? undefined
     const chip = await fetchChip(http, org, ref)
     cache.set(key, { at: now(), chip: chip ?? null })
     return chip
   })
   return chips.filter((chip): chip is PrChip => chip !== undefined)
+}
+
+function ttlOf(chip: PrChip | null): number {
+  return chip?.state === 'merged' || chip?.state === 'abandoned' ? TERMINAL_TTL_MS : CACHE_TTL_MS
 }
 
 async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip | undefined> {
