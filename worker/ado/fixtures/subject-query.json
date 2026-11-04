@@ -1,0 +1,56 @@
+{
+  "count": 4,
+  "value": [
+    {
+      "subjectKind": "user",
+      "metaType": "member",
+      "directoryAlias": "grace",
+      "domain": "11111111-2222-3333-4444-555555555555",
+      "principalName": "grace@contoso.example",
+      "mailAddress": "grace@contoso.example",
+      "origin": "aad",
+      "originId": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+      "displayName": "Grace Hopper",
+      "_links": {
+        "self": { "href": "https://vssps.dev.azure.com/contoso/_apis/Graph/Users/aad.Z3JhY2UtaG9wcGVy" },
+        "avatar": { "href": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.Z3JhY2UtaG9wcGVy" }
+      },
+      "url": "https://vssps.dev.azure.com/contoso/_apis/Graph/Users/aad.Z3JhY2UtaG9wcGVy",
+      "descriptor": "aad.Z3JhY2UtaG9wcGVy"
+    },
+    {
+      "subjectKind": "user",
+      "metaType": "member",
+      "domain": "11111111-2222-3333-4444-555555555555",
+      "mailAddress": "dennis@contoso.example",
+      "origin": "aad",
+      "originId": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+      "displayName": "Dennis Ritchie",
+      "url": "https://vssps.dev.azure.com/contoso/_apis/Graph/Users/aad.ZGVubmlzLXJpdGNoaWU",
+      "descriptor": "aad.ZGVubmlzLXJpdGNoaWU"
+    },
+    {
+      "subjectKind": "group",
+      "metaType": "vsts",
+      "domain": "vstfs:///Classification/TeamProject/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+      "principalName": "[Fabrikam Web]\\Fabrikam Web Team",
+      "origin": "vsts",
+      "originId": "c3d4e5f6-5555-4c8d-8e9f-1a2b3c4d5e6f",
+      "displayName": "Fabrikam Web Team",
+      "url": "https://vssps.dev.azure.com/contoso/_apis/Graph/Groups/vssgp.Uy0xLTktMTU1MTM3NDI0NQ",
+      "descriptor": "vssgp.Uy0xLTktMTU1MTM3NDI0NQ"
+    },
+    {
+      "subjectKind": "user",
+      "metaType": "member",
+      "domain": "11111111-2222-3333-4444-555555555555",
+      "principalName": "barbara@contoso.example",
+      "mailAddress": "barbara@contoso.example",
+      "origin": "aad",
+      "originId": "d4e5f6a7-5555-4d9e-8fa0-2b3c4d5e6f70",
+      "displayName": "Barbara Liskov",
+      "url": "https://vssps.dev.azure.com/contoso/_apis/Graph/Users/aad.YmFyYmFyYS1saXNrb3Y",
+      "descriptor": "aad.YmFyYmFyYS1saXNrb3Y"
+    }
+  ]
+}

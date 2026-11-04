@@ -59,6 +59,15 @@ test('builds org-scoped URLs without a project segment', async () => {
   assert.equal(calls[0].url, 'https://dev.azure.com/contoso/_apis/projects?api-version=7.1')
 })
 
+test('host vssps builds the vssps URL', async () => {
+  const { fetch, calls } = fakeFetch(jsonResponse({}), jsonResponse({}))
+  const http = clientFor(fetch)
+  await http.json({ org: 'contoso', host: 'vssps', method: 'POST', path: '/_apis/graph/subjectquery', apiVersion: '7.1-preview.1', body: {} })
+  assert.equal(calls[0].url, 'https://vssps.dev.azure.com/contoso/_apis/graph/subjectquery?api-version=7.1-preview.1')
+  await http.json({ org: 'contoso', path: '/_apis/projects' })
+  assert.equal(calls[1].url, 'https://dev.azure.com/contoso/_apis/projects?api-version=7.1')
+})
+
 test('per-call apiVersion and query', async () => {
   const { fetch, calls } = fakeFetch(jsonResponse({}))
   await clientFor(fetch).json({ ...REPOS, apiVersion: '7.1-preview.4', query: { $top: 5, x: undefined, name: 'a b', all: true } })

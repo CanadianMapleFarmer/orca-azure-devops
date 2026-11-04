@@ -18,6 +18,10 @@ export function orgWebUrl(org: string): string {
   return `https://dev.azure.com/${encodeURIComponent(org)}`
 }
 
+export function orgVsspsUrl(org: string): string {
+  return `https://vssps.dev.azure.com/${encodeURIComponent(org)}`
+}
+
 function orgFromUrl(text: string): string | null {
   let url: URL
   try {
@@ -39,7 +43,7 @@ export async function discoverTenant(
   const deadline = new AbortController()
   const timer = setTimeout(() => deadline.abort(), timeoutMs)
   try {
-    const res = await fetchFn(`https://vssps.dev.azure.com/${org}`, { method: 'HEAD', signal: deadline.signal })
+    const res = await fetchFn(orgVsspsUrl(org), { method: 'HEAD', signal: deadline.signal })
     const tenant = res.headers.get('x-vss-resourcetenant')
     return tenant && GUID.test(tenant) && tenant !== ALL_ZERO_TENANT ? tenant : null
   } catch {

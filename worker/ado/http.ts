@@ -1,4 +1,4 @@
-import { orgWebUrl } from './org'
+import { orgVsspsUrl, orgWebUrl } from './org'
 
 export type AdoErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'precondition_failed'
   | 'rate_limited' | 'bad_request' | 'server' | 'network'
@@ -19,6 +19,7 @@ export class AdoError extends Error {
 
 export interface AdoRequest {
   org: string
+  host?: 'vssps'
   project?: string
   path: string
   query?: Record<string, string | number | boolean | undefined>
@@ -150,7 +151,8 @@ function buildUrl(req: AdoRequest, apiVersion: string): string {
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
     .map(([key, value]) => `${encodeQuery(key)}=${encodeQuery(String(value))}`)
   pairs.push(`api-version=${encodeQuery(apiVersion)}`)
-  return `${orgWebUrl(req.org)}${project}${req.path}?${pairs.join('&')}`
+  const base = req.host === 'vssps' ? orgVsspsUrl(req.org) : orgWebUrl(req.org)
+  return `${base}${project}${req.path}?${pairs.join('&')}`
 }
 
 function encodeQuery(text: string): string {

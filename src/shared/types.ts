@@ -19,3 +19,4 @@ export interface OrgStatus {
   boards: BoardsTarget | null; codeProjects: OrgConfig['codeProjects']
 }
 export interface ConnectFailure { org: string; url: string; method: ConnectionMethod; message: string }
+export interface Identity { id: string; displayName: string; uniqueName: string; kind: 'user' | 'group' }

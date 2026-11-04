@@ -23,12 +23,14 @@ export const SETTINGS_READ_FAILED = "Couldn't read settings; keeping the previou
 export const BOARDS_TEAM_GONE = 'That project or team no longer exists.'
 export const NO_CODE_PROJECTS = 'Pick at least one project, or choose all projects.'
 export const CODE_PROJECTS_GONE = 'One or more projects no longer exist.'
+export const FIND_PEOPLE_NEEDS_ACCESS = 'Finding people needs Graph (Read) and Identity (Read) access.'
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
   pullRequest: 'Azure DevOps returned an unexpected pull request response.',
   comment: 'Azure DevOps returned an unexpected comment response.',
-  boardConfig: 'Azure DevOps returned an unexpected board configuration.'
+  boardConfig: 'Azure DevOps returned an unexpected board configuration.',
+  identity: 'Azure DevOps returned an unexpected identity response.'
 } as const
 
 export function noBoardNamed(name: string): string {

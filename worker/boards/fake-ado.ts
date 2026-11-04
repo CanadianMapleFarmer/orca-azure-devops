@@ -18,6 +18,7 @@ export function fixture<T = any>(name: string): T {
 
 export interface AdoCall {
   method: string
+  host: string
   path: string
   query: URLSearchParams
   body: any
@@ -120,6 +121,7 @@ export function fakeAdo() {
     const url = new URL(String(input))
     const call: AdoCall = {
       method: init?.method ?? 'GET',
+      host: url.host,
       path: decodeURIComponent(url.pathname),
       query: url.searchParams,
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,

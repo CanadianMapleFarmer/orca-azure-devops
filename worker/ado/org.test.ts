@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { discoverTenant, isValidOrgName, parseOrgInput } from './org'
+import { discoverTenant, isValidOrgName, orgVsspsUrl, parseOrgInput } from './org'
 
 test('isValidOrgName accepts lower-case names up to 50 characters and nothing else', () => {
   for (const name of ['contoso', 'a', '0abc', 'fab-rikam', 'a'.repeat(50)]) assert.equal(isValidOrgName(name), true, name)
@@ -29,6 +29,18 @@ test('discoverTenant reads x-vss-resourcetenant from an anonymous HEAD', async (
   assert.equal(calls[0].method, 'HEAD')
   assert.equal(calls[0].url, 'https://vssps.dev.azure.com/contoso')
   assert.equal(calls[0].headers.get('authorization'), null)
+})
+
+test('discoverTenant asks the vssps host from orgVsspsUrl', async () => {
+  assert.equal(orgVsspsUrl('contoso'), 'https://vssps.dev.azure.com/contoso')
+  assert.equal(orgVsspsUrl('a/b'), 'https://vssps.dev.azure.com/a%2Fb')
+  const urls: string[] = []
+  const fake = async (input: RequestInfo) => {
+    urls.push(String(input))
+    return new Response(null, { status: 404 })
+  }
+  await discoverTenant('a/b', fake as typeof fetch)
+  assert.deepEqual(urls, [orgVsspsUrl('a/b')])
 })
 
 test('discoverTenant returns null when the header is missing', async () => {
