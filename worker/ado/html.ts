@@ -1,16 +1,17 @@
-import { capMarkdown, cellText, fenceFor, inlineCode, tableRow } from './html-blocks'
-import { decode, escapeText, linkTarget, skipElement, tagEnd } from './html-text'
+import { capMarkdown, cellText, collapseSpace, fenceFor, inlineCode, tableRow } from './html-blocks'
+import { decode, escapeText, linkTarget, skipElement, tagEnd, truncateHtml } from './html-text'
 
 const DROPPED = new Set(['script', 'style', 'head'])
 const BLOCK = new Set(['p', 'div', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'pre', 'h1', 'h2', 'h3', 'h4'])
 const MAX_INDENT = 24
+const MAX_INPUT = 512 * 1024
 const TAG = /<(?:(\/?)([a-z][a-z0-9]*)|[!?])/iy
 
 interface Span { tag: string; open: string; close: string; block: boolean }
 
 export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars: number; itemUrl: string }): string {
   if (typeof html !== 'string' || !html) return ''
-  const source = html.replace(/\r\n?/g, '\n')
+  const source = truncateHtml(html, MAX_INPUT).replace(/\r\n?/g, '\n')
   const parts: string[] = []
   const spans: Span[] = []
   const lists: { ordered: boolean; n: number; indent: number; width: number }[] = []
@@ -71,10 +72,10 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     while (k > floor && /^\s*$/.test(parts[k - 1])) k--
     const tail = k > floor ? parts[k - 1] : ''
     const kept = tail.trimEnd()
-    if (/^\s*`{3,}$/.test(kept.slice(kept.lastIndexOf('\n') + 1))) return ''
+    if (kept.endsWith('`') && /^\s*`{3,}$/.test(kept.slice(kept.lastIndexOf('\n') + 1))) return ''
     const moved = tail.slice(kept.length) + parts.splice(k).join('')
     if (k > floor) parts[k - 1] = kept
-    return moved
+    return collapseSpace(moved)
   }
   const closeSpansTo = (index: number) => {
     for (let k = spans.length - 1; k >= index; k--) {

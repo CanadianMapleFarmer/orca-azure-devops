@@ -15,6 +15,13 @@ export function decode(text: string): string {
   })
 }
 
+export function truncateHtml(html: string, max: number): string {
+  if (html.length <= max) return html
+  const head = html.slice(0, max)
+  const open = head.lastIndexOf('<')
+  return open > head.lastIndexOf('>') ? head.slice(0, open) : head
+}
+
 export function escapeText(text: string): string {
   return text.replace(/[\\<[\]`]/g, '\\$&')
 }

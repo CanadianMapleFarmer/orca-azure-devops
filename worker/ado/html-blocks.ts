@@ -38,6 +38,13 @@ export function inlineCode(raw: string): string {
   return `${fence}${pad}${content}${pad}${fence}`
 }
 
+export function collapseSpace(space: string): string {
+  if (!space) return ''
+  let newlines = 0
+  for (let i = space.indexOf('\n'); i !== -1 && newlines < 2; i = space.indexOf('\n', i + 1)) newlines++
+  return newlines ? '\n'.repeat(newlines) : ' '
+}
+
 export function cellText(raw: string): string {
   return raw.split('\n').map((line) => line.trim()).filter(Boolean).join(' ').replace(/\|/g, '\\|')
 }

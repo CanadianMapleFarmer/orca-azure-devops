@@ -85,14 +85,47 @@ test('an overlong or unterminated tag never reaches the output as raw HTML', () 
 })
 
 test('a missing closing bracket is found once, not once per tag start', () => {
-  assert.equal(timed('<a '.repeat(300_000)), '')
-  assert.equal(timed('<a x="'.repeat(100_000) + '>after'), 'after')
+  assert.equal(timed('<a '.repeat(150_000)), '')
+  assert.equal(timed('<a x="'.repeat(70_000) + '>after'), 'after')
 })
 
 test('unmatched closing tags are not rescanned against the open tags', () => {
-  assert.equal(timed('<b>'.repeat(100_000) + '</span>'.repeat(100_000)), '')
-  const nested = '<b>'.repeat(50_000) + 'x' + '</i>'.repeat(50_000) + '</b>'.repeat(50_000)
-  assert.equal(timed(nested, 1_000_000), '**'.repeat(50_000) + 'x' + '**'.repeat(50_000))
+  assert.equal(timed('<b>'.repeat(50_000) + '</span>'.repeat(50_000)), '')
+  assert.equal(timed('<b>'.repeat(87_000) + '</u>'.repeat(65_000)), '')
+  const nested = '<b>'.repeat(40_000) + 'x' + '</i>'.repeat(40_000) + '</b>'.repeat(40_000)
+  assert.equal(timed(nested, 1_000_000), '**'.repeat(40_000) + 'x' + '**'.repeat(40_000))
+})
+
+test('whitespace moved out of nested emphasis is not recopied by every closer', () => {
+  const unclosed = '<b>x'.repeat(64_000) + '<br>'.repeat(64_000)
+  assert.equal(timed(unclosed, 1_000_000), '**x'.repeat(64_000) + '**'.repeat(64_000))
+  const closed = '<b>x'.repeat(30_000) + '<br>'.repeat(60_000) + '</b>'.repeat(30_000) + 'y'
+  assert.equal(timed(closed, 1_000_000), '**x'.repeat(30_000) + '**'.repeat(30_000) + '\n\ny')
+})
+
+test('whitespace moved out of nested links is not recopied by every closer', () => {
+  const html = '<a href=http://a.test>x'.repeat(12_000) + '<br>'.repeat(40_000) + '</a>'.repeat(12_000) + 'y'
+  assert.equal(timed(html, 1_000_000), '[x'.repeat(12_000) + '](http://a.test)'.repeat(12_000) + '\n\ny')
+})
+
+test('moved whitespace collapses to one space or up to two newlines', () => {
+  assert.equal(md('<b>a<br><br><br><br></b>b'), '**a**\n\nb')
+  assert.equal(md('<b>a <br> <br> </b>b'), '**a**\n\nb')
+  assert.equal(md('<b>a  \t </b>b'), '**a** b')
+})
+
+test('input beyond 512 KB is cut before parsing', () => {
+  assert.equal(timed('x'.repeat(2_000_000), 5_000_000).length, 512 * 1024)
+  assert.ok(md('<p>kept</p>' + 'x'.repeat(600_000), 5_000_000).startsWith('kept'))
+  const cutInsideTag = timed('a'.repeat(512 * 1024 - 3) + '<b>bold</b>', 5_000_000)
+  assert.equal(cutInsideTag, 'a'.repeat(512 * 1024 - 3))
+  assert.equal(timed('a'.repeat(512 * 1024 - 1) + '<b>x', 5_000_000), 'a'.repeat(512 * 1024 - 1))
+  const huge = '<b>x'.repeat(40_000) + '<br>'.repeat(130_000) + '</b>'.repeat(40_000)
+  assert.ok(huge.length > 800_000)
+  assert.equal(typeof timed(huge), 'string')
+  const links = '<a href="https://a.test">x'.repeat(25_000) + '<br>'.repeat(130_000)
+  assert.ok(links.length > 1_000_000)
+  assert.equal(typeof timed(links), 'string')
 })
 
 test('text cannot form links or raw HTML', () => {
