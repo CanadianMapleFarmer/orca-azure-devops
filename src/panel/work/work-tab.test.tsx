@@ -518,6 +518,30 @@ test('a details view without acceptance criteria omits that section', async () =
   assert.equal(panel.findAll({ type: 'List' }).length, 0)
 })
 
+test('a long list renders 400 cards, board groups first, and says how many are not shown', async () => {
+  const many = (from: number, count: number, over: Partial<WorkItemSummary>) =>
+    Array.from({ length: count }, (_, index) => item(from + index, { title: `Story ${from + index}`, ...over }))
+  const mine = [...many(1000, 200, { column: 'Active' }), ...many(2000, 300, { column: 'New' })]
+  await open(snapshotOf({ mine, other: many(3000, 100, { type: 'Task', column: null, targets: { columns: [], states: ['Closed'] } }) }))
+  const cards = panel.findAll({ type: 'Card' })
+  assert.equal(cards.length, 400)
+  assert.deepEqual(
+    panel.findAll({ type: 'Collapsible' }).map(group => group.props.title),
+    ['New (300)', 'Active (200)', 'Other (100)']
+  )
+  assert.equal(cards[0]?.label, 'Story 2000')
+  assert.equal(cards[299]?.label, 'Story 2299')
+  assert.equal(cards[300]?.label, 'Story 1000')
+  assert.equal(cards[399]?.label, 'Story 1099')
+  assert.ok(panel.find({ type: 'Text', text: 'Showing 400 of 600 items. Open the board to see the rest.' })?.props.muted)
+})
+
+test('exactly 400 items are all shown without a note', async () => {
+  await open(snapshotOf({ mine: Array.from({ length: 400 }, (_, index) => item(index + 1)) }))
+  assert.equal(panel.findAll({ type: 'Card' }).length, 400)
+  assert.equal(panel.find({ type: 'Text', text: /Showing 400 of/ }), null)
+})
+
 test('stale snapshot shows the warning but keeps the items', async () => {
   const message = 'Azure DevOps is rate limiting requests. Showing the last data.'
   await open(snapshotOf({ mine: [item(101)], stale: true, message }))

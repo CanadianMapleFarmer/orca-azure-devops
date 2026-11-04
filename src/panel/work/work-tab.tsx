@@ -6,6 +6,8 @@ import { ItemCard } from './item-card'
 import { ItemDetails } from './item-details'
 import { dismiss, load, move, NO_BOARDS, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
 
+const MAX_CARDS = 400
+
 function columnGroups(current: WorkSnapshot): { name: string; items: WorkItemSummary[] }[] {
   const names = current.board?.columns.map(column => column.name) ?? []
   const groups = new Map(names.map(name => [name, [] as WorkItemSummary[]]))
@@ -77,11 +79,20 @@ function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
 }
 
 function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
-  if (current.mine.length === 0 && current.other.length === 0) return <EmptyState title="Nothing assigned to you on this board" />
+  const total = current.mine.length + current.other.length
+  if (total === 0) return <EmptyState title="Nothing assigned to you on this board" />
+  const groups = columnGroups(current).map(group => ({ key: `column:${group.name}`, ...group }))
+  if (current.other.length > 0) groups.push({ key: 'other', name: 'Other', items: current.other })
+  let room = MAX_CARDS
+  const shown = groups.map(group => {
+    const items = group.items.slice(0, room)
+    room -= items.length
+    return { ...group, count: group.items.length, items }
+  })
   return (
     <Stack gap="sm">
-      {columnGroups(current).map(group => (
-        <Collapsible key={`column:${group.name}`} title={`${group.name} (${group.items.length})`} defaultOpen>
+      {shown.map(group => (
+        <Collapsible key={group.key} title={`${group.name} (${group.count})`} defaultOpen>
           <Stack gap="sm">
             {group.items.map(item => (
               <ItemCard key={item.id} org={org} item={item} />
@@ -89,14 +100,10 @@ function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
           </Stack>
         </Collapsible>
       ))}
-      {current.other.length > 0 ? (
-        <Collapsible key="other" title={`Other (${current.other.length})`} defaultOpen>
-          <Stack gap="sm">
-            {current.other.map(item => (
-              <ItemCard key={item.id} org={org} item={item} />
-            ))}
-          </Stack>
-        </Collapsible>
+      {total > MAX_CARDS ? (
+        <Text size="sm" muted>
+          {`Showing ${MAX_CARDS} of ${total} items. Open the board to see the rest.`}
+        </Text>
       ) : null}
     </Stack>
   )
