@@ -302,3 +302,93 @@ test('a caller abort surfaces as an abort, not a network error', async () => {
     assert.equal((error as Error).name, 'AbortError')
   }
 })
+
+test('asks fetch not to follow redirects', async () => {
+  const { fetch, calls } = fakeFetch(jsonResponse({}))
+  await clientFor(fetch).json(REPOS)
+  assert.equal(calls[0].redirect, 'manual')
+})
+
+test('maps any 3xx to unauthorized', async () => {
+  for (const status of [301, 302, 307]) {
+    const redirect = new Response('', { status, headers: { location: 'https://login.microsoftonline.com/common/oauth2/authorize' } })
+    const { fetch, calls } = fakeFetch(redirect, jsonResponse({ ok: true }))
+    const error = await failure(clientFor(fetch).json(REPOS))
+    assert.equal(error.code, 'unauthorized')
+    assert.equal(error.status, status)
+    assert.equal(calls.length, 1)
+  }
+})
+
+test('a redirect asks onUnauthorized once like any other auth failure', async () => {
+  const redirect = new Response('', { status: 302, headers: { location: 'https://login.microsoftonline.com/' } })
+  const { fetch, calls } = fakeFetch(redirect, jsonResponse({ ok: true }))
+  const asked: string[] = []
+  const http = clientFor(fetch, {
+    onUnauthorized: async org => {
+      asked.push(org)
+      return true
+    }
+  })
+  await http.json(REPOS)
+  assert.deepEqual(asked, ['contoso'])
+  assert.equal(calls.length, 2)
+})
+
+test('a 2xx HTML body is unauthorized but other non-JSON bodies stay server errors', async () => {
+  for (const contentType of ['text/html', 'text/html; charset=utf-8', 'Text/HTML']) {
+    const page = new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': contentType } })
+    const error = await failure(clientFor(fakeFetch(page).fetch).json(REPOS))
+    assert.equal(error.code, 'unauthorized')
+    assert.equal(error.status, 200)
+  }
+  for (const contentType of ['text/plain', 'application/octet-stream']) {
+    const body = new Response('not json', { status: 200, headers: { 'content-type': contentType } })
+    const error = await failure(clientFor(fakeFetch(body).fetch).json(REPOS))
+    assert.equal(error.code, 'server')
+    assert.equal(error.status, 200)
+  }
+})
+
+test('an already-aborted signal never reaches authHeader or fetch', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  const { fetch, calls } = fakeFetch(jsonResponse({}))
+  let authCalls = 0
+  const http = clientFor(fetch, {
+    authHeader: async () => {
+      authCalls += 1
+      return AUTH
+    }
+  })
+  try {
+    await http.json({ ...REPOS, signal: controller.signal })
+    assert.fail('expected the request to abort')
+  } catch (error) {
+    assert(!(error instanceof AdoError))
+    assert.equal((error as Error).name, 'AbortError')
+  }
+  assert.equal(authCalls, 0)
+  assert.equal(calls.length, 0)
+})
+
+test('aborting between attempts stops the retry before it asks for auth again', async () => {
+  const controller = new AbortController()
+  const { fetch, calls } = fakeFetch(new Response('', { status: 429, headers: { 'retry-after': '1' } }), jsonResponse({}))
+  let authCalls = 0
+  const http = clientFor(fetch, {
+    authHeader: async () => {
+      authCalls += 1
+      return AUTH
+    },
+    sleep: async () => controller.abort()
+  })
+  try {
+    await http.json({ ...REPOS, signal: controller.signal })
+    assert.fail('expected the request to abort')
+  } catch (error) {
+    assert((error as Error).name === 'AbortError')
+  }
+  assert.equal(authCalls, 1)
+  assert.equal(calls.length, 1)
+})

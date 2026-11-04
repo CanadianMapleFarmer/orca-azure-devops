@@ -72,6 +72,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   async function send(req: AdoRequest, apiVersion: string): Promise<RawResponse> {
+    req.signal?.throwIfAborted()
     const auth = await deps.authHeader(req.org)
     const headers: Record<string, string> = { Authorization: auth, Accept: 'application/json' }
     if (req.body !== undefined) headers['Content-Type'] = req.contentType ?? 'application/json'
@@ -84,6 +85,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
         method: req.method ?? 'GET',
         headers,
         body: req.body === undefined ? undefined : JSON.stringify(req.body),
+        redirect: 'manual',
         signal
       })
       return { status: res.status, headers: res.headers, text: await res.text() }
@@ -154,8 +156,10 @@ function isSuccess(res: RawResponse): boolean {
 }
 
 function isAuthFailure(res: RawResponse): boolean {
-  if (res.status === 401) return true
-  return res.status === 203 && !(res.headers.get('content-type') ?? '').includes('json')
+  if (res.status === 401 || (res.status >= 300 && res.status < 400)) return true
+  const contentType = (res.headers.get('content-type') ?? '').toLowerCase()
+  if (res.status >= 200 && res.status < 300 && contentType.includes('text/html')) return true
+  return res.status === 203 && !contentType.includes('json')
 }
 
 function isThrottle(res: RawResponse): boolean {
