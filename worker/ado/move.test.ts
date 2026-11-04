@@ -15,6 +15,7 @@ const COLUMN_MISSING = "That column isn't on this board."
 const LANE_MISSING = "That lane isn't on this board."
 const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
 const MOVE_BY_COLUMN = 'Move this item by column.'
+const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
 
 function column(id: string, name: string, stateMappings: Record<string, string>, extra: Partial<BoardColumn> = {}): BoardColumn {
   return { id, name, isSplit: false, columnType: 'inProgress', stateMappings, ...extra }
@@ -43,6 +44,11 @@ function config(): BoardConfig {
     areaPaths: [],
     doneStates: { 'User Story': ['Closed'], Bug: ['Closed'] }
   }
+}
+
+function withFields(fields: Partial<BoardConfig['fields']>): BoardConfig {
+  const cfg = config()
+  return { ...cfg, fields: { ...cfg.fields, ...fields } }
 }
 
 function item(overrides: Partial<WorkItemSummary> = {}): WorkItemSummary {
@@ -136,15 +142,39 @@ test('a plain column never writes Column.Done', () => {
   assert.equal(patch.some(op => op.path === `/fields/${COLUMN_DONE}`), false)
 })
 
-test('Done back to Doing in the same split column is a move; the same column and flag is a no-op', () => {
+test('dropping a card on its own column is a no-op whether it is Doing or Done', () => {
   const done = item({ state: 'Active', column: 'In Review', columnDone: true })
-  assert.deepEqual(buildMovePatch(done, config(), { column: 'In Review' }), [
-    TEST_REV,
-    { op: 'replace', path: `/fields/${COLUMN}`, value: 'In Review' },
-    { op: 'replace', path: `/fields/${COLUMN_DONE}`, value: false }
-  ])
+  assert.deepEqual(buildMovePatch(done, config(), { column: 'In Review' }), [])
   const doing = item({ state: 'Active', column: 'In Review', columnDone: false })
   assert.deepEqual(buildMovePatch(doing, config(), { column: 'In Review' }), [])
+})
+
+test('a lane change in a split column keeps the card Done', () => {
+  const done = item({ state: 'Active', column: 'In Review', columnDone: true })
+  assert.deepEqual(buildMovePatch(done, config(), { column: 'In Review', lane: 'Expedite' }), [
+    TEST_REV,
+    { op: 'replace', path: `/fields/${LANE}`, value: 'Expedite' }
+  ])
+})
+
+test('leaving the Done half of a split column writes Column.Done=false', () => {
+  const done = item({ state: 'Active', column: 'In Review', columnDone: true })
+  assert.deepEqual(buildMovePatch(done, config(), { column: 'Resolved' }), [
+    TEST_REV,
+    { op: 'replace', path: '/fields/System.State', value: 'Resolved' },
+    { op: 'replace', path: `/fields/${COLUMN}`, value: 'Resolved' },
+    { op: 'replace', path: `/fields/${COLUMN_DONE}`, value: false }
+  ])
+})
+
+test('a split column and a lane change make one patch', () => {
+  const patch = buildMovePatch(item({ state: 'Active', column: 'Active' }), config(), { column: 'In Review', lane: 'Expedite' })
+  assert.deepEqual(patch, [
+    TEST_REV,
+    { op: 'replace', path: `/fields/${COLUMN}`, value: 'In Review' },
+    { op: 'replace', path: `/fields/${COLUMN_DONE}`, value: false },
+    { op: 'replace', path: `/fields/${LANE}`, value: 'Expedite' }
+  ])
 })
 
 test('lane move writes only the lane field', () => {
@@ -205,6 +235,30 @@ test('unknown columns and lanes are refused', () => {
 test('a column that does not map the item type is refused', () => {
   const bug = item({ type: 'Bug', state: 'Active', column: 'Active' })
   assertRefused(() => buildMovePatch(bug, config(), { column: 'In Review' }), COLUMN_MISSING)
+})
+
+test('an empty field name is refused only when the move would write it', () => {
+  const noColumn = withFields({ column: '' })
+  assertRefused(() => buildMovePatch(item(), noColumn, { column: 'Resolved' }), INCOMPLETE_CONFIG)
+  assert.deepEqual(buildMovePatch(item(), noColumn, { column: 'New' }), [])
+  assert.equal(buildMovePatch(item(), noColumn, { lane: 'Expedite' }).length, 2)
+
+  const noDone = withFields({ columnDone: '' })
+  assertRefused(() => buildMovePatch(item(), noDone, { column: 'In Review' }), INCOMPLETE_CONFIG)
+  const doneCard = item({ state: 'Active', column: 'In Review', columnDone: true })
+  assertRefused(() => buildMovePatch(doneCard, noDone, { column: 'Resolved' }), INCOMPLETE_CONFIG)
+  assert.equal(buildMovePatch(item(), noDone, { column: 'Resolved' }).length, 3)
+
+  const noLane = withFields({ lane: '' })
+  assertRefused(() => buildMovePatch(item(), noLane, { lane: 'Expedite' }), INCOMPLETE_CONFIG)
+  assert.deepEqual(buildMovePatch(item(), noLane, { lane: '' }), [])
+  assert.equal(buildMovePatch(item(), noLane, { column: 'Resolved' }).length, 3)
+})
+
+test('an unmapped type moves by state even when the board field names are empty', () => {
+  const task = item({ type: 'Task', state: 'To Do', column: null })
+  const patch = buildMovePatch(task, withFields({ column: '', columnDone: '', lane: '' }), { state: 'Doing' })
+  assert.deepEqual(patch, [TEST_REV, { op: 'replace', path: '/fields/System.State', value: 'Doing' }])
 })
 
 test('every non-empty patch starts with the rev guard', () => {
@@ -279,6 +333,15 @@ test('moveItem refuses an invalid target before any request', async () => {
   const { http, calls } = adoServer(() => reply(200, { rev: 99 }))
   const error = await rejection(moveItem(http, ORG, PROJECT, item(), config(), { column: 'Backlog' }))
   assert.equal(error.message, COLUMN_MISSING)
+  assert.equal(calls.length, 0)
+})
+
+test('moveItem refuses an incomplete board configuration before any request', async () => {
+  const { http, calls } = adoServer(() => reply(200, { rev: 99 }))
+  const error = await rejection(moveItem(http, ORG, PROJECT, item(), withFields({ column: '' }), { column: 'Resolved' }))
+  assert.equal(error.code, 'bad_request')
+  assert.equal(error.status, 400)
+  assert.equal(error.message, INCOMPLETE_CONFIG)
   assert.equal(calls.length, 0)
 })
 

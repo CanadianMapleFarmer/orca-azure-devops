@@ -16,6 +16,7 @@ const COLUMN_MISSING = "That column isn't on this board."
 const LANE_MISSING = "That lane isn't on this board."
 const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
 const MOVE_BY_COLUMN = 'Move this item by column.'
+const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
 const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected work item response.'
 
 export function targetsFor(item: WorkItemSummary, cfg: BoardConfig): { columns: string[]; lanes: string[]; states: string[] } {
@@ -92,18 +93,18 @@ function stateChanges(item: WorkItemSummary, to: MoveTarget): PatchOp[] {
 function columnChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): PatchOp[] {
   const column = cfg.columns.find(candidate => candidate.name === name && mapsType(candidate, item))
   if (!column) throw badRequest(COLUMN_MISSING)
-  if (item.column === column.name && !item.columnDone) return []
+  if (item.column === column.name) return []
   const state = column.stateMappings[item.type]
   return [
     ...(state === item.state ? [] : [replace(STATE_PATH, state)]),
-    replace(`/fields/${cfg.fields.column}`, column.name),
-    ...(column.isSplit ? [replace(`/fields/${cfg.fields.columnDone}`, false)] : [])
+    replace(fieldPath(cfg.fields.column), column.name),
+    ...(column.isSplit || item.columnDone ? [replace(fieldPath(cfg.fields.columnDone), false)] : [])
   ]
 }
 
 function laneChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): PatchOp[] {
   if (!cfg.lanes.some(lane => lane.name === name)) throw badRequest(LANE_MISSING)
-  return name === (item.lane ?? '') ? [] : [replace(`/fields/${cfg.fields.lane}`, name)]
+  return name === (item.lane ?? '') ? [] : [replace(fieldPath(cfg.fields.lane), name)]
 }
 
 function isMapped(item: WorkItemSummary, cfg: BoardConfig): boolean {
@@ -112,6 +113,11 @@ function isMapped(item: WorkItemSummary, cfg: BoardConfig): boolean {
 
 function mapsType(column: BoardConfig['columns'][number], item: WorkItemSummary): boolean {
   return Object.hasOwn(column.stateMappings, item.type)
+}
+
+function fieldPath(referenceName: string): string {
+  if (!referenceName) throw badRequest(INCOMPLETE_CONFIG)
+  return `/fields/${referenceName}`
 }
 
 function replace(path: string, value: unknown): PatchOp {
