@@ -103,11 +103,12 @@ function harness() {
   const boardPosts: BoardChange[] = []
   let orgs = [status()]
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const scheduler = createScheduler(clock)
   const service = createBoardsService({
     http,
     orgs: async () => structuredClone(orgs),
     store,
-    scheduler: createScheduler(clock),
+    scheduler,
     post: snapshot => posts.push(structuredClone(snapshot)),
     postBoard: change => boardPosts.push(change),
     now: clock.now
@@ -119,6 +120,7 @@ function harness() {
     posts,
     boardPosts,
     service,
+    scheduler,
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
@@ -764,6 +766,69 @@ test('a failed background board reload keeps the last board and says so, until a
   h.ado.clear()
   await h.clock.tick(30_000)
   assert.equal(h.boardPosts.length, 2)
+  assert.deepEqual(await h.service.board(args), view)
+})
+
+test('disposing the scheduler aborts an in-flight "mine" load and shows no error', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  const posts = h.posts.length
+  const hung = h.ado.hang(isMineWiql)
+  await h.clock.tick(5 * MINUTE)
+  assert.equal(hung.length, 1)
+
+  h.scheduler.dispose()
+  await drain()
+  assert.equal(hung[0].signal?.aborted, true)
+  assert.equal(h.posts.length, posts, 'no stale snapshot is posted')
+  assert.equal((await h.service.snapshot(ORG)).stale, false)
+})
+
+test('removing the "mine" job aborts its in-flight load', async () => {
+  const h = harness()
+  const hung = h.ado.hang(isMineWiql)
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  assert.equal(hung.length, 1)
+
+  h.setOrgs([status({ state: 'disconnected' })])
+  await drain()
+  assert.equal(hung[0].signal?.aborted, true)
+  assert.deepEqual(h.posts, [])
+})
+
+test('hiding a board aborts its in-flight reload and shows no error', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.ado.state.wiql = [1204, 1205, 1206]
+  await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
+  const hung = h.ado.hang(isBoardWiql)
+  await h.clock.tick(30_000)
+  assert.equal(hung.length, 1)
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: { teamId: TEAM, boardId: STORIES } })
+  await drain()
+  assert.equal(hung[0].signal?.aborted, true)
+  assert.deepEqual(h.boardPosts, [])
+})
+
+test('disposing the scheduler aborts an in-flight board reload and leaves the board as it was', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.ado.state.wiql = [1204, 1205, 1206]
+  const args = { org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true }
+  const view = await h.service.board(args)
+  const hung = h.ado.hang(isBoardWiql)
+  await h.clock.tick(30_000)
+  assert.equal(hung.length, 1)
+
+  h.scheduler.dispose()
+  await drain()
+  assert.equal(hung[0].signal?.aborted, true)
+  assert.deepEqual(h.boardPosts, [])
+  h.ado.clear()
+  await h.clock.tick(30_000)
   assert.deepEqual(await h.service.board(args), view)
 })
 

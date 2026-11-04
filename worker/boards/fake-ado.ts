@@ -21,6 +21,7 @@ export interface AdoCall {
   path: string
   query: URLSearchParams
   body: any
+  signal?: AbortSignal
 }
 
 type Override = { match: (call: AdoCall) => boolean; respond: (call: AdoCall) => Response | Promise<Response> }
@@ -121,7 +122,8 @@ export function fakeAdo() {
       method: init?.method ?? 'GET',
       path: decodeURIComponent(url.pathname),
       query: url.searchParams,
-      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+      signal: init?.signal ?? undefined
     }
     calls.push(call)
     const override = overrides.find(entry => entry.match(call))
@@ -150,6 +152,18 @@ export function fakeAdo() {
         }
       })
       return { release: () => release() }
+    },
+    hang(match: (call: AdoCall) => boolean): AdoCall[] {
+      const hung: AdoCall[] = []
+      overrides.unshift({
+        match,
+        respond: call =>
+          new Promise<Response>((_, reject) => {
+            hung.push(call)
+            call.signal?.addEventListener('abort', () => reject(call.signal?.reason), { once: true })
+          })
+      })
+      return hung
     },
     clear(): void {
       overrides.length = 0

@@ -1,6 +1,6 @@
 import type { BoardConfig, PrChip, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
 import { DONE_CATEGORIES, loadTypeStates, type TypeState } from '../ado/board-config'
-import { AdoError, type AdoHttp } from '../ado/http'
+import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
 import { hydrate, queryBoardIds, queryIds, textOr, toSummary, WIQL_TOP, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
@@ -22,6 +22,7 @@ export interface ItemSource {
   orgUrl: string
   chips(refs: PrRef[]): Promise<PrChip[] | null>
   states(projectId: string, type: string): Promise<TypeState[]>
+  withSignal(signal?: AbortSignal): ItemSource
 }
 
 export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean; chips: PrChip[] }
@@ -30,14 +31,14 @@ export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now
   const chipCache: PrChipCache = new Map()
   const stateCache = new Map<string, { at: number; states: TypeState[] }>()
   let chipsOffUntil = -Infinity
-  return {
-    http,
+  const bound = (scoped: AdoHttp): ItemSource => ({
+    http: scoped,
     org,
     orgUrl,
     async chips(refs) {
       if (now() < chipsOffUntil) return null
       try {
-        return await loadPrChips(http, org, refs, chipCache, now)
+        return await loadPrChips(scoped, org, refs, chipCache, now)
       } catch (error) {
         if (!(error instanceof AdoError) || error.code !== 'forbidden') throw error
         chipsOffUntil = now() + CHIPS_OFF_MS
@@ -48,11 +49,13 @@ export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now
       const key = `${projectId}/${type}`
       const cached = stateCache.get(key)
       if (cached && now() - cached.at < TYPE_STATES_TTL_MS) return cached.states
-      const states = await loadTypeStates(http, { org, projectId }, type)
+      const states = await loadTypeStates(scoped, { org, projectId }, type)
       stateCache.set(key, { at: now(), states })
       return states
-    }
-  }
+    },
+    withSignal: signal => bound(withSignal(http, signal))
+  })
+  return bound(http)
 }
 
 export async function loadMine(source: ItemSource, cfg: BoardConfig): Promise<Loaded> {

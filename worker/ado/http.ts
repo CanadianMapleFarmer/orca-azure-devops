@@ -69,6 +69,10 @@ interface RawResponse {
   text: string
 }
 
+export function withSignal(http: AdoHttp, signal?: AbortSignal): AdoHttp {
+  return signal ? { json: req => http.json({ ...req, signal: req.signal ?? signal }) } : http
+}
+
 export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS

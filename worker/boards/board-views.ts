@@ -12,7 +12,7 @@ export interface BoardRef { teamId: string; boardId: string }
 export interface BoardViewsDeps {
   scheduler: Scheduler
   now: () => number
-  load: (request: BoardRequest) => Promise<BoardResult>
+  load: (request: BoardRequest, signal?: AbortSignal) => Promise<BoardResult>
   polls: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
@@ -44,14 +44,14 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     deps.changed({ org: view.org, teamId: view.result.board.teamId, boardId: view.result.board.boardId })
   }
 
-  async function reload(key: string): Promise<void> {
+  async function reload(key: string, signal: AbortSignal): Promise<void> {
     const view = views.get(key)
     if (!view || deps.now() - view.at < BOARD_MS.visibleMs) return
     let result: BoardResult
     try {
-      result = await deps.load(view)
+      result = await deps.load(view, signal)
     } catch (error) {
-      if (views.get(key) === view) failed(view, error)
+      if (views.get(key) === view && !signal.aborted) failed(view, error)
       throw error
     }
     if (views.get(key) !== view) return
@@ -75,7 +75,7 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
         deps.scheduler.remove(view.key)
         continue
       }
-      deps.scheduler.upsert({ key: view.key, ...BOARD_MS, run: () => reload(view.key) })
+      deps.scheduler.upsert({ key: view.key, ...BOARD_MS, run: signal => reload(view.key, signal) })
       deps.scheduler.setVisible(view.key, true)
     }
   }

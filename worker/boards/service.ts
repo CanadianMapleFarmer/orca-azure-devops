@@ -3,7 +3,7 @@ import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
 import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
 import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
-import { AdoError, type AdoHttp } from '../ado/http'
+import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
@@ -90,18 +90,18 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return entry
   }
 
-  async function config(args: BoardArgs): Promise<BoardConfig> {
+  async function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
     const key = boardConfigKey(args)
     const cached = configs.get(key)
     if (cached) return cached
-    const cfg = await loadBoardConfig(http, args)
+    const cfg = await loadBoardConfig(withSignal(http, signal), args)
     configs.set(key, cfg)
     return cfg
   }
 
-  async function defaultConfig(status: OrgStatus): Promise<BoardConfig> {
+  async function defaultConfig(status: OrgStatus, signal?: AbortSignal): Promise<BoardConfig> {
     if (!status.boards) throw badRequest(NO_BOARDS)
-    return config({ org: status.org, projectId: status.boards.projectId, teamId: status.boards.teamId })
+    return config({ org: status.org, projectId: status.boards.projectId, teamId: status.boards.teamId }, signal)
   }
 
   function noBoards(org: string): WorkSnapshot {
@@ -112,9 +112,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return `mine:${org}`
   }
 
-  async function build(status: OrgStatus): Promise<WorkSnapshot> {
-    const cfg = await defaultConfig(status)
-    const source = sourceOf(status)
+  async function build(status: OrgStatus, signal?: AbortSignal): Promise<WorkSnapshot> {
+    const cfg = await defaultConfig(status, signal)
+    const source = sourceOf(status).withSignal(signal)
     const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
     const mine = items.filter(item => !movesByState(item, cfg))
@@ -130,19 +130,20 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     })
   }
 
-  function load(org: string): Promise<WorkSnapshot> {
+  function load(org: string, signal?: AbortSignal): Promise<WorkSnapshot> {
     const entry = workOf(org)
     entry.loading ??= (async () => {
       try {
         const status = await statusOf(org)
         if (!status.boards) return noBoards(org)
-        const snapshot = await build(status)
+        const snapshot = await build(status, signal)
         if (work.get(org) !== entry) return snapshot
         entry.snapshot = snapshot
         entry.failure = null
         deps.post(snapshot)
         return snapshot
       } catch (error) {
+        if (signal?.aborted) throw error
         entry.failure = error
         if (work.get(org) === entry && entry.snapshot) {
           entry.snapshot = { ...entry.snapshot, stale: true, message: failureMessage(error) }
@@ -156,10 +157,10 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return entry.loading
   }
 
-  async function loadBoard(request: BoardRequest): Promise<BoardResult> {
+  async function loadBoard(request: BoardRequest, signal?: AbortSignal): Promise<BoardResult> {
     const status = await statusOf(request.org)
-    const board = await config(request.args)
-    const source = sourceOf(status)
+    const board = await config(request.args, signal)
+    const source = sourceOf(status).withSignal(signal)
     const loaded = await loadBoardItems(source, board, request.everyone)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
     return capBoard({ board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }, loaded.truncated)
@@ -277,7 +278,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const [org, target] of wanted) {
         if (polled.has(org)) continue
         polled.set(org, target)
-        scheduler.upsert({ key: mineKey(org), ...MINE_MS, run: async () => void (await load(org)) })
+        scheduler.upsert({ key: mineKey(org), ...MINE_MS, run: async signal => void (await load(org, signal)) })
         scheduler.setVisible(mineKey(org), workVisible.has(org))
       }
       boardViews.syncAll()
