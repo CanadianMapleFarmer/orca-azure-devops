@@ -217,6 +217,25 @@ test('mismatch shows a danger callout with both accounts and signs out', async (
   assert.ok(panel.find({ text: 'Reconnect' }))
 })
 
+test('mismatch Try again reconnects with the same method and never signs out', async () => {
+  const message = 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.'
+  const host = await open([org('contoso', { state: 'mismatch', message })], {
+    'orgs.connect': () => org('contoso', { state: 'signing-in' })
+  })
+  await panel.press({ text: 'Try again' })
+  assert.deepEqual(requestsTo(host, 'orgs.connect').map(call => call.input), [{ orgInput: 'https://dev.azure.com/contoso', method: 'azure-cli' }])
+  assert.deepEqual(requestsTo(host, 'orgs.signOut'), [])
+})
+
+test('mismatch Try again on a token org asks for a token again and never signs out', async () => {
+  const message = 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.'
+  const host = await open([org('contoso', { method: 'pat', state: 'mismatch', message, tokenStore: { kind: 'orca-secrets' } })])
+  await panel.press({ text: 'Try again' })
+  assert.equal(panel.valueOf({ label: 'Organization' }), 'https://dev.azure.com/contoso')
+  assert.equal(panel.valueOf({ label: 'Sign in with' }), 'pat')
+  assert.deepEqual(requestsTo(host, 'orgs.signOut'), [])
+})
+
 test('expired shows a warning callout and reconnects the Azure CLI org', async () => {
   const sent: unknown[] = []
   await open([org('contoso', { state: 'expired', message: 'Your sign-in expired. Reconnect to continue.' })], {

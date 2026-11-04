@@ -44,11 +44,11 @@ const STATE_LABEL: Record<OrgState, string> = {
   disconnected: 'Signed out'
 }
 
-const PROBLEMS: Record<ProblemState, { tone: 'danger' | 'warning' | 'neutral'; actions: readonly ('reconnect' | 'sign-out')[] }> = {
-  mismatch: { tone: 'danger', actions: ['sign-out'] },
-  expired: { tone: 'warning', actions: ['reconnect'] },
-  error: { tone: 'danger', actions: ['reconnect', 'sign-out'] },
-  disconnected: { tone: 'neutral', actions: ['reconnect'] }
+const PROBLEMS: Record<ProblemState, { tone: 'danger' | 'warning' | 'neutral'; retry: string; signOut: boolean }> = {
+  mismatch: { tone: 'danger', retry: 'Try again', signOut: true },
+  expired: { tone: 'warning', retry: 'Reconnect', signOut: false },
+  error: { tone: 'danger', retry: 'Reconnect', signOut: true },
+  disconnected: { tone: 'neutral', retry: 'Reconnect', signOut: false }
 }
 
 async function loadOrgs(): Promise<void> {
@@ -115,18 +115,16 @@ function SigningIn({ org }: { org: OrgStatus }): OrcaNode {
 }
 
 function Problem({ org, state }: { org: OrgStatus; state: ProblemState }): OrcaNode {
-  const { tone, actions } = PROBLEMS[state]
+  const { tone, retry, signOut: offersSignOut } = PROBLEMS[state]
   const idle = read(busy) === null && !read(connecting)
   return (
     <Stack gap="sm">
       <Callout tone={tone}>{org.message ?? STATE_LABEL[state]}</Callout>
       <Row gap="sm" wrap>
-        {actions.includes('reconnect') ? (
-          <Button disabled={!idle} onPress={() => reconnect(org)}>
-            Reconnect
-          </Button>
-        ) : null}
-        {actions.includes('sign-out') ? (
+        <Button disabled={!idle} onPress={() => reconnect(org)}>
+          {retry}
+        </Button>
+        {offersSignOut ? (
           <Button tone="danger" disabled={!idle} onPress={() => signOut(org.org)}>
             Sign out
           </Button>
