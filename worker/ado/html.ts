@@ -1,50 +1,12 @@
-import { capMarkdown, cellText, tableRow } from './html-blocks'
+import { capMarkdown, cellText, fenceFor, inlineCode, tableRow } from './html-blocks'
+import { decode, escapeText, linkTarget, skipElement, tagEnd } from './html-text'
 
 const DROPPED = new Set(['script', 'style', 'head'])
-const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', nbsp: ' ' }
-const MAX_TAG = 2048
+const BLOCK = new Set(['p', 'div', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'pre', 'h1', 'h2', 'h3', 'h4'])
 const MAX_INDENT = 24
 const TAG = /<(?:(\/?)([a-z][a-z0-9]*)|[!?])/iy
-const HREF = /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
 
 interface Span { tag: string; open: string; close: string; block: boolean }
-
-function decode(text: string): string {
-  return text.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(amp|lt|gt|quot|nbsp));/gi, (_, dec, hex, name) => {
-    if (name) return NAMED[name.toLowerCase()]
-    const code = dec ? Number(dec) : parseInt(hex, 16)
-    return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : '�'
-  })
-}
-
-function tagEnd(html: string, from: number): number {
-  const limit = Math.min(html.length, from + MAX_TAG)
-  let quote = ''
-  for (let i = from + 1; i < limit; i++) {
-    const c = html[i]
-    if (quote) {
-      if (c === quote) quote = ''
-    } else if (c === '"' || c === "'") quote = c
-    else if (c === '>') return i
-  }
-  return -1
-}
-
-function skipElement(html: string, name: string, from: number): number {
-  const close = new RegExp(`</${name}\\b`, 'gi')
-  close.lastIndex = from
-  const found = close.exec(html)
-  if (!found) return html.length
-  const end = tagEnd(html, found.index)
-  return end === -1 ? html.length : end + 1
-}
-
-function linkTarget(attrs: string): string | null {
-  const found = HREF.exec(attrs)
-  const href = decode(found?.[1] ?? found?.[2] ?? found?.[3] ?? '').trim()
-  if (!/^(https?:|mailto:)/i.test(href)) return null
-  return href.replace(/[\s()<>]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)))
-}
 
 export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars: number; itemUrl: string }): string {
   if (typeof html !== 'string' || !html) return ''
@@ -61,6 +23,8 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
   let trailingNewlines = 2
   let atMarker = false
   let pre: string | null = null
+  let inCode = false
+  const openCount = new Map<string, number>()
 
   const push = (text: string) => {
     if (!text) return
@@ -86,19 +50,41 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
       pre += decode(raw)
       return
     }
-    const decoded = decode(raw.replace(/\s+/g, ' '))
+    const decoded = escapeText(decode(raw.replace(/\s+/g, ' ')))
+    const spaceBefore = !atMarker && trailingNewlines === 0 && last !== ' '
     if (decoded.trim() === '') {
-      if (!atMarker && trailingNewlines === 0 && last !== ' ') push(' ')
+      if (spaceBefore) push(' ')
       return
     }
+    const body = decoded.trimStart()
+    if (spaceBefore && body.length < decoded.length) push(' ')
     openSpans()
-    push(atMarker || trailingNewlines > 0 ? decoded.trimStart() : decoded)
+    push(body)
+  }
+  const addSpan = (tag: string, open: string, close: string, block = false) => {
+    spans.push({ tag, open, close, block })
+    openCount.set(tag, (openCount.get(tag) ?? 0) + 1)
+  }
+  const takeTrailingSpace = () => {
+    const floor = cell?.start ?? 0
+    let k = parts.length
+    while (k > floor && /^\s*$/.test(parts[k - 1])) k--
+    const tail = k > floor ? parts[k - 1] : ''
+    const kept = tail.trimEnd()
+    if (/^\s*`{3,}$/.test(kept.slice(kept.lastIndexOf('\n') + 1))) return ''
+    const moved = tail.slice(kept.length) + parts.splice(k).join('')
+    if (k > floor) parts[k - 1] = kept
+    return moved
   }
   const closeSpansTo = (index: number) => {
     for (let k = spans.length - 1; k >= index; k--) {
+      const span = spans[k]
+      openCount.set(span.tag, (openCount.get(span.tag) ?? 1) - 1)
       if (k >= flushed) continue
-      push(spans[k].close)
-      if (spans[k].block) breakTo(2)
+      const moved = span.close && !span.block ? takeTrailingSpace() : ''
+      push(span.close)
+      push(moved)
+      if (span.block) breakTo(2)
     }
     spans.length = Math.min(spans.length, index)
     flushed = Math.min(flushed, index)
@@ -107,7 +93,7 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     if (!cell || !row) return
     closeSpansTo(cell.spans)
     const raw = parts.splice(cell.start).join('')
-    lists.length = cell.lists
+    lists.length = Math.min(lists.length, cell.lists)
     ;({ last, newlines: trailingNewlines, marker: atMarker } = cell)
     row.cells.push(cellText(raw))
     cell = null
@@ -125,14 +111,25 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     const code = (pre ?? '').replace(/^\n+/, '').trimEnd()
     pre = null
     if (!code) return
-    let longest = 2
-    for (const run of code.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
-    const fence = '`'.repeat(longest + 1)
-    breakTo(2)
-    push(`${fence}\n${code}\n${fence}`)
-    breakTo(2)
+    const list = lists[lists.length - 1]
+    const pad = list ? ' '.repeat(list.indent + list.width) : ''
+    const fence = fenceFor(code, 3)
+    const first = atMarker ? '' : pad
+    breakTo(list ? 1 : 2)
+    push(first + [fence, ...code.split('\n'), fence].join(`\n${pad}`))
+    breakTo(list ? 1 : 2)
   }
+  const endCode = () => {
+    const code = inlineCode(pre ?? '')
+    pre = null
+    inCode = false
+    if (!code) return
+    openSpans()
+    push(last === '`' ? ` ${code}` : code)
+  }
+  const endsCode = (name: string) => name === 'code' || BLOCK.has(name)
   const openTag = (name: string, attrs: string) => {
+    if (inCode && endsCode(name)) endCode()
     if (pre !== null) {
       if (name === 'br') pre += '\n'
       return
@@ -140,21 +137,25 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     const gap = lists.length > 0 ? 1 : 2
     if (name === 'p' || name === 'div') breakTo(gap)
     else if (name === 'br') push('\n')
-    else if (name === 'b' || name === 'strong') spans.push({ tag: name, open: '**', close: '**', block: false })
-    else if (name === 'i' || name === 'em') spans.push({ tag: name, open: '*', close: '*', block: false })
-    else if (name === 'code') spans.push({ tag: name, open: '`', close: '`', block: false })
-    else if (/^h[1-4]$/.test(name)) spans.push({ tag: name, open: '#'.repeat(Number(name[1])) + ' ', close: '', block: true })
+    else if (name === 'b' || name === 'strong') addSpan(name, '**', '**')
+    else if (name === 'i' || name === 'em') addSpan(name, '*', '*')
+    else if (name === 'code') {
+      pre = ''
+      inCode = true
+    } else if (/^h[1-4]$/.test(name)) addSpan(name, '#'.repeat(Number(name[1])) + ' ', '', true)
     else if (name === 'a') {
       const href = linkTarget(attrs)
-      spans.push({ tag: name, open: href ? '[' : '', close: href ? `](${href})` : '', block: false })
+      addSpan(name, href ? '[' : '', href ? `](${href})` : '')
     } else if (name === 'ul' || name === 'ol') {
       breakTo(gap)
       const parent = lists[lists.length - 1]
       const indent = parent ? Math.min(parent.indent + parent.width, MAX_INDENT) : 0
       lists.push({ ordered: name === 'ol', n: 0, indent, width: 2 })
     } else if (name === 'li') {
-      breakTo(1)
-      const list = lists[lists.length - 1] ?? { ordered: false, n: 0, indent: 0, width: 2 }
+      if (atMarker) push('\n')
+      else breakTo(1)
+      if (lists.length === 0) lists.push({ ordered: false, n: 0, indent: 0, width: 2 })
+      const list = lists[lists.length - 1]
       const marker = list.ordered ? `${++list.n}.` : '-'
       list.width = marker.length + 1
       push(`${' '.repeat(list.indent)}${marker} `)
@@ -179,6 +180,10 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     }
   }
   const closeTag = (name: string) => {
+    if (inCode && endsCode(name)) {
+      endCode()
+      if (name === 'code') return
+    }
     if (pre !== null) {
       if (name === 'pre') endPre()
       return
@@ -193,7 +198,7 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
       breakTo(2)
     } else if (tableDepth === 1 && name === 'tr') endRow()
     else if (tableDepth === 1 && (name === 'td' || name === 'th')) endCell()
-    else {
+    else if (openCount.get(name)) {
       for (let k = spans.length - 1; k >= 0; k--) {
         if (spans[k].tag !== name) continue
         closeSpansTo(k)
@@ -218,12 +223,13 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     }
     TAG.lastIndex = i
     const tag = TAG.exec(source)
-    const end = tag ? tagEnd(source, i) : -1
-    if (!tag || end === -1) {
+    if (!tag) {
       text('<')
       i++
       continue
     }
+    const end = tagEnd(source, i)
+    if (end === -1) break
     const name = tag[2]?.toLowerCase()
     i = end + 1
     if (!name) continue
@@ -231,7 +237,8 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     else if (DROPPED.has(name)) i = skipElement(source, name, i)
     else openTag(name, source.slice(tag.index + tag[0].length, end))
   }
-  if (pre !== null) endPre()
+  if (inCode) endCode()
+  else if (pre !== null) endPre()
   endRow()
   closeSpansTo(0)
 

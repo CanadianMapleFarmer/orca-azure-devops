@@ -24,6 +24,20 @@ export function capMarkdown(markdown: string, maxChars: number): string {
   return head + (fence ? `\n${fence}` : '') + SUFFIX
 }
 
+export function fenceFor(content: string, min: number): string {
+  let longest = 0
+  for (const run of content.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+  return '`'.repeat(Math.max(min, longest + 1))
+}
+
+export function inlineCode(raw: string): string {
+  const content = raw.replace(/\s+/g, ' ').trim()
+  if (!content) return ''
+  const fence = fenceFor(content, 1)
+  const pad = content.startsWith('`') || content.endsWith('`') ? ' ' : ''
+  return `${fence}${pad}${content}${pad}${fence}`
+}
+
 export function cellText(raw: string): string {
   return raw.split('\n').map((line) => line.trim()).filter(Boolean).join(' ').replace(/\|/g, '\\|')
 }

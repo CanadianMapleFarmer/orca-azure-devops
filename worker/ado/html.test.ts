@@ -4,6 +4,14 @@ import { htmlToMarkdown } from './html'
 const itemUrl = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/42'
 const SUFFIX = '\n\n… open in Azure DevOps for the rest'
 const md = (html: string, maxChars = 10_000) => htmlToMarkdown(html, { maxChars, itemUrl })
+const SLOW_MS = 3000
+
+function timed(html: string, maxChars = 10_000): string {
+  const started = Date.now()
+  const out = md(html, maxChars)
+  assert.ok(Date.now() - started < SLOW_MS, `slow on ${JSON.stringify(html.slice(0, 20))}`)
+  return out
+}
 
 test('converts the common tags', () => {
   const cases: [string, string, string][] = [
@@ -17,6 +25,9 @@ test('converts the common tags', () => {
     ['mailto', '<a href="mailto:dev@fabrikam.test">mail</a>', '[mail](mailto:dev@fabrikam.test)'],
     ['inline code', 'run <code>npm test</code> now', 'run `npm test` now'],
     ['pre block', '<pre>line 1\n  line 2</pre><p>after</p>', '```\nline 1\n  line 2\n```\n\nafter'],
+    ['pre in a list item stays inside the item', '<ul><li>a<pre>x\ny</pre></li><li>b</li></ul>', '- a\n  ```\n  x\n  y\n  ```\n- b'],
+    ['pre as the first thing in an item', '<ol><li><pre>&lt;img src=x onerror=alert(1)&gt;</pre></li></ol>', '1. ```\n   <img src=x onerror=alert(1)>\n   ```'],
+    ['an item inside an item without a list keeps its own line', '<li><li><pre>&lt;img src=x&gt;</pre></li></li>', '-\n- ```\n  <img src=x>\n  ```'],
     ['pre with code and br', '<pre><code>a &lt; b<br>c</code></pre>', '```\na < b\nc\n```'],
     ['bullets', '<ul><li>one</li><li>two</li></ul>', '- one\n- two'],
     ['ordered', '<ol><li>one</li><li>two</li></ol>', '1. one\n2. two'],
@@ -32,7 +43,7 @@ test('converts the common tags', () => {
     ['empty formatting leaves no markers', '<div><b><br></b></div><p>x <i></i>y</p>', 'x y'],
     ['whitespace is collapsed', '<p>  a \n\n  b\t c </p>', 'a b c'],
     ['blank paragraphs collapse', '<p>a</p><p>&nbsp;</p><p></p><div><br></div><p>b</p>', 'a\n\nb'],
-    ['entities', '&amp; &lt;b&gt; &quot;q&quot; &#39;s&#39; &#x41;&#66; a&nbsp;b &amp;lt;', '& <b> "q" \'s\' AB a b &lt;'],
+    ['entities', '&amp; &lt;b&gt; &quot;q&quot; &#39;s&#39; &#x41;&#66; a&nbsp;b &amp;lt;', '& \\<b> "q" \'s\' AB a b &lt;'],
   ]
   for (const [name, html, expected] of cases) assert.equal(md(html), expected, name)
 })
@@ -59,6 +70,83 @@ test('tables render one row per line', () => {
     ['empty table', '<table></table><table><tr></tr></table>', ''],
   ]
   for (const [name, html, expected] of cases) assert.equal(md(html), expected, name)
+})
+
+test('an overlong or unterminated tag never reaches the output as raw HTML', () => {
+  const long = 'A'.repeat(2100)
+  assert.equal(md(`<a href="javascript:alert(1)" data-x="${long}">click</a>`), 'click')
+  assert.equal(md(`<a href="https://example.com" data-x="${long}">click</a>`), '[click](https://example.com)')
+  assert.equal(md(`<script data-x="${long}">alert(1)</script>ok`), 'ok')
+  assert.equal(md(`<img src="data:image/png;base64,${long}">after`), `[image](${itemUrl})after`)
+  assert.equal(md(`<p>kept</p><b data-x="${long}`), 'kept')
+  assert.equal(md('before <a href="https://example.com'), 'before')
+  assert.equal(md('a <b and <i c'), 'a')
+  assert.equal(md('<!doctype'), '')
+})
+
+test('a missing closing bracket is found once, not once per tag start', () => {
+  assert.equal(timed('<a '.repeat(300_000)), '')
+  assert.equal(timed('<a x="'.repeat(100_000) + '>after'), 'after')
+})
+
+test('unmatched closing tags are not rescanned against the open tags', () => {
+  assert.equal(timed('<b>'.repeat(100_000) + '</span>'.repeat(100_000)), '')
+  const nested = '<b>'.repeat(50_000) + 'x' + '</i>'.repeat(50_000) + '</b>'.repeat(50_000)
+  assert.equal(timed(nested, 1_000_000), '**'.repeat(50_000) + 'x' + '**'.repeat(50_000))
+})
+
+test('text cannot form links or raw HTML', () => {
+  assert.equal(md('<p>[x](javascript:alert(1))</p>'), '\\[x\\](javascript:alert(1))')
+  assert.equal(md('<p>&lt;img src=x onerror=alert(1)&gt;</p>'), '\\<img src=x onerror=alert(1)>')
+  assert.equal(md('<p>&#60;b&#x3c;</p>'), '\\<b\\<')
+  assert.equal(md('<a href="https://good.test">a](javascript:alert(1)) [b</a>'), '[a\\](javascript:alert(1)) \\[b](https://good.test)')
+  assert.equal(md('<p>\\&lt;img src=x&gt; C:\\temp</p>'), '\\\\\\<img src=x> C:\\\\temp')
+  assert.equal(md('<p>1 < 2 and <3</p>'), '1 \\< 2 and \\<3')
+})
+
+test('code spans are literal and cannot be broken out of', () => {
+  const cases: [string, string, string][] = [
+    ['brackets and angle brackets stay literal', '<code>a &lt; b[0]</code>', '`a < b[0]`'],
+    ['backtick in code', '<code>a&#96;b</code>', '``a`b``'],
+    ['code ending in a backtick', '<code>&#96;x&#96;</code>', '`` `x` ``'],
+    ['no breaking out of the span', '<code>x&#96;&lt;img src=x onerror=alert(1)&gt;&#96;</code>', '`` x`<img src=x onerror=alert(1)>` ``'],
+    ['tags inside are dropped', 'a <code><b>x</b> y</code> b', 'a `x y` b'],
+    ['empty code', 'a<code></code><code> </code>b', 'ab'],
+    ['unclosed code ends at a block tag', '<p><code>a</p><p>b</p>', '`a`\n\nb'],
+    ['unclosed code ends at the end', '<code>a', '`a`'],
+    ['code inside emphasis', '<b>x <code>y</code> </b>z', '**x `y`** z'],
+    ['a text backtick cannot unbalance the span', '`<code>&lt;img src=x onerror=alert(1)&gt;</code>', '\\` `<img src=x onerror=alert(1)>`'],
+    ['adjacent spans stay separate', '<code>a</code><code>b&#96;c&lt;img src=x&gt;</code>', '`a` ``b`c<img src=x>``'],
+    ['code inside a cell', '<table><tr><td><code>a|b</code></td></tr></table>', '| `a\\|b` |'],
+  ]
+  for (const [name, html, expected] of cases) assert.equal(md(html), expected, name)
+})
+
+test('whitespace moves outside emphasis markers', () => {
+  const cases: [string, string, string][] = [
+    ['trailing', '<b>Steps: </b>text', '**Steps:** text'],
+    ['trailing nbsp', '<strong>x&nbsp;</strong>y', '**x** y'],
+    ['leading', 'a<b> x</b>', 'a **x**'],
+    ['both', 'a<i> x </i>b', 'a *x* b'],
+    ['whitespace only', '<i> </i>x<b>&nbsp;</b>', 'x'],
+    ['line break before the close', '<b>a<br></b>b', '**a**\nb'],
+    ['nested', '<b>a <i>b </i></b>c', '**a *b*** c'],
+    ['link text', '<a href="https://example.com">link </a>after', '[link](https://example.com) after'],
+    ['at line start', '<p><b> x</b></p>', '**x**'],
+    ['inside a cell', '<table><tr><td><b>x </b>y</td></tr></table>', '| **x** y |'],
+    ['a code fence keeps its line', '<b>x<pre>code</pre></b>y', '**x\n\n```\ncode\n```\n\n**y'],
+    ['a code fence in an item keeps its line', '<ul><li><b>t<pre>c</pre></b>y</li></ul>', '- **t\n  ```\n  c\n  ```\n**y'],
+    ['no space to move', '<b>x</b>y', '**x**y'],
+  ]
+  for (const [name, html, expected] of cases) assert.equal(md(html), expected, name)
+})
+
+test('decodes the common named entities', () => {
+  assert.equal(
+    md('&apos;&rsquo;&lsquo;&rdquo;&ldquo;&ndash;&mdash;&hellip;&copy;&reg;&trade;'),
+    "'\u2019\u2018\u201d\u201c\u2013\u2014\u2026\u00a9\u00ae\u2122",
+  )
+  assert.equal(md('it&rsquo;s &ndash; &AMP; &bogus;'), 'it\u2019s \u2013 & &bogus;')
 })
 
 test('links keep only http, https and mailto targets', () => {
@@ -148,19 +236,20 @@ test('malformed HTML never throws', () => {
     '<table>'.repeat(5000) + '<tr><td>x</td></tr>' + '</table>'.repeat(5000),
     '<table><tr><td>'.repeat(3000) + 'x',
     '<table><tr><td><pre>never closed',
+    '<ul><li><table><tr><td>x</ul></td></tr></table><li>y</li></ul>',
     '</td></tr></table><td>stray</td><th>stray</th></tr>',
     '<table><tr>' + '<td>a</td>'.repeat(20_000) + '</tr></table>',
     '<pre>' + '`'.repeat(100_000) + '</pre>',
     '<a "'.repeat(20_000),
+    '<code>'.repeat(50_000),
+    '<code>' + '`'.repeat(100_000),
+    '<b> </b>'.repeat(50_000),
+    '<b>x </b>'.repeat(50_000),
     '<'.repeat(50_000),
     ' '.repeat(100_000) + '<pre>' + ' '.repeat(100_000) + '</pre>',
   ]
-  for (const input of inputs) {
-    const started = Date.now()
-    assert.equal(typeof md(input), 'string')
-    assert.ok(Date.now() - started < 1000, `slow on ${JSON.stringify(input.slice(0, 20))}`)
-  }
-  assert.equal(md('a < b and c > d'), 'a < b and c > d')
+  for (const input of inputs) assert.equal(typeof timed(input), 'string')
+  assert.equal(md('a < b and c > d'), 'a \\< b and c > d')
   assert.equal(md('<p>unclosed <b>bold <i>italic'), 'unclosed **bold *italic***')
   assert.equal(md('&#99999999999; &#0;'), '� �')
 })
