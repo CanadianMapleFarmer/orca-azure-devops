@@ -85,6 +85,36 @@
         "description": "{id} is the work item id and {slug} its title.",
         "type": "string",
         "default": "feature/{id}-{slug}"
+      },
+      {
+        "key": "autoCompleteMergeStrategy",
+        "title": "Auto-complete merge type",
+        "type": "string",
+        "enum": [
+          "noFastForward",
+          "squash",
+          "rebase",
+          "rebaseMerge"
+        ],
+        "enumLabels": [
+          "Merge (no fast-forward)",
+          "Squash commit",
+          "Rebase and fast-forward",
+          "Semi-linear merge"
+        ],
+        "default": "noFastForward"
+      },
+      {
+        "key": "autoCompleteDeleteSourceBranch",
+        "title": "Auto-complete: delete the source branch",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "autoCompleteTransitionWorkItems",
+        "title": "Auto-complete: complete linked work items",
+        "type": "boolean",
+        "default": false
       }
     ],
     "hooks": [

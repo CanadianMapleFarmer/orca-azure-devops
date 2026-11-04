@@ -20,5 +20,4 @@ export function registerWorkHandlers(orca: OrcaWorkerApi, { boards, http, call }
   orca.panels.handle('work.openBoard', input => openBoard({ call, fs, boardOf: org => boards.defaultBoard(org) }, input.org))
   orca.panels.handle('work.dismissNudge', input => boards.dismissNudge(input))
   orca.panels.handle('work.nudgeRules', input => boards.nudgeRules(input))
-  orca.panels.handle('ui.visibility', input => boards.visibility(input))
 }

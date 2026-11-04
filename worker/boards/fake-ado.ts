@@ -130,9 +130,13 @@ export function fakeAdo() {
       signal: init?.signal ?? undefined
     }
     calls.push(call)
-    const override = overrides.find(entry => entry.match(call))
-    return override ? override.respond(call) : route(call)
+    return dispatch(call)
   }) as typeof globalThis.fetch
+
+  function dispatch(call: AdoCall, after?: Override): Response | Promise<Response> {
+    const override = overrides.slice(after ? overrides.indexOf(after) + 1 : 0).find(entry => entry.match(call))
+    return override ? override.respond(call) : route(call)
+  }
 
   return {
     fetch,
@@ -146,15 +150,16 @@ export function fakeAdo() {
       let release = () => {}
       const gate = new Promise<void>(resolve => (release = resolve))
       let held = false
-      overrides.unshift({
+      const holding: Override = {
         match: call => !held && match(call),
         respond: async call => {
           held = true
-          const response = route(call)
+          const response = await dispatch(call, holding)
           await gate
           return response
         }
-      })
+      }
+      overrides.unshift(holding)
       return { release: () => release() }
     },
     hang(match: (call: AdoCall) => boolean): AdoCall[] {

@@ -1,3 +1,4 @@
+import type { PrSnapshot } from './shared/prs'
 import type { ConnectFailure, ConnectionMethod, OrgStatus } from './shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
@@ -39,14 +40,17 @@ declare module 'orca' {
     'work.cancelWorkspace': { input: {}; output: { ok: true } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
-      input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
+      input: { surface: 'work' | 'board' | 'prs'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
       output: { ok: true }
     }
+    'prs.snapshot': { input: { org: string }; output: PrSnapshot }
+    'prs.refresh': { input: { org: string }; output: PrSnapshot }
   }
   interface PluginPanelEvents {
     'orgs.changed': { orgs: OrgStatus[] }
     'orgs.connectFailed': ConnectFailure
     'work.changed': WorkSnapshot
     'work.boardChanged': { org: string; teamId: string; boardId: string }
+    'prs.changed': PrSnapshot
   }
 }

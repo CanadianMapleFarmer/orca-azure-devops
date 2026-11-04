@@ -24,6 +24,9 @@ export const BOARDS_TEAM_GONE = 'That project or team no longer exists.'
 export const NO_CODE_PROJECTS = 'Pick at least one project, or choose all projects.'
 export const CODE_PROJECTS_GONE = 'One or more projects no longer exist.'
 export const FIND_PEOPLE_NEEDS_ACCESS = 'Finding people needs Graph (Read) and Identity (Read) access.'
+export const PRS_TRIMMED = 'Showing the newest pull requests only.'
+export const PRS_NEED_CODE_READ = 'Pull requests need Code (Read) access.'
+export const PRS_LOAD_FAILED = "Couldn't load pull requests."
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
@@ -49,6 +52,6 @@ export function badRequest(message: string): AdoError {
   return new AdoError('bad_request', 400, message)
 }
 
-export function failureMessage(error: unknown): string {
-  return error instanceof AdoError ? error.message : LOAD_FAILED
+export function failureMessage(error: unknown, fallback = LOAD_FAILED): string {
+  return error instanceof AdoError ? error.message : fallback
 }

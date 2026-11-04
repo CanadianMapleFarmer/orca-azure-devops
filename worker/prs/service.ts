@@ -1,0 +1,259 @@
+import type { AutoCompleteOptions, PrKey, PrSnapshot, PrSummary, ReleaseSet } from '../../src/shared/prs'
+import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
+import { AdoError, type AdoHttp } from '../ado/http'
+import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import { failureMessage, joinMessages, NOT_CONNECTED, PRS_LOAD_FAILED, PRS_NEED_CODE_READ, PRS_TRIMMED } from '../messages'
+import type { Scheduler } from '../poll/scheduler'
+import { cachedCodeProjects, createPrSource, type CodeProjects, type PrSource } from './load'
+import { releaseSets, toReviewOf } from './release-sets'
+
+export interface PrsServiceDeps {
+  http: AdoHttp
+  orgs: () => Promise<OrgStatus[]>
+  scheduler: Scheduler
+  autoComplete: () => AutoCompleteOptions
+  post: (snapshot: PrSnapshot) => void
+  counts: (org: string, toReview: number | null) => void
+  now: () => number
+}
+
+export interface PrsService {
+  onOrgs(orgs: OrgStatus[]): void
+  snapshot(org: string): Promise<PrSnapshot>
+  refresh(org: string): Promise<PrSnapshot>
+  cached(org: string, key: PrKey): PrSummary | null
+  activeMine(org: string): PrSummary[]
+  source(org: string): Promise<PrSource>
+  visibility(input: { org: string; visible: boolean }): { ok: true }
+}
+
+type Kind = 'full' | 'reviews'
+type SignedInStatus = OrgStatus & { account: PinnedAccount }
+
+interface OrgPrs {
+  source: PrSource
+  projects: CodeProjects
+  base: PrSnapshot | null
+  snapshot: PrSnapshot | null
+  fullAt: number | null
+  fullLoads: number
+  mine: PrSummary[]
+  review: PrSummary[]
+  failure: unknown
+  loading: { kind: Kind; promise: Promise<PrSnapshot> } | null
+  pausedUntil: number
+}
+
+const PRS_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
+const FRESH_MS = 60_000
+const FORBIDDEN_PAUSE_MS = 10 * 60_000
+const MAX_SETS = 50
+const MAX_TO_REVIEW = 100
+
+export function createPrsService(deps: PrsServiceDeps): PrsService {
+  const { http, scheduler, now } = deps
+  const entries = new Map<string, OrgPrs>()
+  const jobs = new Set<string>()
+  const visible = new Set<string>()
+
+  async function statusOf(org: string): Promise<SignedInStatus> {
+    const status = (await deps.orgs()).find(item => item.org === org)
+    if (!status || !isSignedIn(status)) throw new AdoError('unauthorized', 401, NOT_CONNECTED)
+    return status
+  }
+
+  function entryOf(org: string): OrgPrs {
+    const entry = entries.get(org) ?? {
+      source: createPrSource(http, org, now),
+      projects: cachedCodeProjects(http, org, now),
+      base: null,
+      snapshot: null,
+      fullAt: null,
+      fullLoads: 0,
+      mine: [],
+      review: [],
+      failure: null,
+      loading: null,
+      pausedUntil: -Infinity
+    }
+    entries.set(org, entry)
+    return entry
+  }
+
+  function jobKey(org: string): string {
+    return `prs:${org}`
+  }
+
+  function fresh(entry: OrgPrs | undefined): entry is OrgPrs & { snapshot: PrSnapshot } {
+    return entry !== undefined && entry.snapshot !== null && entry.fullAt !== null && now() - entry.fullAt < FRESH_MS
+  }
+
+  function lastFull(org: string): PrSnapshot | null {
+    const entry = entries.get(org)
+    return entry && entry.fullAt !== null ? entry.snapshot : null
+  }
+
+  function publish(entry: OrgPrs, base: PrSnapshot): PrSnapshot {
+    const snapshot = capPrSnapshot(base)
+    entry.base = base
+    entry.snapshot = snapshot
+    if (entry.fullAt !== null) deps.post(snapshot)
+    return snapshot
+  }
+
+  function compose(org: string, me: string, sets: ReleaseSet[], review: PrSummary[]): PrSnapshot {
+    const toReview = toReviewOf(review, me)
+    return { org, me, sets, toReview, toReviewCount: toReview.length, autoComplete: deps.autoComplete(), updatedAt: now(), stale: false }
+  }
+
+  function load(org: string, kind: Kind, signal?: AbortSignal): Promise<PrSnapshot> {
+    const entry = entryOf(org)
+    const current = entry.loading
+    if (current && (current.kind === 'full' || kind === 'reviews')) return current.promise
+    const loading = { kind, promise: run() }
+    entry.loading = loading
+    return loading.promise
+
+    async function run(): Promise<PrSnapshot> {
+      await current?.promise.catch(() => {})
+      try {
+        return await attempt(org, entry, kind, signal)
+      } finally {
+        if (entry.loading === loading) entry.loading = null
+      }
+    }
+  }
+
+  async function attempt(org: string, entry: OrgPrs, kind: Kind, signal?: AbortSignal): Promise<PrSnapshot> {
+    if (now() < entry.pausedUntil) {
+      const last = lastFull(org)
+      if (last) return last
+      throw entry.failure
+    }
+    const current = () => !signal?.aborted && entries.get(org) === entry
+    try {
+      const status = await statusOf(org)
+      const me = status.account.adoId
+      const projects = await entry.projects(status.codeProjects, signal)
+      if (kind === 'full') {
+        const { mine, review } = await entry.source.full(me, projects, signal)
+        const base = compose(org, me, releaseSets(mine, now()), review)
+        if (!current()) return capPrSnapshot(base)
+        entry.mine = mine
+        entry.review = review
+        entry.fullAt = now()
+        entry.fullLoads += 1
+        entry.failure = null
+        deps.counts(org, base.toReviewCount)
+        return publish(entry, base)
+      }
+      const review = await entry.source.reviews(me, projects, signal)
+      const toReview = toReviewOf(review, me)
+      const base = { ...(entry.base ?? compose(org, me, [], [])), me, toReview, toReviewCount: toReview.length }
+      if (!current()) return capPrSnapshot(base)
+      entry.review = review
+      entry.failure = null
+      deps.counts(org, base.toReviewCount)
+      return publish(entry, base)
+    } catch (error) {
+      if (!current()) throw error
+      const forbidden = error instanceof AdoError && error.code === 'forbidden'
+      if (forbidden) entry.pausedUntil = now() + FORBIDDEN_PAUSE_MS
+      if (kind === 'full') entry.fullLoads += 1
+      entry.failure = forbidden ? new AdoError('forbidden', 403, PRS_NEED_CODE_READ) : error
+      if (entry.base) publish(entry, { ...entry.base, stale: true, message: forbidden ? PRS_NEED_CODE_READ : failureMessage(error, PRS_LOAD_FAILED) })
+      throw entry.failure
+    }
+  }
+
+  async function poll(org: string, signal: AbortSignal): Promise<void> {
+    await load(org, visible.has(org) ? 'full' : 'reviews', signal)
+  }
+
+  return {
+    onOrgs(orgs) {
+      const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
+      for (const org of new Set([...entries.keys(), ...jobs])) {
+        if (signedIn.has(org)) continue
+        entries.delete(org)
+        if (jobs.delete(org)) scheduler.remove(jobKey(org))
+        deps.counts(org, null)
+      }
+      for (const org of signedIn) {
+        if (jobs.has(org)) continue
+        jobs.add(org)
+        scheduler.upsert({ key: jobKey(org), ...PRS_MS, run: signal => poll(org, signal) })
+        scheduler.setVisible(jobKey(org), visible.has(org))
+      }
+    },
+
+    async snapshot(org) {
+      await statusOf(org)
+      const entry = entries.get(org)
+      if (fresh(entry)) return entry.snapshot
+      try {
+        return await load(org, 'full')
+      } catch (error) {
+        const last = lastFull(org)
+        if (last) return last
+        throw error
+      }
+    },
+
+    async refresh(org) {
+      await statusOf(org)
+      const entry = entryOf(org)
+      const loads = entry.fullLoads
+      await scheduler.runNow(jobKey(org))
+      if (entry.fullLoads === loads) await load(org, 'full').catch(() => {})
+      const last = lastFull(org)
+      if (last) return last
+      throw entries.get(org)?.failure ?? new AdoError('server', 500, PRS_LOAD_FAILED)
+    },
+
+    cached(org, key) {
+      const entry = entries.get(org)
+      return [...(entry?.mine ?? []), ...(entry?.review ?? [])].find(pr => samePr(pr, key)) ?? null
+    },
+
+    activeMine(org) {
+      return (entries.get(org)?.mine ?? []).filter(pr => pr.status === 'active')
+    },
+
+    async source(org) {
+      await statusOf(org)
+      return entryOf(org).source
+    },
+
+    visibility({ org, visible: shown }) {
+      const becameVisible = shown && !visible.has(org)
+      if (shown) visible.add(org)
+      else visible.delete(org)
+      scheduler.setVisible(jobKey(org), shown)
+      if (becameVisible && !fresh(entries.get(org))) void scheduler.runNow(jobKey(org))
+      return { ok: true }
+    }
+  }
+}
+
+function capPrSnapshot(snapshot: PrSnapshot): PrSnapshot {
+  const message = joinMessages(snapshot.message, PRS_TRIMMED)
+  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, sets: [], toReview: [], message })
+  const sets = newestThatFit(snapshot.sets, budget, newestCreatedAt, MAX_SETS)
+  const used = [...sets].reduce((sum, set) => sum + byteLength(set) + 1, 0)
+  const toReview = newestThatFit(snapshot.toReview, budget - used, pr => pr.createdAt, MAX_TO_REVIEW)
+  if (sets.size === snapshot.sets.length && toReview.size === snapshot.toReview.length) return snapshot
+  return { ...snapshot, sets: snapshot.sets.filter(set => sets.has(set)), toReview: snapshot.toReview.filter(pr => toReview.has(pr)), message }
+}
+
+function newestCreatedAt(set: ReleaseSet): number {
+  return Math.max(...set.prs.map(pr => pr.createdAt))
+}
+
+function isSignedIn(status: OrgStatus): status is SignedInStatus {
+  return status.state === 'connected' && status.account !== null
+}
+
+function samePr(pr: PrKey, key: PrKey): boolean {
+  return pr.projectId === key.projectId && pr.repoId === key.repoId && pr.prId === key.prId
+}

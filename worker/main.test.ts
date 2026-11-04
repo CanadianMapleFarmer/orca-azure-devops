@@ -3,11 +3,13 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, mockHost, test, type TestWorker } from 'orca/testing'
+import type { PrSnapshot } from '../src/shared/prs'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isWiql, json as reply, ORG_URL, PROJECT, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
+import { fakePrs, isMineActive, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
 
 function running(pattern: string): boolean {
@@ -585,5 +587,71 @@ test('work.openBoard refuses without a focused local workspace or a boards team'
       })
     })
     assert.equal(ado.calls.length, 0)
+  })
+})
+
+function prsHost(boards: typeof BOARDS | null = null) {
+  return mockHost({
+    capabilities: CAPABILITIES,
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards }] },
+    secrets: { 'pat:contoso': PAT }
+  })
+}
+
+function prsChanged(posts: readonly { event: string; payload?: unknown }[]): PrSnapshot[] {
+  return posts.filter(post => post.event === 'prs.changed').map(post => post.payload as PrSnapshot)
+}
+
+test('prs.snapshot answers through the handler', async () => {
+  const ado = fakePrs()
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const snapshot = await w.request('prs.snapshot', { org: 'contoso' })
+      assert.deepEqual(snapshot.sets.map(set => set.prs.map(pr => pr.prId)), [[4105], [4104], [4101, 4102, 4103]])
+      assert.deepEqual([snapshot.me, snapshot.toReview.map(pr => pr.prId), snapshot.toReviewCount], [ME, [4110], 1])
+      assert.deepEqual(snapshot.autoComplete, { mergeStrategy: 'noFastForward', deleteSourceBranch: false, transitionWorkItems: false })
+      assert.deepEqual(prsChanged(w.posts).at(-1), snapshot)
+
+      const refreshed = await w.request('prs.refresh', { org: 'contoso' })
+      assert.deepEqual(refreshed.sets.map(set => set.key), snapshot.sets.map(set => set.key))
+      await assert.rejects(w.request('prs.snapshot', { org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('the status command reports review counts', async () => {
+  const ado = fakePrs()
+  await withFetch(signedIn(ado), async () => {
+    const host = prsHost()
+    await withWorker(worker, { host }, async w => {
+      const shown = () => (host.callsOf('statusBar.update').at(-1) as { text?: string } | undefined)?.text
+      assert.ok(await until(() => shown() === 'ADO · 1 to review'), 'the background run counted the pull requests to review')
+      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 pull request to review: contoso 1')
+      assert.deepEqual(prsChanged(w.posts), [], 'a background run posts no snapshot')
+      assert.equal(ado.count(isMineActive), 0)
+
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.equal(shown(), 'ADO')
+      assert.ok(!String(await w.command('status')).includes('to review'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('ui.visibility routes prs to the PRs service and work/board as before', async () => {
+  const ado = fakePrs()
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost(BOARDS) }, async w => {
+      assert.ok(await until(() => ado.count(isReviewList) > 0), 'the PRs job runs in the background')
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true }), { ok: true })
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'board', org: 'contoso', visible: false }), { ok: true })
+      assert.equal(await until(() => ado.count(isMineActive) > 0, 200), false, 'work and board visibility leave the PRs job alone')
+
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'prs', org: 'contoso', visible: true }), { ok: true })
+      assert.ok(await until(() => prsChanged(w.posts).length > 0), 'showing the PRs tab ran a full load')
+      assert.deepEqual(prsChanged(w.posts)[0].sets.map(set => set.prs.map(pr => pr.prId)), [[4105], [4104], [4101, 4102, 4103]])
+      assert.equal(w.refusals.length, 0)
+    })
   })
 })
