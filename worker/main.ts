@@ -4,22 +4,16 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import type { OrgStatus } from '../src/shared/types'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
-import { listTeamBoards } from './ado/board-config'
-import { listProjects, listTeams, resolveBoards, resolveProjects } from './ado/core'
-import { AdoError } from './ado/http'
-import { openBoard } from './boards/board-file'
+import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
+import { registerOrgHandlers } from './org-handlers'
 import { createScheduler, realClock } from './poll/scheduler'
 import { statusBarFor, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
-import { createContextCache, startAgent } from './workspace/agents'
-import { branchFor, createArm } from './workspace/arm'
 import type { HostCall } from './workspace/focused'
-import { registerWorkspaceHooks } from './workspace/hooks'
-import { createLinkStore } from './workspace/links'
-import { watchWorkspaceSettings } from './workspace/settings'
+import { registerWorkspaceHandlers } from './workspace/handlers'
 
 const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
 
@@ -72,65 +66,11 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   await connections.resetInterrupted()
 
-  const hostCall: HostCall = (method, params) => orca.host.call(method as never, params as never)
-  const workspaceSettings = await watchWorkspaceSettings(orca.settings, message => orca.log(message))
-  const arm = createArm(Date.now)
-  const links = await createLinkStore(store, Date.now)
-  const context = createContextCache()
-  registerWorkspaceHooks(orca, {
-    arm,
-    links,
-    context,
-    itemInfo: (org, itemId) => {
-      const item = boards.cachedItem(org, itemId)
-      return item && { type: item.type, title: item.title, url: item.url }
-    },
-    agentContext: workspaceSettings.agentContext
-  })
-
+  const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
+  await registerWorkspaceHandlers(orca, { boards, store, call })
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
-  orca.panels.handle('orgs.list', () => connections.list())
-  orca.panels.handle('orgs.connect', input => connections.connect(input))
-  orca.panels.handle('orgs.cancel', input => connections.cancel(input.org))
-  orca.panels.handle('orgs.signOut', input => connections.signOut(input.org))
-  orca.panels.handle('orgs.remove', async input => {
-    await connections.remove(input.org)
-    return { ok: true as const }
-  })
-  orca.panels.handle('ado.projects', input => listProjects(connections.http, input.org))
-  orca.panels.handle('ado.teams', input => listTeams(connections.http, input.org, input.projectId))
-  orca.panels.handle('orgs.setBoards', async ({ org, projectId, teamId }) => {
-    const target = await resolveBoards(connections.http, org, projectId, teamId)
-    if (!target) throw new AdoError('bad_request', 400, 'That project or team no longer exists.')
-    return connections.update(org, { boards: target })
-  })
-  orca.panels.handle('orgs.setCodeProjects', async ({ org, projects }) => {
-    if (projects === 'all') return connections.update(org, { codeProjects: 'all' })
-    if (projects.length === 0) throw new AdoError('bad_request', 400, 'Pick at least one project, or choose all projects.')
-    const chosen = await resolveProjects(connections.http, org, projects)
-    if (!chosen) throw new AdoError('bad_request', 400, 'One or more projects no longer exist.')
-    return connections.update(org, { codeProjects: chosen })
-  })
-  orca.panels.handle('work.snapshot', input => boards.snapshot(input.org))
-  orca.panels.handle('work.refresh', input => boards.refresh(input.org))
-  orca.panels.handle('work.details', input => boards.details(input.org, input.id))
-  orca.panels.handle('work.move', input => boards.move(input))
-  orca.panels.handle('work.comment', input => boards.comment(input.org, input.id, input.text))
-  orca.panels.handle('work.linkPr', input => boards.linkPr(input))
-  orca.panels.handle('work.board', input => boards.board(input))
-  orca.panels.handle('work.boards', input => listTeamBoards(connections.http, input))
-  orca.panels.handle('work.openBoard', input => openBoard({ call: hostCall, fs, boardOf: org => boards.defaultBoard(org) }, input.org))
-  orca.panels.handle('work.startWorkspace', async ({ org, id }) => {
-    const item = boards.cachedItem(org, id) ?? (await boards.details(org, id)).item
-    const branch = branchFor(workspaceSettings.branchTemplate(), item)
-    return { branch, armedUntil: arm.arm({ org, itemId: id, branch }) }
-  })
-  orca.panels.handle('work.startAgent', input =>
-    startAgent({ call: hostCall, links, context, details: (org, id) => boards.details(org, id), defaultAgent: workspaceSettings.defaultAgent }, input)
-  )
-  orca.panels.handle('work.dismissNudge', input => boards.dismissNudge(input))
-  orca.panels.handle('work.nudgeRules', input => boards.nudgeRules(input))
-  orca.panels.handle('ui.visibility', input => boards.visibility(input))
+  registerOrgHandlers(orca, connections)
+  registerWorkHandlers(orca, { boards, http: connections.http, call })
   orca.commands.register('status', async () => statusText(await connections.list()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
