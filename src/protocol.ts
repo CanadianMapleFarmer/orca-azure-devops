@@ -1,4 +1,5 @@
 import type { ConnectFailure, ConnectionMethod, OrgStatus } from './shared/types'
+import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
   interface PluginRequests {
     'plugin.ping': { input: {}; output: { version: string } }
@@ -11,9 +12,29 @@ declare module 'orca' {
     'ado.teams': { input: { org: string; projectId: string }; output: { id: string; name: string }[] }
     'orgs.setBoards': { input: { org: string; projectId: string; teamId: string }; output: OrgStatus }
     'orgs.setCodeProjects': { input: { org: string; projects: 'all' | string[] }; output: OrgStatus }
+    'work.snapshot': { input: { org: string }; output: WorkSnapshot }
+    'work.refresh': { input: { org: string }; output: WorkSnapshot }
+    'work.details': { input: { org: string; id: number }; output: WorkItemDetails }
+    'work.move': { input: { org: string; id: number; rev: number; to: MoveTarget }; output: WorkItemSummary }
+    'work.comment': { input: { org: string; id: number; text: string }; output: WorkComment }
+    'work.linkPr': { input: { org: string; id: number; rev: number; prUrl: string }; output: WorkItemSummary }
+    'work.board': {
+      input: { org: string; projectId: string; teamId: string; boardId?: string; everyone: boolean }
+      output: { board: BoardConfig; items: WorkItemSummary[] }
+    }
+    'work.openBoard': { input: { org: string }; output: { opened: boolean; message?: string } }
+    'work.dismissNudge': { input: { org: string; itemId: number; prId: number }; output: { ok: true } }
+    'work.nudgeRules': {
+      input: { org: string; teamId: string; rules?: { branch: string; column: string }[] }
+      output: { rules: { branch: string; column: string }[] }
+    }
+    'work.startWorkspace': { input: { org: string; id: number }; output: { branch: string; armedUntil: number } }
+    'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
+    'ui.visibility': { input: { surface: 'work' | 'board'; org: string; visible: boolean }; output: { ok: true } }
   }
   interface PluginPanelEvents {
     'orgs.changed': { orgs: OrgStatus[] }
     'orgs.connectFailed': ConnectFailure
+    'work.changed': WorkSnapshot
   }
 }
