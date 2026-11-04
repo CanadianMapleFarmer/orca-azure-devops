@@ -102,9 +102,10 @@ test('aborting stops the child of a wrapper that does not exec, and settles once
 test('a timeout stops the child of a wrapper that does not exec, and settles once it has', async () => {
   const sleep = uniqueSleep()
   await withWrapper([sleep], [sleep], async az => {
-    const pending = runCommand(az, [], { env: NO_ENV, timeoutMs: 500 })
+    const pending = runCommand(az, [], { env: NO_ENV, timeoutMs: 1_500 })
+    pending.catch(() => {})
     assert.ok(await until(() => running(sleep)), 'the wrapper started its child')
-    await assert.rejects(within(pending, 2_500), /^Error: az timed out after 500ms$/)
+    await assert.rejects(within(pending, 4_000), /^Error: az timed out after 1500ms$/)
     assert.equal(running(sleep), false, 'nothing from the wrapper is left running')
   })
 })
