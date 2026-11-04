@@ -81,7 +81,7 @@ test('connect sends the typed org and method', async () => {
 
   await panel.press({ text: 'Connect' })
   assert.deepEqual(sent, [{ orgInput: 'https://dev.azure.com/contoso', method: 'pat', pat: PAT }])
-  assert.equal(requestsTo(host, 'orgs.connect')[0]?.timeoutMs, undefined)
+  assert.equal(requestsTo(host, 'orgs.connect')[0]?.timeoutMs, 90000)
   assert.equal(JSON.stringify(panel.tree()).includes(PAT), false)
   assert.equal(panel.persisted.plugin.activeOrg, 'contoso')
 
@@ -93,7 +93,7 @@ test('connect sends the typed org and method', async () => {
 
 test('connect with the Azure CLI sends no token', async () => {
   const sent: unknown[] = []
-  await open([], {
+  const host = await open([], {
     'orgs.connect': input => {
       sent.push(input)
       return org('contoso', { state: 'signing-in', account: null })
@@ -102,6 +102,7 @@ test('connect with the Azure CLI sends no token', async () => {
   await panel.type({ label: 'Organization' }, 'contoso')
   await panel.press({ text: 'Connect' })
   assert.deepEqual(sent, [{ orgInput: 'contoso', method: 'azure-cli' }])
+  assert.equal(requestsTo(host, 'orgs.connect')[0]?.timeoutMs, 90000)
 })
 
 test('switching away from the token method discards a typed token', async () => {

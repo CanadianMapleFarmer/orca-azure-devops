@@ -1,6 +1,6 @@
 import { atom, Button, Callout, Heading, Input, plugin, RadioGroup, read, Row, set, Spinner, Stack, update, type OrcaNode } from 'orca'
 import type { ConnectFailure, ConnectionMethod, OrgStatus } from '../shared/types'
-import { actionError, activeOrg, messageOf, orgs, view } from './state'
+import { actionError, activeOrg, LONG_WAIT, messageOf, orgs, view } from './state'
 
 const METHODS = [
   { value: 'azure-cli', label: 'Azure CLI (no setup)' },
@@ -69,7 +69,7 @@ async function connect(): Promise<void> {
   set(actionError, null)
   if (chosen === 'pat') set(view, 'setup')
   try {
-    const status = await plugin.request('orgs.connect', request)
+    const status = await plugin.request('orgs.connect', request, LONG_WAIT)
     if (status.state === 'error') {
       set(setupError, status.message ?? 'Sign-in failed.')
       set(view, 'setup')
