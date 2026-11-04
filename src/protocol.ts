@@ -15,12 +15,18 @@ declare module 'orca' {
     'work.snapshot': { input: { org: string }; output: WorkSnapshot }
     'work.refresh': { input: { org: string }; output: WorkSnapshot }
     'work.details': { input: { org: string; id: number }; output: WorkItemDetails }
-    'work.move': { input: { org: string; id: number; rev: number; to: MoveTarget }; output: WorkItemSummary }
+    'work.move': {
+      input: { org: string; id: number; rev: number; to: MoveTarget; board?: { teamId: string; boardId: string } }
+      output: WorkItemSummary
+    }
     'work.comment': { input: { org: string; id: number; text: string }; output: WorkComment }
-    'work.linkPr': { input: { org: string; id: number; rev: number; prUrl: string }; output: WorkItemSummary }
+    'work.linkPr': {
+      input: { org: string; id: number; rev: number; prUrl: string; board?: { teamId: string; boardId: string } }
+      output: WorkItemSummary
+    }
     'work.board': {
       input: { org: string; projectId: string; teamId: string; boardId?: string; everyone: boolean }
-      output: { board: BoardConfig; items: WorkItemSummary[] }
+      output: { board: BoardConfig; items: WorkItemSummary[]; message?: string }
     }
     'work.openBoard': { input: { org: string }; output: { opened: boolean; message?: string } }
     'work.dismissNudge': { input: { org: string; itemId: number; prId: number }; output: { ok: true } }

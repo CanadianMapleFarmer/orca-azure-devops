@@ -6,8 +6,10 @@ export const ORG_URL = 'https://dev.azure.com/contoso'
 export const PROJECT = '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d'
 export const TEAM = '6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e'
 export const STORIES = 'e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091'
+export const FEATURES = 'd1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80'
 export const REPO = '7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f'
 export const WEF = 'WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban'
+export const FEATURES_WEF = 'WEF_8D2E3F4A5B6C4D7E9F0A1B2C3D4E5F60_Kanban'
 export const BOARDS = { projectId: PROJECT, projectName: 'Fabrikam Web', teamId: TEAM, teamName: 'Platform' }
 
 export function fixture<T = any>(name: string): T {
@@ -21,9 +23,9 @@ export interface AdoCall {
   body: any
 }
 
-type Override = { match: (call: AdoCall) => boolean; respond: (call: AdoCall) => Response }
+type Override = { match: (call: AdoCall) => boolean; respond: (call: AdoCall) => Response | Promise<Response> }
 
-const TYPE_STATES: Record<string, string> = { 'User Story': 'states-user-story', Bug: 'states-bug', Task: 'states-task' }
+const TYPE_STATES: Record<string, string> = { 'User Story': 'states-user-story', Bug: 'states-bug', Task: 'states-task', Feature: 'states-user-story' }
 const PULL_REQUESTS: Record<number, string> = { 321: 'pull-request-completed', 322: 'pull-request-active' }
 
 function extraItems(): RawWorkItem[] {
@@ -34,7 +36,13 @@ function extraItems(): RawWorkItem[] {
     fields: { 'System.TeamProject': 'Fabrikam Web', ...fields }
   })
   return [
-    item(1100, { 'System.WorkItemType': 'Feature', 'System.Title': 'Vehicle search', 'System.State': 'Active' }),
+    item(1100, {
+      'System.WorkItemType': 'Feature',
+      'System.Title': 'Vehicle search',
+      'System.State': 'Active',
+      'System.ChangedDate': '2026-10-28T10:00:00Z',
+      [`${FEATURES_WEF}.Column`]: 'Active'
+    }),
     item(1207, {
       'System.WorkItemType': 'Task',
       'System.Title': 'Write the filter tests',
@@ -68,6 +76,7 @@ export function fakeAdo() {
     if (method === 'GET' && path === `${work}/backlogconfiguration`) return json(200, fixture('backlog-configuration'))
     if (method === 'GET' && path === `${work}/boards`) return json(200, fixture('boards'))
     if (method === 'GET' && path === `${work}/boards/${STORIES}`) return json(200, fixture('board-stories'))
+    if (method === 'GET' && path === `${work}/boards/${FEATURES}`) return json(200, fixture('board-features'))
     if (method === 'GET' && path === `${work}/teamsettings/teamfieldvalues`) return json(200, fixture('team-field-values'))
     const states = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workitemtypes/([^/]+)/states$`).exec(path)
     if (method === 'GET' && states && TYPE_STATES[states[1]]) return json(200, fixture(TYPE_STATES[states[1]]))
@@ -124,8 +133,23 @@ export function fakeAdo() {
     calls,
     items,
     state,
-    on(match: (call: AdoCall) => boolean, respond: (call: AdoCall) => Response): void {
+    on(match: (call: AdoCall) => boolean, respond: (call: AdoCall) => Response | Promise<Response>): void {
       overrides.unshift({ match, respond })
+    },
+    hold(match: (call: AdoCall) => boolean): { release(): void } {
+      let release = () => {}
+      const gate = new Promise<void>(resolve => (release = resolve))
+      let held = false
+      overrides.unshift({
+        match: call => !held && match(call),
+        respond: async call => {
+          held = true
+          const response = route(call)
+          await gate
+          return response
+        }
+      })
+      return { release: () => release() }
     },
     clear(): void {
       overrides.length = 0

@@ -7,7 +7,10 @@ import type { StorePort } from '../connections'
 import { createScheduler } from '../poll/scheduler'
 import {
   BOARDS,
+  fixture,
   fakeAdo,
+  FEATURES,
+  FEATURES_WEF,
   isBatch,
   isPatch,
   isPullRequest,
@@ -515,12 +518,14 @@ test('the board loads every 30 s while a board is visible', async () => {
   assert.equal(h.ado.count(isBoardWiql), 3, 'a hidden board is not polled')
 
   h.service.visibility({ surface: 'board', org: ORG, visible: true })
-  await h.clock.tick(0)
-  assert.equal(h.ado.count(isBoardWiql), 4)
+  await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
+  assert.equal(h.ado.count(isBoardWiql), 4, 'a board shown again is asked for again')
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isBoardWiql), 5)
 
   h.setOrgs([status({ state: 'expired' })])
   await h.clock.tick(5 * MINUTE)
-  assert.equal(h.ado.count(isBoardWiql), 4, 'a board of an org that is not connected is not polled')
+  assert.equal(h.ado.count(isBoardWiql), 5, 'a board of an org that is not connected is not polled')
 })
 
 test('details load the item with its description, comments and links', async () => {
@@ -533,4 +538,192 @@ test('details load the item with its description, comments and links', async () 
 
   const added = await h.service.comment(ORG, 1204, 'Ready for review')
   assert.deepEqual(added, { id: 77, author: 'Alex Contoso', createdAt: Date.parse('2026-11-04T09:00:00Z'), textMd: 'Ready for review' })
+})
+
+const isStoriesWiql = (call: AdoCall) => isBoardWiql(call) && call.body.query.includes("'User Story'")
+const isFeaturesWiql = (call: AdoCall) => isBoardWiql(call) && call.body.query.includes("IN ('Feature')")
+
+function boardIds(h: ReturnType<typeof harness>, stories: number[], features: number[] = [1100]): void {
+  const ids = (list: number[]) => json(200, { workItems: list.map(id => ({ id })) })
+  h.ado.on(isStoriesWiql, () => ids(stories))
+  h.ado.on(isFeaturesWiql, () => ids(features))
+}
+
+const STORIES_BOARD = { org: ORG, projectId: PROJECT, teamId: TEAM, boardId: STORIES }
+const FEATURES_BOARD = { org: ORG, projectId: PROJECT, teamId: TEAM, boardId: FEATURES }
+
+test('a move on a Features board uses that board even when the item is also in "other"', async () => {
+  const h = harness()
+  h.ado.state.wiql = [1204, 1207, 1205, 1208, 1100]
+  boardIds(h, [1204, 1205])
+  assert.ok(item(await h.service.refresh(ORG), 1100), 'the Feature is in "other"')
+  const view = await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  assert.deepEqual(view.items[0].targets.columns, ['New', 'Active', 'Closed'])
+
+  const moved = await h.service.move({ org: ORG, id: 1100, rev: 1, to: { column: 'Closed' }, board: { teamId: TEAM, boardId: FEATURES } })
+  assert.deepEqual(h.ado.calls.find(isPatch)?.body, [
+    { op: 'test', path: '/rev', value: 1 },
+    { op: 'replace', path: '/fields/System.State', value: 'Closed' },
+    { op: 'replace', path: `/fields/${FEATURES_WEF}.Column`, value: 'Closed' }
+  ])
+  assert.deepEqual([moved.rev, moved.column, moved.state], [2, 'Closed', 'Closed'])
+
+  const linked = await h.service.linkPr({
+    org: ORG,
+    id: 1100,
+    rev: 2,
+    prUrl: `${ORG_URL}/Fabrikam%20Web/_git/web-app/pullrequest/322`,
+    board: { teamId: TEAM, boardId: FEATURES }
+  })
+  assert.equal(linked.column, 'Closed', 'read with the Features board fields')
+})
+
+test('without a board, a move uses the first open board that maps the item type, then the "mine" board', async () => {
+  const h = harness()
+  h.ado.state.wiql = [1204, 1207, 1205, 1208, 1100]
+  boardIds(h, [1204, 1205])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+
+  await h.service.move({ org: ORG, id: 1100, rev: 1, to: { column: 'Closed' } })
+  await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  const patches = h.ado.calls.filter(isPatch).map(call => call.body.map((op: { path: string }) => op.path))
+  assert.deepEqual(patches, [
+    ['/rev', '/fields/System.State', `/fields/${FEATURES_WEF}.Column`],
+    ['/rev', '/fields/System.State', `/fields/${WEF}.Column`, `/fields/${WEF}.Column.Done`]
+  ])
+})
+
+test('a move naming a board that is not loaded loads its configuration first', async () => {
+  const h = harness()
+  await h.service.move({ org: ORG, id: 1100, rev: 1, to: { column: 'Closed' }, board: { teamId: TEAM, boardId: FEATURES } })
+  assert.ok(h.ado.calls.some(call => call.path.endsWith(`/_apis/work/boards/${FEATURES}`)))
+  assert.equal(h.ado.calls.find(isPatch)?.body[2].path, `/fields/${FEATURES_WEF}.Column`)
+})
+
+test('a panel move tells an open board that shows the item', async () => {
+  const h = harness()
+  boardIds(h, [1204, 1205])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...STORIES_BOARD, everyone: false })
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  const served = await h.service.board({ ...STORIES_BOARD, everyone: false })
+  assert.deepEqual(served.items.find(entry => entry.id === 1204), moved)
+})
+
+test('a refused move of an item only on the board refreshes the board', async () => {
+  const h = harness()
+  boardIds(h, [1206])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.ado.items.get(1206)!.rev = 13
+
+  const error = await rejection(h.service.move({ org: ORG, id: 1206, rev: 12, to: { column: 'Resolved' }, board: { teamId: TEAM, boardId: STORIES } }))
+  assert.equal(error.message, CONFLICT)
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.equal((await h.service.board({ ...STORIES_BOARD, everyone: true })).items[0].rev, 13)
+})
+
+test('a "mine" load in flight when a move lands does not bring the old item back', async () => {
+  const h = harness()
+  await h.service.refresh(ORG)
+  const held = h.ado.hold(call => isBatch(call) && call.body.ids.length === 4)
+  const polling = h.service.refresh(ORG)
+  await drain()
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  held.release()
+  const landed = await polling
+  assert.deepEqual(item(landed, 1204), moved)
+  assert.deepEqual(item(h.posts.at(-1), 1204), moved)
+
+  h.ado.items.get(1204)!.rev = 11
+  assert.equal(item(await h.service.refresh(ORG), 1204)?.rev, 11)
+})
+
+test('a board load in flight when a move lands does not bring the old item back', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: false })
+  const held = h.ado.hold(call => isBatch(call) && call.body.ids.join() === '1204,1205')
+  await h.clock.tick(30_000)
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' }, board: { teamId: TEAM, boardId: STORIES } })
+  held.release()
+  await drain()
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: false })).items[0], moved)
+  assert.equal(h.boardPosts.length, 1, 'only the move changed the board')
+})
+
+test('hiding the boards drops them, and only a board asked for again polls', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: false })
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 2])
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: false })
+  await h.clock.tick(MINUTE)
+  h.service.visibility({ surface: 'board', org: ORG, visible: true })
+  await h.clock.tick(MINUTE)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 2])
+
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 4])
+})
+
+test('an in-flight load of a signed-out or removed org posts nothing', async () => {
+  for (const after of [[status({ state: 'disconnected', account: null })], []]) {
+    const h = harness()
+    const held = h.ado.hold(isWiql)
+    const loading = h.service.refresh(ORG).catch(() => null)
+    await drain()
+    h.setOrgs(after)
+    held.release()
+    await loading
+    assert.deepEqual(h.posts, [], JSON.stringify(after))
+  }
+})
+
+test('a stale-rev refusal whose reload fails still reports the conflict', async () => {
+  for (const status of [409, 412]) {
+    const h = harness()
+    await h.service.refresh(ORG)
+    h.ado.on(isPatch, () => json(status, { message: 'TF26071: This work item has been changed by someone else since you opened it.' }))
+    h.ado.on(isBatch, () => json(500, { message: 'TF246017: the database is unavailable.' }))
+    const error = await rejection(h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } }))
+    assert.deepEqual({ code: error.code, message: error.message }, { code: 'conflict', message: CONFLICT }, String(status))
+  }
+})
+
+test('a board carries the PR-status scope message while chips are off', async () => {
+  const h = harness()
+  boardIds(h, [1204])
+  h.ado.on(isPullRequest, () => json(403, { message: 'TF401027: You need the Git GenericRead permission.' }))
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  assert.equal(view.message, NEEDS_CODE_READ)
+  assert.deepEqual(view.items[0].prs, [])
+})
+
+test('without a board, a move prefers an open board over the "mine" board when both map the type', async () => {
+  const h = harness()
+  const team = '7b8c9d0e-3333-4c4d-9e5f-2a3b4c5d6e7f'
+  const boardId = 'f4e5d6c7-6666-4f70-8a8c-5d6e7f8091a3'
+  const otherWef = 'WEF_0A1B2C3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban'
+  const stories = JSON.parse(JSON.stringify(fixture('board-stories')).replaceAll(WEF, otherWef))
+  const teamPath = `/${ORG}/${PROJECT}/${team}/_apis`
+  h.ado.on(call => call.path === `${teamPath}/work/boards/${boardId}`, () => json(200, { ...stories, id: boardId }))
+  h.ado.on(call => call.path === `${teamPath}/work/teamsettings/teamfieldvalues`, () => json(200, fixture('team-field-values')))
+  h.ado.on(call => call.path === `${teamPath}/wit/wiql`, () => json(200, { workItems: [{ id: 1204 }] }))
+  await h.service.refresh(ORG)
+  await h.service.board({ org: ORG, projectId: PROJECT, teamId: team, boardId, everyone: true })
+
+  await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  assert.equal(h.ado.calls.find(isPatch)?.body[2].path, `/fields/${otherWef}.Column`)
 })

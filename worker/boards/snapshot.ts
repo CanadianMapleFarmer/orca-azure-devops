@@ -76,6 +76,11 @@ export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number)
   return { raw, item: items[0] }
 }
 
+export async function restate(source: ItemSource, cfg: BoardConfig, raw: RawWorkItem, like: WorkItemSummary): Promise<WorkItemSummary> {
+  const base = toSummary(raw, cfg, source.orgUrl)
+  return itemOf(base, like.parentTitle, like.prs, cfg, await offBoardStates(source, cfg, [base]))
+}
+
 export function isOnBoard(item: { type: string }, cfg: BoardConfig): boolean {
   return cfg.requirementTypes.includes(item.type)
 }
@@ -123,21 +128,21 @@ function isDone(base: Base, states: StatesByType): boolean {
 async function summarize(source: ItemSource, cfg: BoardConfig, bases: Base[], states: StatesByType): Promise<Loaded> {
   const [titles, chips] = await Promise.all([parentTitles(source, cfg, bases), source.chips(bases.flatMap(base => base.prRefs))])
   const byPr = new Map((chips ?? []).map(chip => [chip.prId, chip]))
-  const items = bases.map(({ prRefs, ...base }): WorkItemSummary => {
-    const prIds = [...new Set(prRefs.map(ref => ref.prId))]
-    const item: WorkItemSummary = {
-      ...base,
-      parentTitle: base.parentId === null ? null : titles.get(base.parentId) || null,
-      prs: prIds.flatMap(prId => byPr.get(prId) ?? []),
-      targets: { columns: [], states: [] }
-    }
-    const typeStates = states.get(item.type)
-    item.targets = typeStates
-      ? { columns: [], states: stateTargets(typeStates.map(state => state.name), item.state) }
-      : { columns: targetsFor(item, cfg).columns, states: [] }
-    return item
+  const items = bases.map(base => {
+    const parentTitle = base.parentId === null ? null : titles.get(base.parentId) || null
+    const prs = [...new Set(base.prRefs.map(ref => ref.prId))].flatMap(prId => byPr.get(prId) ?? [])
+    return itemOf(base, parentTitle, prs, cfg, states)
   })
   return { items, chipsOff: chips === null }
+}
+
+function itemOf({ prRefs: _, ...base }: Base, parentTitle: string | null, prs: PrChip[], cfg: BoardConfig, states: StatesByType): WorkItemSummary {
+  const item: WorkItemSummary = { ...base, parentTitle, prs, targets: { columns: [], states: [] } }
+  const typeStates = states.get(item.type)
+  item.targets = typeStates
+    ? { columns: [], states: stateTargets(typeStates.map(state => state.name), item.state) }
+    : { columns: targetsFor(item, cfg).columns, states: [] }
+  return item
 }
 
 async function parentTitles(source: ItemSource, cfg: BoardConfig, bases: Base[]): Promise<Map<number, string>> {
