@@ -4,6 +4,8 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import type { OrgStatus } from '../src/shared/types'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
+import { listProjects, listTeams } from './ado/core'
+import { AdoError } from './ado/http'
 import { createConnections } from './connections'
 import { statusBarFor, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
@@ -43,6 +45,21 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('orgs.remove', async input => {
     await connections.remove(input.org)
     return { ok: true as const }
+  })
+  orca.panels.handle('ado.projects', input => listProjects(connections.http, input.org))
+  orca.panels.handle('ado.teams', input => listTeams(connections.http, input.org, input.projectId))
+  orca.panels.handle('orgs.setBoards', async ({ org, projectId, teamId }) => {
+    const project = (await listProjects(connections.http, org)).find(item => item.id === projectId)
+    const team = project && (await listTeams(connections.http, org, projectId)).find(item => item.id === teamId)
+    if (!project || !team) throw new AdoError('bad_request', 400, 'That project or team no longer exists.')
+    return connections.update(org, { boards: { projectId, projectName: project.name, teamId, teamName: team.name } })
+  })
+  orca.panels.handle('orgs.setCodeProjects', async ({ org, projects }) => {
+    if (projects === 'all') return connections.update(org, { codeProjects: 'all' })
+    const known = new Map((await listProjects(connections.http, org)).map(project => [project.id, project]))
+    const chosen = projects.flatMap(id => known.get(id) ?? [])
+    if (chosen.length !== projects.length) throw new AdoError('bad_request', 400, 'One or more projects no longer exist.')
+    return connections.update(org, { codeProjects: chosen })
   })
   orca.commands.register('status', async () => statusText(await connections.list()))
   showStatus(await connections.list())
