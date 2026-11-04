@@ -181,25 +181,54 @@ test('chips show merge and build state', async () => {
   await open(
     snapshotOf({
       mine: [
+        item(101, { prs: [pr(1, { target: 'main', state: 'merged' }), pr(2, { target: 'release', state: 'open', build: 'running' })] }),
+        item(102, { prs: [pr(3, { target: 'dev', state: 'open', build: 'failed' }), pr(4, { target: 'hotfix', state: 'open', build: 'succeeded' })] }),
+        item(103, { prs: [pr(5, { target: 'next', state: 'open', build: 'none' }), pr(6, { target: 'old', state: 'abandoned', build: 'none' })] })
+      ]
+    })
+  )
+  assert.deepEqual(chips(/main|release|dev|hotfix|next|old/), [
+    { text: 'main ✓', tone: 'success' },
+    { text: 'release ● build', tone: 'warning' },
+    { text: 'dev ✗ build', tone: 'danger' },
+    { text: 'hotfix ·', tone: 'neutral' },
+    { text: 'next ·', tone: 'neutral' },
+    { text: 'old abandoned', tone: 'neutral' }
+  ])
+})
+
+test('a card shows at most two chips and counts the rest', async () => {
+  await open(
+    snapshotOf({
+      mine: [
         item(101, {
           prs: [
             pr(1, { target: 'main', state: 'merged' }),
             pr(2, { target: 'release', state: 'open', build: 'running' }),
             pr(3, { target: 'dev', state: 'open', build: 'failed' }),
-            pr(4, { target: 'hotfix', state: 'open', build: 'succeeded' }),
-            pr(5, { target: 'next', state: 'open', build: 'none' })
+            pr(4, { target: 'next', state: 'open', build: 'none' })
           ]
-        })
+        }),
+        item(102, { prs: [pr(5, { target: 'main', state: 'merged' }), pr(6, { target: 'dev', state: 'merged' })] })
       ]
     })
   )
-  assert.deepEqual(chips(/main|release|dev|hotfix|next/), [
+  assert.deepEqual(chips(/./).filter(chip => chip.text !== 'Stories' && chip.text !== 'Connected'), [
     { text: 'main ✓', tone: 'success' },
     { text: 'release ● build', tone: 'warning' },
-    { text: 'dev ✗ build', tone: 'danger' },
-    { text: 'hotfix ·', tone: 'neutral' },
-    { text: 'next ·', tone: 'neutral' }
+    { text: '+2', tone: 'neutral' },
+    { text: 'main ✓', tone: 'success' },
+    { text: 'dev ✓', tone: 'success' }
   ])
+})
+
+test('400 cards with four chips each still render', async () => {
+  const mine = Array.from({ length: 400 }, (_, index) =>
+    item(index + 1, { prs: [1, 2, 3, 4].map(number => pr(index * 4 + number, { state: 'open', build: 'running' })) })
+  )
+  await open(snapshotOf({ mine }))
+  assert.equal(panel.findAll({ type: 'Card' }).length, 400)
+  assert.equal(panel.findAll({ type: 'Badge', text: '+2' }).length, 400)
 })
 
 test('the header shows the board name and a refresh that replaces the snapshot', async () => {
@@ -616,6 +645,73 @@ test('switching organization loads that org and drops the old list', async () =>
   assert.deepEqual(inputsTo(host, 'work.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
   await panel.post('work.changed', snapshotOf({ org: 'contoso', mine: [item(102, { title: 'Late contoso post' })] }))
   assert.deepEqual(titles(), ['fabrikam story'])
+})
+
+const later = <T,>(ms: number, run: () => T): Promise<T> =>
+  new Promise((resolve, reject) =>
+    setTimeout(() => {
+      try {
+        resolve(run())
+      } catch (error) {
+        reject(error)
+      }
+    }, ms)
+  )
+
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+test('a slow snapshot for the org that was left never replaces the new list', async () => {
+  await open(
+    input =>
+      later(input.org === 'contoso' ? 120 : 5, () =>
+        snapshotOf({ org: input.org, mine: [item(input.org === 'contoso' ? 101 : 301, { title: `${input.org} story` })] })
+      ),
+    {},
+    { orgs: [org('contoso'), org('fabrikam')], persisted: { plugin: { activeOrg: 'fabrikam' } } }
+  )
+  assert.deepEqual(titles(), ['fabrikam story'])
+  const toContoso = panel.select({ label: 'Organization' }, 'contoso')
+  await pause(20)
+  await panel.select({ label: 'Organization' }, 'fabrikam')
+  await toContoso
+  assert.deepEqual(titles(), ['fabrikam story'])
+  assert.equal(panel.find({ type: 'Skeleton' }), null)
+})
+
+test('a slow failure for the org that was left does not replace the message for the new org', async () => {
+  let fabrikamLoads = 0
+  await open(
+    input => {
+      if (input.org === 'contoso') return later<WorkSnapshot>(100, () => Promise.reject(hostError('action_failed', 'Contoso is unreachable.')) as never)
+      fabrikamLoads += 1
+      if (fabrikamLoads === 1) return snapshotOf({ org: 'fabrikam', mine: [item(301, { title: 'fabrikam story' })] })
+      return later<WorkSnapshot>(30, () => Promise.reject(hostError('action_failed', 'Fabrikam is unreachable.')) as never)
+    },
+    {},
+    { orgs: [org('contoso'), org('fabrikam')], persisted: { plugin: { activeOrg: 'fabrikam' } } }
+  )
+  assert.deepEqual(titles(), ['fabrikam story'])
+  const toContoso = panel.select({ label: 'Organization' }, 'contoso')
+  await pause(10)
+  await panel.select({ label: 'Organization' }, 'fabrikam')
+  await toContoso
+  assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
+  assert.equal(panel.find({ type: 'Callout' })?.text, 'Fabrikam is unreachable.')
+  assert.ok(panel.find({ type: 'Button', text: 'Try again' }))
+})
+
+test('the snapshot and visibility do not depend on queueMicrotask', async () => {
+  const original = globalThis.queueMicrotask
+  globalThis.queueMicrotask = () => {
+    throw new Error('queueMicrotask is not available')
+  }
+  try {
+    const host = await open(snapshotOf({ mine: [item(101)] }))
+    assert.deepEqual(titles(), ['Story 101'])
+    assert.deepEqual(inputsTo(host, 'ui.visibility'), [{ surface: 'work', org: 'contoso', visible: true }])
+  } finally {
+    globalThis.queueMicrotask = original
+  }
 })
 
 test('switching organization closes an open details view', async () => {

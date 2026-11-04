@@ -74,7 +74,7 @@ export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
     : null
   const watching = hostVisible !== null && read(hostVisible)
   const visibleOrg = connected && onScreen && watching && read(tab) === 'work' ? connected.org : null
-  queueMicrotask(() => align(wanted, visibleOrg))
+  void Promise.resolve().then(() => align(wanted, visibleOrg))
 }
 
 export function acceptChange(next: WorkSnapshot): void {
