@@ -1,4 +1,5 @@
 const ORG_NAME = /^[a-z0-9][a-z0-9-]{0,49}$/
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALL_ZERO_TENANT = '00000000-0000-0000-0000-000000000000'
 const LEGACY_HOST_SUFFIX = '.visualstudio.com'
 
@@ -25,7 +26,7 @@ export async function discoverTenant(org: string, fetchFn: typeof fetch): Promis
   try {
     const res = await fetchFn(`https://vssps.dev.azure.com/${org}`, { method: 'HEAD' })
     const tenant = res.headers.get('x-vss-resourcetenant')
-    return tenant && tenant !== ALL_ZERO_TENANT ? tenant : null
+    return tenant && GUID.test(tenant) && tenant !== ALL_ZERO_TENANT ? tenant : null
   } catch {
     return null
   }

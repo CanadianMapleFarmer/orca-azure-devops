@@ -36,6 +36,17 @@ test('discoverTenant returns null for the all-zero tenant of an MSA-backed org',
   assert.equal(await discoverTenant('contoso', fake as typeof fetch), null)
 })
 
+test('discoverTenant returns null when the header is not a GUID', async () => {
+  const fake = async () => new Response(null, { status: 404, headers: { 'x-vss-resourcetenant': 'not-a-guid' } })
+  assert.equal(await discoverTenant('contoso', fake as typeof fetch), null)
+})
+
+test('discoverTenant accepts an upper-case GUID', async () => {
+  const fake = async () =>
+    new Response(null, { status: 404, headers: { 'x-vss-resourcetenant': 'ABCDEF01-2222-3333-4444-555555555555' } })
+  assert.equal(await discoverTenant('contoso', fake as typeof fetch), 'ABCDEF01-2222-3333-4444-555555555555')
+})
+
 test('discoverTenant returns null when the request fails', async () => {
   const fake = async () => {
     throw new TypeError('fetch failed')
