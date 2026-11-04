@@ -1,0 +1,138 @@
+import { Badge, Box, Button, Callout, Collapsible, EmptyState, IconButton, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import type { OrgStatus } from '../../shared/types'
+import type { WorkItemSummary, WorkSnapshot } from '../../shared/work'
+import { openSettings } from '../org-settings'
+import { ItemCard } from './item-card'
+import { ItemDetails } from './item-details'
+import { dismiss, load, move, NO_BOARDS, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
+
+function columnGroups(current: WorkSnapshot): { name: string; items: WorkItemSummary[] }[] {
+  const names = current.board?.columns.map(column => column.name) ?? []
+  const groups = new Map(names.map(name => [name, [] as WorkItemSummary[]]))
+  for (const item of current.mine) {
+    const name = item.column !== null && groups.has(item.column) ? item.column : (names[0] ?? item.column ?? 'No column')
+    const list = groups.get(name)
+    if (list) list.push(item)
+    else groups.set(name, [item])
+  }
+  return [...groups].filter(([, items]) => items.length > 0).map(([name, items]) => ({ name, items }))
+}
+
+function Header({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+  return (
+    <Stack gap="xs">
+      <Row justify="between" align="center" gap="sm">
+        <Box grow shrink minWidth={0}>
+          <Row gap="sm" align="center" wrap>
+            {current.board ? <Badge>{current.board.boardName}</Badge> : null}
+            <Text muted size="sm">
+              Updated <RelativeTime at={current.updatedAt} />
+            </Text>
+          </Row>
+        </Box>
+        <Row gap="xs" align="center">
+          <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
+          <IconButton icon="open-external" label="Open board" variant="ghost" size="sm" onPress={() => openBoard(org)} />
+        </Row>
+      </Row>
+      {current.message && current.stale ? (
+        <Text size="sm" tone="warning">
+          {current.message}
+        </Text>
+      ) : null}
+      {current.message && !current.stale ? (
+        <Text size="sm" muted>
+          {current.message}
+        </Text>
+      ) : null}
+    </Stack>
+  )
+}
+
+function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+  const listed = current.nudges.flatMap(nudge => {
+    const item = current.mine.find(candidate => candidate.id === nudge.itemId)
+    return item ? [{ nudge, item }] : []
+  })
+  if (listed.length === 0) return null
+  return (
+    <Stack gap="sm">
+      {listed.map(({ nudge, item }) => (
+        <Callout key={`${nudge.itemId}:${nudge.prId}`} tone="accent" title={`#${nudge.itemId} — PR ${nudge.prId} merged into ${nudge.branch}`}>
+          <Stack gap="xs">
+            <Text size="sm">{item.title}</Text>
+            <Row gap="sm" wrap>
+              <Button size="sm" onPress={() => move(org, item.id, item.rev, { column: nudge.toColumn })}>
+                {`Move to ${nudge.toColumn}`}
+              </Button>
+              <Button size="sm" variant="ghost" onPress={() => dismiss(org, nudge)}>
+                Dismiss
+              </Button>
+            </Row>
+          </Stack>
+        </Callout>
+      ))}
+    </Stack>
+  )
+}
+
+function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+  if (current.mine.length === 0 && current.other.length === 0) return <EmptyState title="Nothing assigned to you on this board" />
+  return (
+    <Stack gap="sm">
+      {columnGroups(current).map(group => (
+        <Collapsible key={`column:${group.name}`} title={`${group.name} (${group.items.length})`} defaultOpen>
+          <Stack gap="sm">
+            {group.items.map(item => (
+              <ItemCard key={item.id} org={org} item={item} />
+            ))}
+          </Stack>
+        </Collapsible>
+      ))}
+      {current.other.length > 0 ? (
+        <Collapsible key="other" title={`Other (${current.other.length})`} defaultOpen>
+          <Stack gap="sm">
+            {current.other.map(item => (
+              <ItemCard key={item.id} org={org} item={item} />
+            ))}
+          </Stack>
+        </Collapsible>
+      ) : null}
+    </Stack>
+  )
+}
+
+export function WorkTab({ org }: { org: OrgStatus }): OrcaNode {
+  if (!org.boards) {
+    return (
+      <EmptyState title={NO_BOARDS}>
+        <Button onPress={() => openSettings(org)}>Open settings</Button>
+      </EmptyState>
+    )
+  }
+  const open = read(openItem)
+  if (open?.org === org.org) return <ItemDetails org={org.org} />
+  const stored = read(snapshot)
+  const current = stored?.org === org.org ? stored : null
+  const status = read(load)
+  if (!current) {
+    if (status.status !== 'failed') return <Skeleton lines={3} label="Loading work items" />
+    return (
+      <Stack gap="sm">
+        <Callout tone="danger">{status.message}</Callout>
+        <Row gap="sm">
+          <Button onPress={retryLoad}>Try again</Button>
+        </Row>
+      </Stack>
+    )
+  }
+  const shown = read(notice)
+  return (
+    <Stack gap="md">
+      <Header org={org.org} current={current} />
+      {shown ? <Callout tone={shown.tone}>{shown.text}</Callout> : null}
+      <Nudges org={org.org} current={current} />
+      <Groups org={org.org} current={current} />
+    </Stack>
+  )
+}

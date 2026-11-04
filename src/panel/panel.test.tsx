@@ -39,7 +39,14 @@ async function closeCleanly(): Promise<void> {
 afterEach(closeCleanly)
 
 async function open(list: OrgStatus[], requests: MockRequests = {}, persisted?: { plugin?: Record<string, unknown> }) {
-  const host = mockHost({ requests: { 'orgs.list': list, ...requests } })
+  const host = mockHost({
+    requests: {
+      'orgs.list': list,
+      'ui.visibility': { ok: true },
+      'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
+      ...requests
+    }
+  })
   panel = await mount(panelModule, { host, persisted })
   return host
 }
@@ -318,13 +325,15 @@ test('connected shows who is signed in, a success badge and the four tabs', asyn
   assert.ok(panel.find({ label: 'Organization settings' }))
   assert.ok(panel.find({ label: 'Add organization' }))
   assert.ok(summaryText().includes('Tabs "Azure DevOps": "Work" selected'))
-  assert.ok(summaryText().includes('EmptyState "Coming in a later update"'))
+  assert.ok(summaryText().includes(`EmptyState "Pick a boards project and team in this org's settings."`))
   const tabs = panel.find({ type: 'Tabs' })
   assert.deepEqual(
     panel.findAll({ type: 'Tab' }).map(tab => tab.props?.label),
     ['Work', 'Pipelines', 'PRs', 'Wiki']
   )
   assert.equal(tabs?.props?.value, 'work')
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.ok(summaryText().includes('EmptyState "Coming in a later update"'))
 })
 
 test('the hub names the pinned account when the org is expired, mismatched or signed out', async () => {

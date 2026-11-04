@@ -23,6 +23,8 @@ import type { OrgState, OrgStatus } from '../shared/types'
 import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
 import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
+import { acceptChange, hideWork, syncWork, watchVisibility } from './work/state'
+import { WorkTab } from './work/work-tab'
 
 type ProblemState = Exclude<OrgState, 'connected' | 'signing-in'>
 
@@ -63,19 +65,26 @@ async function loadOrgs(): Promise<void> {
   }
 }
 
-export function setup(ctx: PanelContext): void {
+export function setup(ctx: PanelContext): () => void {
+  watchVisibility(ctx.visible)
   ctx.subscriptions.push(
     plugin.on('orgs.changed', payload => {
       set(orgs, payload.orgs)
       set(listing, { status: 'ready' })
       syncSettings(payload.orgs)
     }),
-    plugin.on('orgs.connectFailed', showConnectFailure)
+    plugin.on('orgs.connectFailed', showConnectFailure),
+    plugin.on('work.changed', acceptChange)
   )
   void loadOrgs()
+  return hideWork
 }
 
 export function TabBody(props: { tab: string }): OrcaNode {
+  if (props.tab === 'work') {
+    const org = currentOrg(read(orgs), read(activeOrg))
+    if (org) return <WorkTab org={org} />
+  }
   return <EmptyState title="Coming in a later update" />
 }
 
@@ -195,6 +204,11 @@ function Hub({ org, all }: { org: OrgStatus; all: readonly OrgStatus[] }): OrcaN
 
 export default function Panel(): OrcaNode {
   const loaded = read(listing)
+  const all = read(orgs)
+  const org = currentOrg(all, read(activeOrg))
+  const shown = read(view)
+  const editing = shown === 'settings' ? all.find(item => item.org === read(settingsOrg)) : undefined
+  syncWork(org, loaded.status === 'ready' && shown !== 'setup' && !editing)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {
     return (
@@ -204,11 +218,7 @@ export default function Panel(): OrcaNode {
       </Stack>
     )
   }
-  const all = read(orgs)
-  const org = currentOrg(all, read(activeOrg))
-  const shown = read(view)
   if (!org || shown === 'setup') return <Setup />
-  const editing = shown === 'settings' ? all.find(item => item.org === read(settingsOrg)) : undefined
   if (editing) return <OrgSettings org={editing} />
   return <Hub org={org} all={all} />
 }
