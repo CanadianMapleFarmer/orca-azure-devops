@@ -139,3 +139,8 @@ test('statusText adds the review line', () => {
   )
   assert.equal(statusText(orgs, counts({ contoso: 0 })), statusText(orgs))
 })
+
+test('one pull request to review reads in the singular', () => {
+  const orgs = [org('contoso', 'connected')]
+  assert.ok(statusText(orgs, counts({ contoso: 1 })).endsWith('\n1 pull request to review: contoso 1'))
+})

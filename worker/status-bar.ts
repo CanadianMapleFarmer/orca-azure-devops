@@ -82,7 +82,8 @@ function reviewOf(orgs: OrgStatus[], counts?: OrgCounts): { total: number; line:
     .filter(entry => entry.count > 0)
   const total = perOrg.reduce((sum, entry) => sum + entry.count, 0)
   if (total === 0) return null
-  return { total, line: `${total} pull requests to review: ${perOrg.map(entry => `${entry.org} ${entry.count}`).join(', ')}` }
+  const noun = total === 1 ? 'pull request' : 'pull requests'
+  return { total, line: `${total} ${noun} to review: ${perOrg.map(entry => `${entry.org} ${entry.count}`).join(', ')}` }
 }
 
 function toneFor(orgs: OrgStatus[]): StatusBarState['tone'] {
