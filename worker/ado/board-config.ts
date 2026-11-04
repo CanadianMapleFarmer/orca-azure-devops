@@ -1,5 +1,6 @@
 import type { BoardColumn, BoardConfig } from '../../src/shared/work'
 import { AdoError, type AdoHttp } from './http'
+import { expectText, shaped } from './shape'
 
 export interface BoardArgs {
   org: string
@@ -54,7 +55,7 @@ export async function listTeamBoards(
   args: { org: string; projectId: string; teamId: string }
 ): Promise<{ id: string; name: string }[]> {
   const data = await teamGet<{ value: { id: string; name: string }[] }>(http, args, 'boards')
-  return shape(() => data.value.map(({ id, name }) => ({ id: text(id), name: text(name) })))
+  return shape(() => data.value.map(({ id, name }) => ({ id: expectText(id), name: expectText(name) })))
 }
 
 export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<BoardConfig> {
@@ -68,17 +69,17 @@ export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<B
     org: args.org,
     projectId: args.projectId,
     teamId: args.teamId,
-    boardId: text(board.id),
-    boardName: text(board.name),
+    boardId: expectText(board.id),
+    boardName: expectText(board.name),
     requirementTypes,
     columns: board.columns.map(toColumn),
-    lanes: board.rows.map(row => ({ id: text(row.id), name: text(row.name ?? '') })),
+    lanes: board.rows.map(row => ({ id: expectText(row.id), name: expectText(row.name ?? '') })),
     fields: {
-      column: text(board.fields.columnField.referenceName),
-      columnDone: text(board.fields.doneField.referenceName),
-      lane: text(board.fields.rowField.referenceName)
+      column: expectText(board.fields.columnField.referenceName),
+      columnDone: expectText(board.fields.doneField.referenceName),
+      lane: expectText(board.fields.rowField.referenceName)
     },
-    areaPaths: areas.values.map(({ value, includeChildren }) => ({ value: text(value), includeChildren: includeChildren === true })),
+    areaPaths: areas.values.map(({ value, includeChildren }) => ({ value: expectText(value), includeChildren: includeChildren === true })),
     doneStates: Object.fromEntries(requirementTypes.map((type, index) => [type, doneLists[index]]))
   }))
 }
@@ -88,7 +89,7 @@ async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<Ra
     teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration'),
     listTeamBoards(http, args)
   ])
-  const name = shape(() => text(backlog.requirementBacklog.name))
+  const name = shape(() => expectText(backlog.requirementBacklog.name))
   const lowerName = name.toLowerCase()
   const match = boards.find(board => board.name === name) ?? boards.find(board => board.name.toLowerCase() === lowerName)
   if (!match) throw new AdoError('not_found', 404, `The team has no board named "${name}".`)
@@ -114,7 +115,7 @@ async function fetchDoneStates(http: AdoHttp, args: BoardArgs, type: string): Pr
     project: args.projectId,
     path: `/_apis/wit/workitemtypes/${encodeURIComponent(type)}/states`
   })
-  return shape(() => data.value.filter(state => DONE_CATEGORIES.has(state.category)).map(state => text(state.name)))
+  return shape(() => data.value.filter(state => DONE_CATEGORIES.has(state.category)).map(state => expectText(state.name)))
 }
 
 function requirementTypeNames(board: RawBoard): string[] {
@@ -123,25 +124,16 @@ function requirementTypeNames(board: RawBoard): string[] {
 
 function toColumn(column: RawColumn): BoardColumn {
   return {
-    id: text(column.id),
-    name: text(column.name),
+    id: expectText(column.id),
+    name: expectText(column.name),
     isSplit: column.isSplit === true,
     columnType: column.columnType,
     stateMappings: column.stateMappings ?? {}
   }
 }
 
-function text(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('expected text')
-  return value
-}
-
 function shape<T>(build: () => T): T {
-  try {
-    return build()
-  } catch {
-    throw new AdoError('server', 200, MALFORMED_MESSAGE)
-  }
+  return shaped(build, MALFORMED_MESSAGE)
 }
 
 export interface BoardConfigCache {

@@ -1,5 +1,6 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
-import { AdoError, type AdoHttp } from './http'
+import type { AdoHttp } from './http'
+import { expectList, shaped } from './shape'
 
 export interface RawWorkItem {
   id: number
@@ -28,6 +29,7 @@ export function wiqlBoard(cfg: BoardConfig, everyone: boolean): string {
   const doneStates = Object.values(cfg.doneStates).flat()
   const doneClause = notIn('[System.State]', doneStates)
   return select([
+    '[System.TeamProject] = @project',
     `[System.WorkItemType] IN (${list(cfg.requirementTypes)})`,
     areaClause(cfg.areaPaths),
     everyone ? undefined : '[System.AssignedTo] = @Me',
@@ -44,37 +46,51 @@ export async function queryIds(http: AdoHttp, org: string, projectId: string, te
     query: { $top: WIQL_TOP },
     body: { query: wiql }
   })
-  return shape(() => array(data.workItems).map(item => item.id))
+  return shape(() => expectList<{ id: number }>(data.workItems).map(item => item.id))
+}
+
+export async function queryBoardIds(
+  http: AdoHttp,
+  org: string,
+  projectId: string,
+  teamId: string,
+  cfg: BoardConfig,
+  everyone: boolean
+): Promise<number[]> {
+  if (cfg.requirementTypes.length === 0) return []
+  return queryIds(http, org, projectId, teamId, wiqlBoard(cfg, everyone))
 }
 
 export async function hydrate(http: AdoHttp, org: string, projectId: string, ids: number[]): Promise<RawWorkItem[]> {
   const found = new Map<number, RawWorkItem>()
   for (let start = 0; start < ids.length; start += BATCH_SIZE) {
-    const { data } = await http.json<{ value: RawWorkItem[] }>({
+    const { data } = await http.json<{ value: (RawWorkItem | null)[] }>({
       org,
       project: projectId,
       path: '/_apis/wit/workitemsbatch',
       method: 'POST',
-      body: { ids: ids.slice(start, start + BATCH_SIZE), $expand: 'relations' }
+      body: { ids: ids.slice(start, start + BATCH_SIZE), $expand: 'relations', errorPolicy: 'omit' }
     })
-    for (const item of shape(() => array(data.value))) found.set(item.id, item)
+    for (const item of shape(() => expectList<RawWorkItem | null>(data.value))) {
+      if (item) found.set(item.id, item)
+    }
   }
   return ids.flatMap(id => found.get(id) ?? [])
 }
 
 export function toSummary(raw: RawWorkItem, cfg: BoardConfig, orgUrl: string): Omit<WorkItemSummary, 'prs' | 'parentTitle' | 'targets'> & { prRefs: PrRef[] } {
   const { fields } = raw
-  const project = text(fields['System.TeamProject']) || cfg.projectId
+  const project = textOr(fields['System.TeamProject'], '') || cfg.projectId
   return {
     org: cfg.org,
     id: raw.id,
     rev: raw.rev,
-    type: text(fields['System.WorkItemType']),
-    title: text(fields['System.Title']),
-    state: text(fields['System.State']),
-    column: optionalText(fields[cfg.fields.column]),
+    type: textOr(fields['System.WorkItemType'], ''),
+    title: textOr(fields['System.Title'], ''),
+    state: textOr(fields['System.State'], ''),
+    column: textOr(fields[cfg.fields.column], null),
     columnDone: fields[cfg.fields.columnDone] === true,
-    lane: optionalText(fields[cfg.fields.lane]),
+    lane: textOr(fields[cfg.fields.lane], null),
     assignedTo: displayName(fields['System.AssignedTo']),
     parentId: typeof fields['System.Parent'] === 'number' ? fields['System.Parent'] : null,
     changedAt: timestamp(fields['System.ChangedDate']),
@@ -122,33 +138,20 @@ function quote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function optionalText(value: unknown): string | null {
-  return typeof value === 'string' ? value : null
+function textOr<F>(value: unknown, fallback: F): string | F {
+  return typeof value === 'string' ? value : fallback
 }
 
 function displayName(identity: unknown): string | null {
   if (typeof identity !== 'object' || identity === null) return null
-  return optionalText((identity as { displayName?: unknown }).displayName)
+  return textOr((identity as { displayName?: unknown }).displayName, null)
 }
 
 function timestamp(value: unknown): number {
-  const ms = Date.parse(text(value))
+  const ms = Date.parse(textOr(value, ''))
   return Number.isNaN(ms) ? 0 : ms
 }
 
-function array<T>(value: T[]): T[] {
-  if (!Array.isArray(value)) throw new TypeError('expected a list')
-  return value
-}
-
 function shape<T>(build: () => T): T {
-  try {
-    return build()
-  } catch {
-    throw new AdoError('server', 200, MALFORMED_MESSAGE)
-  }
+  return shaped(build, MALFORMED_MESSAGE)
 }

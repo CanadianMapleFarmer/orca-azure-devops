@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import type { PrChip } from '../../src/shared/work'
 import { AdoError, createAdoHttp } from './http'
-import { loadPrChips } from './pr-links'
+import { loadPrChips, type PrChipCache } from './pr-links'
 import type { PrRef } from './workitems'
 
 const ORG = 'contoso'
@@ -86,7 +86,7 @@ function routesFor(prId: number, status: string, evals: unknown = NO_BUILD, targ
   return { [prUrl(prId)]: pullRequest(prId, status, target), [evaluationsUrl(prId)]: evals }
 }
 
-function newCache(): Map<string, { at: number; chip: PrChip }> {
+function newCache(): PrChipCache {
   return new Map()
 }
 
@@ -203,7 +203,33 @@ test('loadPrChips skips a pull request that no longer exists and keeps the other
   const cache = newCache()
   const chips = await loadPrChips(http, ORG, [ref(321), ref(322)], cache, () => 0)
   assert.deepEqual(chips.map(chip => chip.prId), [322])
-  assert.deepEqual([...cache.keys()], ['322'])
+  assert.deepEqual([...cache.keys()].sort(), ['321', '322'])
+  assert.equal(cache.get('321')?.chip, null)
+})
+
+test('loadPrChips remembers a missing pull request for 2 min so a dead link costs one request', async () => {
+  const { http, requested } = server({})
+  const cache = newCache()
+  let now = 5_000
+  assert.deepEqual(await loadPrChips(http, ORG, [ref(321)], cache, () => now), [])
+  assert.deepEqual(requested, [prUrl(321)])
+
+  now += 2 * MINUTE - 1
+  assert.deepEqual(await loadPrChips(http, ORG, [ref(321)], cache, () => now), [])
+  assert.equal(requested.length, 1)
+
+  now += 1
+  assert.deepEqual(await loadPrChips(http, ORG, [ref(321)], cache, () => now), [])
+  assert.equal(requested.length, 2)
+})
+
+test('loadPrChips returns a pull request again once its link stops being dead', async () => {
+  const routes: Record<string, unknown> = {}
+  const { http } = server(routes)
+  const cache = newCache()
+  assert.deepEqual(await loadPrChips(http, ORG, [ref(321)], cache, () => 0), [])
+  Object.assign(routes, routesFor(321, 'active'))
+  assert.deepEqual((await loadPrChips(http, ORG, [ref(321)], cache, () => 2 * MINUTE)).map(chip => chip.prId), [321])
 })
 
 test('loadPrChips propagates errors other than a missing pull request', async () => {

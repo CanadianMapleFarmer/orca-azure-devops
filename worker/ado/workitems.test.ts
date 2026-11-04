@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import type { BoardConfig } from '../../src/shared/work'
 import { createAdoHttp } from './http'
-import { hydrate, parsePrRef, queryIds, toSummary, wiqlBoard, wiqlMine, type RawWorkItem } from './workitems'
+import { hydrate, parsePrRef, queryBoardIds, queryIds, toSummary, wiqlBoard, wiqlMine, type RawWorkItem } from './workitems'
 
 const ORG = 'contoso'
 const ORG_URL = `https://dev.azure.com/${ORG}`
@@ -54,7 +54,8 @@ function recorder(respond: (call: Call) => unknown | Promise<unknown>) {
 
 const SEARCH = [
   'SELECT [System.Id] FROM WorkItems WHERE',
-  "[System.WorkItemType] IN ('User Story', 'Bug')",
+  '[System.TeamProject] = @project',
+  "AND [System.WorkItemType] IN ('User Story', 'Bug')",
   "AND ([System.AreaPath] UNDER 'Fabrikam Web\\Platform' OR [System.AreaPath] = 'Fabrikam Web\\Shared')"
 ].join(' ')
 const RECENT_DONE = "([System.State] NOT IN ('Closed', 'Removed') OR [System.ChangedDate] >= @Today - 14)"
@@ -94,7 +95,7 @@ test('wiqlBoard escapes quotes in types, areas and states, and keeps one entry p
 
 test('wiqlBoard without done states or area paths drops those clauses', () => {
   const query = wiqlBoard(config({ areaPaths: [], doneStates: {} }), true)
-  assert.equal(query, `SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] IN ('User Story', 'Bug') ${NEWEST_FIRST}`)
+  assert.equal(query, `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.WorkItemType] IN ('User Story', 'Bug') ${NEWEST_FIRST}`)
 })
 
 test('queryIds posts the query to the team-scoped endpoint and returns the ids in order', async () => {
@@ -106,6 +107,21 @@ test('queryIds posts the query to the team-scoped endpoint and returns the ids i
     method: 'POST',
     body: { query: 'SELECT [System.Id] FROM WorkItems' }
   }])
+})
+
+test('queryBoardIds runs the board query and returns the ids', async () => {
+  const { http, calls } = recorder(() => fixture('wiql-board'))
+  const cfg = config()
+  assert.deepEqual(await queryBoardIds(http, ORG, PROJECT, TEAM, cfg, false), [1206, 1204, 1205])
+  assert.deepEqual(calls.map(call => [call.url, call.body]), [
+    [`${ORG_URL}/${PROJECT}/${TEAM}/_apis/wit/wiql?$top=500&api-version=7.1`, { query: wiqlBoard(cfg, false) }]
+  ])
+})
+
+test('queryBoardIds returns no ids without a request when the board maps no work item type', async () => {
+  const { http, calls } = recorder(() => fixture('wiql-board'))
+  assert.deepEqual(await queryBoardIds(http, ORG, PROJECT, TEAM, config({ requirementTypes: [] }), true), [])
+  assert.equal(calls.length, 0)
 })
 
 test('queryIds returns an empty list when the query matches nothing', async () => {
@@ -137,9 +153,19 @@ test('hydrate splits into 200-id batches and keeps order', async () => {
   for (const call of calls) {
     assert.equal(call.url, `${ORG_URL}/${PROJECT}/_apis/wit/workitemsbatch?api-version=7.1`)
     assert.equal(call.method, 'POST')
-    assert.deepEqual(Object.keys(call.body as object).sort(), ['$expand', 'ids'])
+    assert.deepEqual(Object.keys(call.body as object).sort(), ['$expand', 'errorPolicy', 'ids'])
     assert.equal((call.body as { $expand: string }).$expand, 'relations')
+    assert.equal((call.body as { errorPolicy: string }).errorPolicy, 'omit')
   }
+})
+
+test('hydrate skips the null entries ADO leaves for items it could not read', async () => {
+  const { http } = recorder(call => {
+    const requested = (call.body as { ids: number[] }).ids
+    return { count: requested.length, value: requested.map(id => (id === 11 ? null : rawItem(id))) }
+  })
+  const items = await hydrate(http, ORG, PROJECT, [10, 11, 12])
+  assert.deepEqual(items.map(item => item.id), [10, 12])
 })
 
 test('hydrate with no ids makes no request', async () => {

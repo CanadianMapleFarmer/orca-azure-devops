@@ -1,5 +1,6 @@
 import type { PrChip } from '../../src/shared/work'
 import { AdoError, type AdoHttp } from './http'
+import { expectList, expectText, malformed, shaped } from './shape'
 import type { PrRef } from './workitems'
 
 interface RawPullRequest {
@@ -18,6 +19,8 @@ interface RawEvaluation {
 
 type BuildState = PrChip['build']
 
+export type PrChipCache = Map<string, { at: number; chip: PrChip | null }>
+
 const CACHE_TTL_MS = 2 * 60 * 1000
 const MAX_CONCURRENT = 6
 const HEADS_PREFIX = /^refs\/heads\//
@@ -29,16 +32,16 @@ export async function loadPrChips(
   http: AdoHttp,
   org: string,
   refs: PrRef[],
-  cache: Map<string, { at: number; chip: PrChip }>,
+  cache: PrChipCache,
   now: () => number
 ): Promise<PrChip[]> {
   const distinct = [...new Map(refs.map(ref => [ref.prId, ref])).values()]
   const chips = await mapLimit(distinct, MAX_CONCURRENT, async ref => {
     const key = String(ref.prId)
     const cached = cache.get(key)
-    if (cached && now() - cached.at < CACHE_TTL_MS) return cached.chip
+    if (cached && now() - cached.at < CACHE_TTL_MS) return cached.chip ?? undefined
     const chip = await fetchChip(http, org, ref)
-    if (chip) cache.set(key, { at: now(), chip })
+    cache.set(key, { at: now(), chip: chip ?? null })
     return chip
   })
   return chips.filter((chip): chip is PrChip => chip !== undefined)
@@ -47,13 +50,13 @@ export async function loadPrChips(
 async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip | undefined> {
   const pullRequest = await fetchPullRequest(http, org, ref)
   if (!pullRequest) return undefined
-  const state = shape(() => prState(text(pullRequest.status)))
+  const state = shape(() => prState(expectText(pullRequest.status)))
   const evaluations = state === 'open' ? await fetchEvaluations(http, org, ref) : []
   return shape(() => ({
     prId: ref.prId,
     repoId: ref.repoId,
     projectId: ref.projectId,
-    target: text(pullRequest.targetRefName).replace(HEADS_PREFIX, ''),
+    target: expectText(pullRequest.targetRefName).replace(HEADS_PREFIX, ''),
     state,
     build: buildState(evaluations),
     url: pullRequestUrl(pullRequest, org, ref)
@@ -68,13 +71,13 @@ async function fetchEvaluations(http: AdoHttp, org: string, ref: PrRef): Promise
     query: { artifactId: `vstfs:///CodeReview/CodeReviewId/${ref.projectId}/${ref.prId}` },
     apiVersion: '7.1-preview.1'
   })
-  return shape(() => array(data.value))
+  return shape(() => expectList<RawEvaluation>(data.value))
 }
 
 async function fetchPullRequest(http: AdoHttp, org: string, ref: PrRef): Promise<RawPullRequest | undefined> {
   try {
     const { data } = await http.json<RawPullRequest>({ org, project: ref.projectId, path: `/_apis/git/pullrequests/${ref.prId}` })
-    return data ?? shapeError()
+    return data ?? malformed(MALFORMED_MESSAGE)
   } catch (error) {
     if (error instanceof AdoError && error.code === 'not_found') return undefined
     throw error
@@ -139,24 +142,6 @@ async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promi
   return results
 }
 
-function text(value: unknown): string {
-  if (typeof value !== 'string') throw new TypeError('expected text')
-  return value
-}
-
-function array<T>(value: T[]): T[] {
-  if (!Array.isArray(value)) throw new TypeError('expected a list')
-  return value
-}
-
-function shapeError(): never {
-  throw new AdoError('server', 200, MALFORMED_MESSAGE)
-}
-
 function shape<T>(build: () => T): T {
-  try {
-    return build()
-  } catch {
-    return shapeError()
-  }
+  return shaped(build, MALFORMED_MESSAGE)
 }
