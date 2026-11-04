@@ -57,6 +57,7 @@ test('searchIdentities queries subjects, resolves ids and skips short queries', 
   assert.equal(identities.host, 'vssps.dev.azure.com')
   assert.equal(identities.query.get('subjectDescriptors'), 'aad.Z3JhY2UtaG9wcGVy,aad.ZGVubmlzLXJpdGNoaWU,aad.YmFyYmFyYS1saXNrb3Y')
   assert.equal(identities.query.get('queryMembership'), 'None')
+  assert.equal(identities.query.get('api-version'), '7.1-preview.1')
   assert.equal(ado.calls.length, 2)
 })
 

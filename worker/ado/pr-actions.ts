@@ -40,10 +40,17 @@ export async function listReviewers(http: AdoHttp, org: string, key: PrKey): Pro
   return shaped(() => expectList<RawReviewer>(data.value).map(toReviewer), MALFORMED.pullRequest)
 }
 
-export async function addReviewer(http: AdoHttp, org: string, key: PrKey, id: string, isRequired: boolean): Promise<void> {
+export async function addReviewer(
+  http: AdoHttp,
+  org: string,
+  key: PrKey,
+  id: string,
+  isRequired: boolean
+): Promise<'added' | 'already'> {
   const existing = await listReviewers(http, org, key)
-  if (existing.some(reviewer => reviewer.id.toLowerCase() === id.toLowerCase())) return
+  if (existing.some(reviewer => reviewer.id.toLowerCase() === id.toLowerCase())) return 'already'
   await putReviewer(http, org, key, id, { vote: NO_VOTE, isRequired })
+  return 'added'
 }
 
 async function putReviewer(

@@ -4,7 +4,7 @@ import { htmlToMarkdown } from './html'
 import { AdoError, type AdoHttp } from './http'
 import { orgWebUrl } from './org'
 import { patchWorkItem } from './patch'
-import { pullRequestWebUrl } from './pr-links'
+import { pullRequestNamedUrl } from './pr-links'
 import { expectList, expectText, shaped } from './shape'
 import { hydrate, parsePrRef, PR_ARTIFACT_PREFIX, textOr, timestamp, workItemUrl, type RawWorkItem } from './workitems'
 
@@ -177,7 +177,7 @@ function pullRequestLinks(org: string, relations: Relations, chips: PrChip[]): L
       if (!ref) return { kind: 'pr', title: 'Pull request', url: link.url }
       const state = states.get(ref.prId)
       const title = `Pull request ${ref.prId}${state ? ` (${state})` : ''}`
-      return { kind: 'pr', title, url: pullRequestWebUrl(org, ref.projectId, ref.repoId, ref.prId) }
+      return { kind: 'pr', title, url: pullRequestNamedUrl(org, ref.projectId, ref.repoId, ref.prId) }
     })
 }
 

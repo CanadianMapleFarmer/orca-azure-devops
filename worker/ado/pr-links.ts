@@ -78,10 +78,10 @@ export function pullRequestUrl(
 ): string {
   return typeof webUrl === 'string' && webUrl !== ''
     ? `${webUrl}/pullrequest/${prId}`
-    : pullRequestWebUrl(org, projectIdOrName, repoIdOrName, prId)
+    : pullRequestNamedUrl(org, projectIdOrName, repoIdOrName, prId)
 }
 
-export function pullRequestWebUrl(org: string, projectIdOrName: string, repoIdOrName: string, prId: number): string {
+export function pullRequestNamedUrl(org: string, projectIdOrName: string, repoIdOrName: string, prId: number): string {
   return `${orgWebUrl(org)}/${encodeURIComponent(projectIdOrName)}/_git/${encodeURIComponent(repoIdOrName)}/pullrequest/${prId}`
 }
 

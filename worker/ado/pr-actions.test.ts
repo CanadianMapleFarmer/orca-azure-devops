@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { AutoCompleteOptions, PrKey } from '../../src/shared/prs'
-import { fakeAdo, fixture, json, ORG, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
+import { fakeAdo, fixture, isPatch, json, ORG, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { MALFORMED } from '../messages'
 import { AdoError, createAdoHttp } from './http'
 import { addReviewer, castVote, listReviewers, setAutoComplete } from './pr-actions'
@@ -14,13 +14,12 @@ const NEWCOMER = 'e5f6a7b8-5555-4eaf-9fb1-3c4d5e6f7081'
 
 const isListReviewers = (call: AdoCall) => call.method === 'GET' && call.path === REVIEWERS
 const isPutReviewer = (call: AdoCall) => call.method === 'PUT' && call.path.startsWith(`${REVIEWERS}/`)
-const isPatchPullRequest = (call: AdoCall) => call.method === 'PATCH'
 
 function setup() {
   const ado = fakeAdo()
   ado.on(isListReviewers, () => json(200, fixture('pull-request-reviewers')))
   ado.on(isPutReviewer, call => json(200, { id: call.path.split('/').pop(), ...call.body }))
-  ado.on(isPatchPullRequest, () => json(200, { pullRequestId: 4101 }))
+  ado.on(isPatch, () => json(200, { pullRequestId: 4101 }))
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   return { ado, http }
 }
@@ -46,11 +45,13 @@ test('castVote puts vote 10 on my reviewer entry and keeps the required flag', a
   assert.equal(puts[0].host, 'dev.azure.com')
 })
 
-test('castVote lets a refusal through unchanged', async () => {
+test('castVote lets a refusal through with the server message and nothing else from the body', async () => {
   const { ado, http } = setup()
-  ado.on(isPutReviewer, () => json(403, { message: 'TF401027: You need the PullRequestContribute permission.' }))
+  const refusal = 'TF401027: You need the PullRequestContribute permission.'
+  ado.on(isPutReviewer, call => json(403, { message: refusal, echoedAuthorization: call.headers.get('authorization') }))
   const error = await failure(castVote(http, ORG, KEY, 'u1', false))
-  assert.deepEqual([error.code, error.status], ['forbidden', 403])
+  assert.equal(ado.calls[0].headers.get('authorization'), 'Bearer test-credential')
+  assert.deepEqual([error.code, error.status, error.message], ['forbidden', 403, refusal])
   assert(!error.message.includes('test-credential'))
 })
 
@@ -88,27 +89,27 @@ test('setAutoComplete never bypasses policy and never sends a merge commit messa
 
 test('addReviewer puts vote 0 and the required flag', async () => {
   const { ado, http } = setup()
-  await addReviewer(http, ORG, KEY, NEWCOMER, true)
-  await addReviewer(http, ORG, KEY, NEWCOMER, false)
+  assert.equal(await addReviewer(http, ORG, KEY, NEWCOMER, true), 'added')
+  assert.equal(await addReviewer(http, ORG, KEY, NEWCOMER, false), 'added')
   const puts = ado.calls.filter(isPutReviewer)
   assert.deepEqual(puts.map(call => call.path), [`${REVIEWERS}/${NEWCOMER}`, `${REVIEWERS}/${NEWCOMER}`])
   assert.deepEqual(puts.map(call => call.body), [{ vote: 0, isRequired: true }, { vote: 0, isRequired: false }])
 })
 
-test('addReviewer never sends a vote for someone who is already a reviewer', async () => {
+test('addReviewer says already and never sends a vote for someone who is already a reviewer', async () => {
   const { ado, http } = setup()
-  for (const id of [GRACE, GRACE.toUpperCase(), TEAM, DENNIS]) await addReviewer(http, ORG, KEY, id, true)
+  for (const id of [GRACE, GRACE.toUpperCase(), TEAM, DENNIS]) assert.equal(await addReviewer(http, ORG, KEY, id, true), 'already')
   assert.equal(ado.count(isPutReviewer), 0)
   assert.equal(ado.count(isListReviewers), 4)
 })
 
 test('addReviewer reads the reviewers again on every call', async () => {
   const { ado, http } = setup()
-  await addReviewer(http, ORG, KEY, NEWCOMER, false)
+  assert.equal(await addReviewer(http, ORG, KEY, NEWCOMER, false), 'added')
   ado.on(isListReviewers, () =>
     json(200, { count: 1, value: [{ id: NEWCOMER, displayName: 'Margaret Hamilton', vote: 5, isRequired: false }] })
   )
-  await addReviewer(http, ORG, KEY, NEWCOMER, false)
+  assert.equal(await addReviewer(http, ORG, KEY, NEWCOMER, false), 'already')
   assert.equal(ado.count(isPutReviewer), 1)
 })
 

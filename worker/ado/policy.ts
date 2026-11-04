@@ -61,6 +61,7 @@ function buildStateFor(status: string): BuildState {
     case 'approved':
       return 'succeeded'
     case 'rejected':
+    case 'broken':
       return 'failed'
     default:
       return 'none'

@@ -17,7 +17,7 @@ interface RawIdentity {
   subjectDescriptor?: string
 }
 
-const GRAPH_PREVIEW_VERSION = '7.1-preview.1'
+const PREVIEW_VERSION = '7.1-preview.1'
 const MIN_QUERY_LENGTH = 2
 const MAX_SUBJECTS = 20
 
@@ -41,7 +41,7 @@ async function findSubjects(http: AdoHttp, org: string, query: string, groups: b
     host: 'vssps',
     method: 'POST',
     path: '/_apis/graph/subjectquery',
-    apiVersion: GRAPH_PREVIEW_VERSION,
+    apiVersion: PREVIEW_VERSION,
     body: { query, subjectKind: groups ? ['User', 'Group'] : ['User'] }
   })
   return shaped(
@@ -55,6 +55,7 @@ async function resolveIds(http: AdoHttp, org: string, subjects: RawSubject[]): P
     org,
     host: 'vssps',
     path: '/_apis/identities',
+    apiVersion: PREVIEW_VERSION,
     query: { subjectDescriptors: subjects.map(subject => subject.descriptor).join(','), queryMembership: 'None' }
   })
   return shaped(() => new Map(expectList<RawIdentity>(data.value).flatMap(idEntry)), MALFORMED.identity)

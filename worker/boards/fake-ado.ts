@@ -20,6 +20,7 @@ export interface AdoCall {
   method: string
   host: string
   path: string
+  headers: Headers
   query: URLSearchParams
   body: any
   signal?: AbortSignal
@@ -123,6 +124,7 @@ export function fakeAdo() {
       method: init?.method ?? 'GET',
       host: url.host,
       path: decodeURIComponent(url.pathname),
+      headers: new Headers(init?.headers),
       query: url.searchParams,
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
       signal: init?.signal ?? undefined
