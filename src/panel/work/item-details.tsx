@@ -31,7 +31,7 @@ import { openItem } from './state'
 
 type Loaded = { status: 'loading' } | { status: 'ready'; details: WorkItemDetails } | { status: 'failed'; message: string }
 type Section = 'comment' | 'link' | 'start'
-type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string }
+type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string; cancellable?: boolean }
 
 const LINK_KINDS = [
   { kind: 'parent', label: 'Parent' },
@@ -119,7 +119,13 @@ function startWorkspace(org: string, id: number): Promise<void> {
   return run(org, id, 'start', async () => {
     const { branch } = await plugin.request('work.startWorkspace', { org, id })
     if (!isOpen(org, id)) return
-    set(sectionNotice, { section: 'start', tone: 'accent', text: `Create a new workspace in Orca now. Its branch will be named ${branch}.` })
+    set(sectionNotice, { section: 'start', tone: 'accent', text: `Create a new workspace in Orca now. Its branch will be named ${branch}.`, cancellable: true })
+  })
+}
+
+function cancelWorkspace(org: string, id: number): Promise<void> {
+  return run(org, id, 'start', async () => {
+    await plugin.request('work.cancelWorkspace', {})
   })
 }
 
@@ -130,9 +136,22 @@ function startAgent(org: string, id: number): Promise<void> {
   })
 }
 
-function NoticeFor({ section }: { section: Section }): OrcaNode {
+function NoticeFor({ section, onCancel }: { section: Section; onCancel?: () => void }): OrcaNode {
   const shown = read(sectionNotice)
-  return shown?.section === section ? <Callout tone={shown.tone}>{shown.text}</Callout> : null
+  if (shown?.section !== section) return null
+  if (!shown.cancellable || !onCancel) return <Callout tone={shown.tone}>{shown.text}</Callout>
+  return (
+    <Callout tone={shown.tone}>
+      <Stack gap="xs">
+        <Text size="sm">{shown.text}</Text>
+        <Row gap="sm">
+          <Button size="sm" variant="ghost" disabled={read(working) !== null} onPress={onCancel}>
+            Cancel
+          </Button>
+        </Row>
+      </Stack>
+    </Callout>
+  )
 }
 
 function Links({ links }: { links: WorkItemDetails['links'] }): OrcaNode {
@@ -247,7 +266,7 @@ function Body({ org, details }: { org: string; details: WorkItemDetails }): Orca
         </Button>
         <Link href={item.url}>Open in Azure DevOps</Link>
       </Row>
-      <NoticeFor section="start" />
+      <NoticeFor section="start" onCancel={() => cancelWorkspace(org, item.id)} />
     </Stack>
   )
 }

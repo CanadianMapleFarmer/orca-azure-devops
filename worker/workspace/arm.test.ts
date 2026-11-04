@@ -72,6 +72,15 @@ test('an arm is taken once and reports when it expires', () => {
   assert.equal(arm.take(), null, 'single use')
 })
 
+test('a disarmed branch is not taken, so the next worktree creation passes through', () => {
+  const time = clock()
+  const arm = createArm(time.now)
+  arm.arm(ARMED)
+  arm.disarm()
+  assert.equal(arm.take(), null)
+  assert.equal(arm.claim(ARMED.branch), null)
+})
+
 test('arming again replaces the previous arm', () => {
   const time = clock()
   const arm = createArm(time.now)

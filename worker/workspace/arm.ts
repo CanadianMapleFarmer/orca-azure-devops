@@ -10,6 +10,7 @@ export interface Arm {
   arm(armed: ArmedBranch): number
   take(): ArmedBranch | null
   claim(branch: string): ArmedBranch | null
+  disarm(): void
 }
 
 function slugOf(title: string): string {
@@ -66,6 +67,9 @@ export function createArm(now: () => number): Arm {
       if (branch !== wanted && !branch.endsWith(`/${wanted}`)) return null
       taken = null
       return current.value
+    },
+    disarm() {
+      armed = null
     }
   }
 }

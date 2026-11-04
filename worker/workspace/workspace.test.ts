@@ -127,6 +127,14 @@ test('startWorkspace arms the branch from the cached item, without calling Azure
   })
 })
 
+test('a cancelled workspace start lets the next worktree creation pass through unchanged', async () => {
+  await withDesk({}, async ({ w }) => {
+    await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+    assert.deepEqual(await w.request('work.cancelWorkspace', {}), { ok: true })
+    assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
+  })
+})
+
 test('startWorkspace loads an item that is not cached and follows the branch template setting', async () => {
   await withDesk({ settings: { branchTemplate: 'users/ada/{id}-{slug}' } }, async ({ w, ado }) => {
     assert.equal((await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })).branch, 'users/ada/1204-add-vehicle-search-filters')

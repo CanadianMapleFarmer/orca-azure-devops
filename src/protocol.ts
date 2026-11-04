@@ -36,6 +36,7 @@ declare module 'orca' {
       output: { rules: { branch: string; column: string }[] }
     }
     'work.startWorkspace': { input: { org: string; id: number }; output: { branch: string; armedUntil: number } }
+    'work.cancelWorkspace': { input: {}; output: { ok: true } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
       input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
