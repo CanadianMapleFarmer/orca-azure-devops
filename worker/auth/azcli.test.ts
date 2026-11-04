@@ -3,7 +3,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
 import type { RunCommand, RunResult } from '../sys/run'
-import { ADO_RESOURCE, createAzCliProvider } from './azcli'
+import { ADO_RESOURCE, createAzCliProvider, createAzProfiles } from './azcli'
 
 const HOME = '/home/ada'
 const AZ = '/opt/homebrew/bin/az'
@@ -13,7 +13,7 @@ const TOKEN_JSON = '{"accessToken":"tok","expires_on":1793710000,"tokenType":"Be
 type RunOptions = Parameters<RunCommand>[2]
 type FsPort = Parameters<typeof createAzCliProvider>[0]['fs']
 
-function harness(reply: Partial<RunResult> | Error = {}) {
+function harness(reply: Partial<RunResult> | Error = {}, profile: 'directory' | 'file' | 'missing' = 'directory') {
   const events: string[] = []
   const runs: { file: string; args: string[]; opts: RunOptions }[] = []
   const run: RunCommand = async (file, args, opts) => {
@@ -36,7 +36,12 @@ function harness(reply: Partial<RunResult> | Error = {}) {
     },
     rm: async () => {
       events.push('rm')
-    }
+    },
+    stat: (async () => {
+      events.push('stat')
+      if (profile === 'missing') throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
+      return { isDirectory: () => profile === 'directory' }
+    }) as unknown as FsPort['stat']
   }
   const provider = createAzCliProvider({ azPath: AZ, run, home: HOME, fs })
   return { provider, runs, events, mkdirs, chmods }
@@ -175,6 +180,33 @@ test('getToken does not start az for an invalid org', async () => {
   assert.deepEqual(events, [])
 })
 
+test('getToken refuses without running az when the profile dir is missing', async () => {
+  for (const profile of ['missing', 'file'] as const) {
+    const { provider, events } = harness({ stdout: TOKEN_JSON }, profile)
+    const error = await failure(provider.getToken('contoso', 't1'))
+    assert.equal(error.message, 'Not signed in.', profile)
+    assert.deepEqual(events, ['stat'], profile)
+  }
+})
+
+test('getToken checks the profile dir before running az', async () => {
+  const { provider, events } = harness({ stdout: TOKEN_JSON })
+  await provider.getToken('contoso', 't1')
+  assert.deepEqual(events, ['stat', 'run'])
+})
+
+test('createAzProfiles finds and deletes a profile without an az binary', async () => {
+  const removed: unknown[][] = []
+  const profiles = createAzProfiles({ home: HOME, fs: { rm: async (...args: unknown[]) => { removed.push(args) } } as Pick<FsPort, 'rm'> })
+  const dir = path.join(HOME, '.orca-azure-devops', 'az', 'contoso')
+  assert.equal(profiles.profileDir('contoso'), dir)
+  assert.equal(profiles.profileDir('contoso'), harness().provider.profileDir('contoso'))
+  await profiles.signOut('contoso')
+  assert.deepEqual(removed, [[dir, { recursive: true, force: true }]])
+  await failure(profiles.signOut('../x'))
+  assert.equal(removed.length, 1)
+})
+
 test('signOut deletes the profile dir and leaves the rest of home alone', async () => {
   const home = await realFs.mkdtemp(path.join(os.tmpdir(), 'azcli-home-'))
   try {
@@ -182,6 +214,7 @@ test('signOut deletes the profile dir and leaves the rest of home alone', async 
     const fs: FsPort = {
       mkdir: realFs.mkdir,
       chmod: realFs.chmod,
+      stat: realFs.stat,
       rm: async (...args: Parameters<typeof realFs.rm>) => {
         rmCalls.push(args)
         return realFs.rm(...args)

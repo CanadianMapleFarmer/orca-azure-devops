@@ -22,6 +22,21 @@
         "ui": "components"
       }
     ],
+    "commands": [
+      {
+        "id": "status",
+        "title": "Azure DevOps: Connection status"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "status",
+        "text": "ADO",
+        "icon": "cloud",
+        "tooltip": "Azure DevOps",
+        "command": "status"
+      }
+    ],
     "settings": [
       {
         "key": "azPath",
