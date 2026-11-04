@@ -221,6 +221,16 @@ test('unmapped type moves by state only', () => {
   assert.deepEqual(buildMovePatch(task, config(), { state: 'To Do' }), [])
 })
 
+test('a mapped type with no column moves by state with no board-field write, and the board can still place it', () => {
+  const loose = item({ type: 'Bug', state: 'New', column: null })
+  assert.deepEqual(buildMovePatch(loose, config(), { state: 'Active' }), [TEST_REV, { op: 'replace', path: '/fields/System.State', value: 'Active' }])
+  assert.deepEqual(buildMovePatch(loose, config(), { column: 'Active' }), [
+    TEST_REV,
+    { op: 'replace', path: '/fields/System.State', value: 'Active' },
+    { op: 'replace', path: `/fields/${COLUMN}`, value: 'Active' }
+  ])
+})
+
 test('a mapped type cannot be moved by state', () => {
   assertRefused(() => buildMovePatch(item(), config(), { state: 'Active' }), MOVE_BY_COLUMN)
   assertRefused(() => buildMovePatch(item(), config(), { column: 'Active', state: 'Active' }), MOVE_BY_COLUMN)

@@ -57,7 +57,7 @@ export async function loadMine(source: ItemSource, cfg: BoardConfig): Promise<Lo
   const doneStates = [...new Set(Object.values(cfg.doneStates).flat())]
   const ids = await queryIds(source.http, source.org, cfg.projectId, cfg.teamId, wiqlMine(cfg, doneStates))
   const bases = await hydrateBases(source, cfg, ids)
-  const states = await offBoardStates(source, cfg, bases)
+  const states = await stateMoves(source, cfg, bases)
   return summarize(source, cfg, bases.filter(base => !isDone(base, states)), states)
 }
 
@@ -70,17 +70,21 @@ export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number)
   const [raw] = await hydrate(source.http, source.org, cfg.projectId, [id])
   if (!raw) return null
   const base = toSummary(raw, cfg, source.orgUrl)
-  const { items, chips } = await summarize(source, cfg, [base], await offBoardStates(source, cfg, [base]))
+  const { items, chips } = await summarize(source, cfg, [base], await stateMoves(source, cfg, [base]))
   return { raw, item: items[0], chips }
 }
 
 export async function restate(source: ItemSource, cfg: BoardConfig, raw: RawWorkItem, like: WorkItemSummary): Promise<WorkItemSummary> {
   const base = toSummary(raw, cfg, source.orgUrl)
-  return itemOf(base, like.parentTitle, like.prs, cfg, await offBoardStates(source, cfg, [base]))
+  return itemOf(base, like.parentTitle, like.prs, cfg, await stateMoves(source, cfg, [base]))
 }
 
 export function isOnBoard(item: { type: string }, cfg: BoardConfig): boolean {
   return cfg.requirementTypes.includes(item.type)
+}
+
+export function movesByState(item: { type: string; column: string | null }, cfg: BoardConfig): boolean {
+  return !isOnBoard(item, cfg) || item.column === null
 }
 
 export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
@@ -127,8 +131,8 @@ async function hydrateBases(source: ItemSource, cfg: BoardConfig, ids: number[])
   return raws.map(raw => toSummary(raw, cfg, source.orgUrl))
 }
 
-async function offBoardStates(source: ItemSource, cfg: BoardConfig, bases: Base[]): Promise<StatesByType> {
-  const types = [...new Set(bases.map(base => base.type).filter(type => type !== '' && !isOnBoard({ type }, cfg)))]
+async function stateMoves(source: ItemSource, cfg: BoardConfig, bases: Base[]): Promise<StatesByType> {
+  const types = [...new Set(bases.filter(base => base.type !== '' && movesByState(base, cfg)).map(base => base.type))]
   const lists = await Promise.all(types.map(type => source.states(cfg.projectId, type)))
   return new Map(types.map((type, index) => [type, lists[index]]))
 }
@@ -151,7 +155,7 @@ async function summarize(source: ItemSource, cfg: BoardConfig, bases: Base[], st
 
 function itemOf({ prRefs: _, ...base }: Base, parentTitle: string | null, prs: PrChip[], cfg: BoardConfig, states: StatesByType): WorkItemSummary {
   const item: WorkItemSummary = { ...base, parentTitle, prs, targets: { columns: [], states: [] } }
-  const typeStates = states.get(item.type)
+  const typeStates = movesByState(item, cfg) ? states.get(item.type) : undefined
   item.targets = typeStates
     ? { columns: [], states: stateTargets(typeStates.map(state => state.name), item.state) }
     : { columns: targetsFor(item, cfg).columns, states: [] }

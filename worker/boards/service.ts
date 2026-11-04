@@ -12,7 +12,7 @@ import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
-import { capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, restate, type ItemSource } from './snapshot'
+import { capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, movesByState, restate, type ItemSource } from './snapshot'
 
 export type { BoardChange, BoardRef, BoardResult }
 
@@ -117,12 +117,12 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const source = sourceOf(status)
     const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
-    const mine = items.filter(item => isOnBoard(item, cfg))
+    const mine = items.filter(item => !movesByState(item, cfg))
     return capSnapshot({
       org: status.org,
       board: cfg,
       mine,
-      other: items.filter(item => !isOnBoard(item, cfg)),
+      other: items.filter(item => movesByState(item, cfg)),
       nudges: findNudges(cfg, mine, rules, dismissed),
       updatedAt: now(),
       stale: false,

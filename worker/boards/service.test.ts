@@ -170,8 +170,8 @@ test('snapshot splits mine and other and attaches chips and parents', async () =
 
   assert.equal(snapshot.org, ORG)
   assert.equal(snapshot.board?.boardId, STORIES)
-  assert.deepEqual(snapshot.mine.map(entry => entry.id), [1204, 1205])
-  assert.deepEqual(snapshot.other.map(entry => entry.id), [1207])
+  assert.deepEqual(snapshot.mine.map(entry => entry.id), [1204])
+  assert.deepEqual(snapshot.other.map(entry => entry.id), [1207, 1205])
   assert.deepEqual(snapshot.mine[0], {
     org: ORG,
     id: 1204,
@@ -200,8 +200,8 @@ test('snapshot splits mine and other and attaches chips and parents', async () =
     ],
     targets: { columns: COLUMNS, states: [] }
   })
-  assert.equal(snapshot.mine[1].parentTitle, null)
   assert.equal(snapshot.other[0].parentTitle, 'Add vehicle search filters')
+  assert.equal(snapshot.other[1].parentTitle, null)
   assert.deepEqual(snapshot.nudges, [])
   assert.equal(snapshot.stale, false)
   assert.equal(snapshot.updatedAt, T0)
@@ -243,8 +243,23 @@ test('items of types off the board are dropped when their state is done, with st
 test('board items move by column and items off the board by state', async () => {
   const h = harness()
   const snapshot = await h.service.refresh(ORG)
-  assert.deepEqual(item(snapshot, 1205)?.targets, { columns: COLUMNS, states: [] })
+  assert.deepEqual(item(snapshot, 1204)?.targets, { columns: COLUMNS, states: [] })
   assert.deepEqual(item(snapshot, 1207)?.targets, { columns: [], states: ['New', 'Closed', 'Removed'] })
+})
+
+test('a board-type item with no column is listed under Other and moves by state, with no board-column write', async () => {
+  const h = harness()
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(snapshot.other.map(entry => entry.id), [1207, 1205])
+  assert.deepEqual(item(snapshot, 1205)?.targets, { columns: [], states: ['Active', 'Resolved', 'Closed'] })
+
+  const moved = await h.service.move({ org: ORG, id: 1205, rev: 3, to: { state: 'Active' } })
+  assert.deepEqual(h.ado.calls.find(isPatch)?.body, [
+    { op: 'test', path: '/rev', value: 3 },
+    { op: 'replace', path: '/fields/System.State', value: 'Active' }
+  ])
+  assert.deepEqual([moved.state, moved.column, moved.rev], ['Active', null, 4])
+  assert.deepEqual(h.posts.at(-1)?.other.map(entry => entry.id), [1207, 1205])
 })
 
 test('a failed refresh keeps the last snapshot as stale', async () => {
@@ -627,7 +642,7 @@ test('a forbidden PR-chip load disables chips for 10 minutes with the scope mess
   h.ado.on(isPullRequest, () => json(403, { message: 'TF401027: You need the Git GenericRead permission.' }))
   const first = await h.service.refresh(ORG)
   assert.equal(first.message, NEEDS_CODE_READ)
-  assert.deepEqual(first.mine.map(entry => [entry.id, entry.prs]), [[1204, []], [1205, []]])
+  assert.deepEqual(first.mine.map(entry => [entry.id, entry.prs]), [[1204, []]])
   assert.equal(h.ado.count(isPullRequest), 1)
 
   h.ado.clear()

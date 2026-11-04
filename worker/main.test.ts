@@ -417,8 +417,8 @@ test('work handlers serve the connected org through the boards service', async (
   await withFetch(signedIn(ado), async () => {
     await withWorker(worker, { host: boardsHost(BOARDS) }, async w => {
       const snapshot = await w.request('work.snapshot', { org: 'contoso' })
-      assert.deepEqual(snapshot.mine.map(item => item.id), [1204, 1205])
-      assert.deepEqual(snapshot.other.map(item => item.id), [1207])
+      assert.deepEqual(snapshot.mine.map(item => item.id), [1204])
+      assert.deepEqual(snapshot.other.map(item => item.id), [1207, 1205])
       assert.equal((await w.request('work.refresh', { org: 'contoso' })).board?.boardId, STORIES)
       assert.ok(workChanged(w.posts).length > 0)
 
@@ -481,7 +481,7 @@ test('org changes reach the boards service: setting a boards team starts polling
     await withWorker(worker, { host: boardsHost(null) }, async w => {
       await w.request('orgs.setBoards', { org: 'contoso', projectId: PROJECT, teamId: TEAM })
       assert.ok(await until(() => workChanged(w.posts).length > 0), 'the new job loaded and posted a snapshot')
-      assert.deepEqual(workChanged(w.posts)[0].mine.map(item => item.id), [1204, 1205])
+      assert.deepEqual(workChanged(w.posts)[0].mine.map(item => item.id), [1204])
       assert.equal(ado.calls.filter(isWiql).length, 1)
 
       await w.request('orgs.signOut', { org: 'contoso' })

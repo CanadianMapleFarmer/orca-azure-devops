@@ -21,7 +21,7 @@ export function stateTargets(allStates: string[], current: string): string[] {
 }
 
 export function buildMovePatch(item: WorkItemSummary, cfg: BoardConfig, to: MoveTarget): PatchOp[] {
-  const changes = isMapped(item, cfg) ? boardChanges(item, cfg, to) : stateChanges(item, to)
+  const changes = movesByColumn(item, cfg, to) ? boardChanges(item, cfg, to) : stateChanges(item, to)
   return changes.length === 0 ? [] : [{ op: 'test', path: '/rev', value: item.rev }, ...changes]
 }
 
@@ -66,6 +66,10 @@ function columnChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): P
 function laneChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): PatchOp[] {
   if (!cfg.lanes.some(lane => lane.name === name)) throw badRequest(UNKNOWN_LANE)
   return name === (item.lane ?? '') ? [] : [replace(fieldPath(cfg.fields.lane), name)]
+}
+
+function movesByColumn(item: WorkItemSummary, cfg: BoardConfig, to: MoveTarget): boolean {
+  return isMapped(item, cfg) && (item.column !== null || to.state === undefined)
 }
 
 function isMapped(item: WorkItemSummary, cfg: BoardConfig): boolean {
