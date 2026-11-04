@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
+import { AdoError } from '../ado/http'
 import { boardFilePath, openBoard, writeBoardFile, type HostCall } from './board-file'
 
 const TEAM = '6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e'
@@ -41,6 +42,34 @@ const untouchedFs = {
 
 test('boardFilePath names the file after the org and team inside .orca-ado', () => {
   assert.equal(boardFilePath('/repos/web-app', 'contoso', TEAM), `/repos/web-app/.orca-ado/contoso.${TEAM}.adoboard`)
+})
+
+const ESCAPES = ['../x', 'a/b']
+
+function refusedBoard(error: unknown): boolean {
+  assert.ok(error instanceof AdoError)
+  assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, "That board can't be opened."])
+  return true
+}
+
+test('boardFilePath refuses an org or team that would leave .orca-ado', () => {
+  for (const bad of ESCAPES) {
+    assert.throws(() => boardFilePath('/repos/web-app', bad, TEAM), refusedBoard)
+    assert.throws(() => boardFilePath('/repos/web-app', 'contoso', bad), refusedBoard)
+  }
+})
+
+test('writeBoardFile writes nothing for an org or team that would leave .orca-ado', async () => {
+  await withTempDir(async dir => {
+    const workspace = path.join(dir, 'web-app')
+    await fs.mkdir(workspace)
+    for (const bad of ESCAPES) {
+      await assert.rejects(writeBoardFile(fs, workspace, { org: bad, ...BOARD }), refusedBoard)
+      await assert.rejects(writeBoardFile(fs, workspace, { org: 'contoso', ...BOARD, teamId: bad }), refusedBoard)
+    }
+    assert.deepEqual(await fs.readdir(dir), ['web-app'])
+    assert.deepEqual(await fs.readdir(workspace), [])
+  })
 })
 
 test('writeBoardFile writes the file and a self-ignoring .gitignore', async () => {
@@ -102,6 +131,14 @@ test('openBoard writes the board file in the focused workspace and opens it by i
     assert.deepEqual(calls.at(-1), { method: 'editor.open', params: { workspaceId: 'ws-1', path: `.orca-ado/contoso.${TEAM}.adoboard` } })
     assert.deepEqual(JSON.parse(await fs.readFile(boardFilePath(dir, 'contoso', TEAM), 'utf8')), { org: 'contoso', ...BOARD })
   })
+})
+
+test('openBoard refuses a detached worktree whose branch it cannot match', async () => {
+  const detached = workspace({ branch: null })
+  const { call, calls } = host({ 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [detached], truncated: false } })
+  const boardOf = async () => assert.fail('the board is not looked up')
+  assert.deepEqual(await openBoard({ call, fs: untouchedFs, boardOf }, 'contoso'), { opened: false, message: NO_WORKSPACE })
+  assert.equal(calls.some(entry => entry.method === 'editor.open'), false)
 })
 
 test('openBoard matches a folder workspace by name alone', async () => {

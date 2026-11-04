@@ -1,3 +1,4 @@
+import { NO_BOARDS } from '../../src/shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
 import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
@@ -47,7 +48,6 @@ interface OrgWork {
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
 const MINE_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
-export const NO_BOARDS = "Pick a boards project and team in this org's settings."
 const NOT_CONNECTED = 'Connect this organization first.'
 const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 const GONE = "That work item no longer exists, or you can't see it."
@@ -147,7 +147,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       } catch (error) {
         entry.failure = error
         if (work.get(org) === entry && entry.snapshot) {
-          entry.snapshot = { ...entry.snapshot, stale: true, message: messageOf(error) }
+          entry.snapshot = { ...entry.snapshot, stale: true, message: loadFailureMessage(error) }
           deps.post(entry.snapshot)
         }
         throw error
@@ -372,6 +372,6 @@ function replaced(items: WorkItemSummary[], item: WorkItemSummary): WorkItemSumm
   return items.some(entry => entry.id === item.id) ? items.map(entry => (entry.id === item.id ? item : entry)) : items
 }
 
-function messageOf(error: unknown): string {
+function loadFailureMessage(error: unknown): string {
   return error instanceof AdoError ? error.message : LOAD_FAILED
 }

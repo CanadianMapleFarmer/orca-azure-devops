@@ -1,4 +1,5 @@
 import type { EditorDocument } from 'orca/frame'
+import { messageOf } from '../shared/messages'
 import type { BoardConfig, WorkItemSummary } from '../shared/work'
 import { moveFor } from './dnd'
 import { attachDrag } from './drag'
@@ -22,7 +23,7 @@ interface State {
 }
 
 const root = document.getElementById('app') as HTMLElement
-const messageOf = (error: unknown): string => (error instanceof Error && error.message ? error.message : 'Something went wrong.')
+const READ_FAILED = "Couldn't read this board file."
 
 const cards = createCards()
 const toolbar = createToolbar({
@@ -78,6 +79,7 @@ function paint(): void {
   note.textContent = current.board && items.length === 0 && !current.loading ? joined(current.message, 'No work items match.') : (current.message ?? '')
   note.hidden = note.textContent === ''
   cards.keep(new Set(all.map(item => item.id)))
+  const focused = focusedCard()
   if (current.board) {
     scroller.replaceChildren(boardGrid(layoutBoard(current.board, items, current.toggled), cards, id => current.pending.has(id), toggleLane))
   } else if (current.failure) {
@@ -85,6 +87,12 @@ function paint(): void {
   } else {
     scroller.replaceChildren(el('p', 'muted', 'Loading board…'))
   }
+  if (focused) scroller.querySelector<HTMLElement>(`.card[data-id="${focused}"]`)?.focus({ preventScroll: true })
+}
+
+function focusedCard(): string | undefined {
+  const active = document.activeElement
+  return active instanceof HTMLElement && scroller.contains(active) ? active.closest<HTMLElement>('.card')?.dataset.id : undefined
 }
 
 function joined(...parts: (string | undefined)[]): string {
@@ -176,7 +184,13 @@ function openText(text: string): void {
   if (ref) return openRef(ref)
   state = null
   reportVisibility()
-  showPicker(root, messageOf, openRef)
+  showPicker(root, openRef)
+}
+
+function showReadFailure(): void {
+  banner.replaceChildren(el('span', '', READ_FAILED))
+  banner.hidden = false
+  root.replaceChildren(banner)
 }
 
 function textOf(doc: EditorDocument): string {
@@ -201,12 +215,19 @@ async function start(): Promise<void> {
   window.addEventListener('pagehide', () => {
     if (reported) tell(reported, false)
   })
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return
+    reportVisibility()
+    void load()
+  })
   const doc = orca.document
   if (!doc) {
     root.replaceChildren(el('p', 'muted', 'This view opens only as the Azure DevOps board editor.'))
     return
   }
-  openText(textOf(await doc.get()))
+  const first = await doc.get().catch(() => null)
+  if (first) openText(textOf(first))
+  else showReadFailure()
   doc.onDidChange(next => openText(textOf(next)))
 }
 

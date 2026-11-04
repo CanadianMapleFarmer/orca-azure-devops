@@ -4,7 +4,8 @@ import type { WorkItemSummary, WorkSnapshot } from '../../shared/work'
 import { openSettings } from '../org-settings'
 import { ItemCard } from './item-card'
 import { ItemDetails } from './item-details'
-import { dismiss, load, move, NO_BOARDS, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
+import { NO_BOARDS } from '../../shared/messages'
+import { dismiss, load, move, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
 
 const MAX_CARDS = 300
 const MAX_NUDGES = 10

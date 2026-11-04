@@ -1,11 +1,11 @@
+import { messageOf, NO_BOARDS } from '../shared/messages'
 import type { OrgStatus } from '../shared/types'
 import type { BoardRef } from './ref'
 import { button, el } from './render'
 
 const NO_ORGS = 'Connect an organization in the Azure DevOps panel first.'
-const NO_BOARDS = "Pick a boards project and team in this org's settings."
 
-export function showPicker(root: HTMLElement, messageOf: (error: unknown) => string, picked: (ref: BoardRef) => void): void {
+export function showPicker(root: HTMLElement, picked: (ref: BoardRef) => void): void {
   const form = el('div', 'picker')
   const status = el('p', 'muted')
   status.setAttribute('role', 'status')

@@ -1,13 +1,12 @@
 import { atom, plugin, read, set, update, type ReadonlyAtom } from 'orca'
+import { messageOf } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { MoveTarget, Nudge, WorkSnapshot } from '../../shared/work'
-import { messageOf, tab } from '../state'
+import { tab } from '../state'
 
 export type Load = { status: 'loading' | 'ready' } | { status: 'failed'; message: string }
 export type Notice = { tone: 'danger' | 'neutral'; text: string }
 type Source = { org: string; key: string }
-
-export const NO_BOARDS = "Pick a boards project and team in this org's settings."
 
 export const snapshot = atom<WorkSnapshot | null>(null)
 export const load = atom<Load>({ status: 'loading' })

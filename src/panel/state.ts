@@ -1,6 +1,8 @@
 import { atom } from 'orca'
 import type { OrgStatus } from '../shared/types'
 
+export { messageOf } from '../shared/messages'
+
 export type TabId = 'work' | 'pipelines' | 'prs' | 'wiki'
 export type View = 'hub' | 'setup' | 'settings'
 export type Busy = 'sign-out' | 'remove' | 'cancel' | null
@@ -28,5 +30,3 @@ export const isTab = (value: string): value is TabId => TABS.some(item => item.i
 export const currentOrg = (list: readonly OrgStatus[], active: string | null): OrgStatus | null =>
   list.find(item => item.org === active) ?? list[0] ?? null
 
-export const messageOf = (error: unknown): string =>
-  error instanceof Error && error.message ? error.message : 'Something went wrong.'
