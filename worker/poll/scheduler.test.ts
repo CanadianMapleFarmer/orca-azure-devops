@@ -3,46 +3,83 @@ import { AdoError } from '../ado/http'
 import { createScheduler, realClock, type Job } from './scheduler'
 
 const T0 = 1_000_000
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
+const MAX_FIRINGS_PER_TICK = 1000
+const HOUR = 3_600_000
 
 function fakeClock() {
   let now = T0
   let nextHandle = 1
   const timers = new Map<number, { due: number; fn: () => void }>()
+  const badDelays: number[] = []
   const flush = () => new Promise<void>(resolve => setImmediate(resolve))
+
+  function earliest(limit: number) {
+    return [...timers.entries()]
+      .filter(([, timer]) => timer.due <= limit)
+      .sort(([ha, a], [hb, b]) => a.due - b.due || ha - hb)[0]
+  }
+
+  function assertHonouredDelays(): void {
+    if (badDelays.length > 0) {
+      throw new Error(`the scheduler asked for timeouts the runtime would not honour: ${badDelays.join(', ')}`)
+    }
+  }
 
   async function tick(ms: number): Promise<void> {
     const target = now + ms
+    let fired = 0
     for (;;) {
-      const due = [...timers.entries()]
-        .filter(([, timer]) => timer.due <= target)
-        .sort(([ha, a], [hb, b]) => a.due - b.due || ha - hb)[0]
-      if (!due) break
-      const [handle, timer] = due
+      const next = earliest(target)
+      if (!next) break
+      fired += 1
+      if (fired > MAX_FIRINGS_PER_TICK) {
+        throw new Error(`more than ${MAX_FIRINGS_PER_TICK} timers fired in one tick: the scheduler is spinning`)
+      }
+      const [handle, timer] = next
       timers.delete(handle)
       now = Math.max(now, timer.due)
       timer.fn()
       await flush()
+      assertHonouredDelays()
     }
     now = target
     await flush()
+    assertHonouredDelays()
+  }
+
+  async function fireNext(): Promise<void> {
+    const next = earliest(Infinity)
+    if (!next) throw new Error('no timer is pending')
+    timers.delete(next[0])
+    next[1].fn()
+    await flush()
+    assertHonouredDelays()
   }
 
   return {
     now: () => now,
     setTimeout(fn: () => void, ms: number): unknown {
+      const honoured = ms === 0 || (Number.isFinite(ms) && ms >= 1000 && ms <= MAX_TIMEOUT_MS)
+      if (!honoured) badDelays.push(ms)
       const handle = nextHandle++
-      timers.set(handle, { due: now + ms, fn })
+      timers.set(handle, { due: now + (honoured ? ms : 1), fn })
       return handle
     },
     clearTimeout(handle: unknown): void {
       timers.delete(handle as number)
     },
     pending: () => timers.size,
-    tick
+    tick,
+    fireNext
   }
 }
 
 type FakeClock = ReturnType<typeof fakeClock>
+
+function isError(error: unknown): boolean {
+  return error instanceof Error
+}
 
 function deferred() {
   let resolve!: () => void
@@ -67,8 +104,8 @@ function trackedJob(
   const signals: AbortSignal[] = []
   const job: Job = {
     key: 'mine',
-    visibleMs: 100,
-    backgroundMs: 1000,
+    visibleMs: 1000,
+    backgroundMs: 10_000,
     ...shape,
     run(signal) {
       starts.push(clock.now() - T0)
@@ -82,6 +119,12 @@ function trackedJob(
 function rateLimitedOnFirstRun(retryAfterMs: number | undefined) {
   return async (_signal: AbortSignal, runNumber: number) => {
     if (runNumber === 1) throw new AdoError('rate_limited', 429, 'throttled', retryAfterMs)
+  }
+}
+
+function alwaysRateLimited(retryAfterMs: number | undefined) {
+  return async () => {
+    throw new AdoError('rate_limited', 429, 'throttled', retryAfterMs)
   }
 }
 
@@ -102,24 +145,24 @@ test('runs immediately then every backgroundMs', async () => {
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
   await clock.tick(0)
-  await clock.tick(999)
+  await clock.tick(9999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 1000])
-  await clock.tick(1000)
-  assert.deepEqual(starts, [0, 1000, 2000])
+  assert.deepEqual(starts, [0, 10_000])
+  await clock.tick(10_000)
+  assert.deepEqual(starts, [0, 10_000, 20_000])
 })
 
 test('the next run is timed from the end of the previous one', async () => {
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
-  const { job, starts } = trackedJob(clock, () => new Promise<void>(resolve => clock.setTimeout(resolve, 300)))
+  const { job, starts } = trackedJob(clock, () => new Promise<void>(resolve => clock.setTimeout(resolve, 3000)))
   scheduler.upsert(job)
   await clock.tick(0)
-  await clock.tick(1299)
+  await clock.tick(12_999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 1300])
+  assert.deepEqual(starts, [0, 13_000])
 })
 
 test('visible jobs use visibleMs and run at once when they become visible and are stale', async () => {
@@ -132,20 +175,20 @@ test('visible jobs use visibleMs and run at once when they become visible and ar
   scheduler.setVisible('mine', true)
   await clock.tick(0)
   assert.deepEqual(starts, [0])
-  await clock.tick(99)
+  await clock.tick(999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 100])
+  assert.deepEqual(starts, [0, 1000])
 
   scheduler.setVisible('mine', false)
-  await clock.tick(500)
-  assert.deepEqual(starts, [0, 100])
+  await clock.tick(5000)
+  assert.deepEqual(starts, [0, 1000])
 
   scheduler.setVisible('mine', true)
   await clock.tick(0)
-  assert.deepEqual(starts, [0, 100, 600])
-  await clock.tick(100)
-  assert.deepEqual(starts, [0, 100, 600, 700])
+  assert.deepEqual(starts, [0, 1000, 6000])
+  await clock.tick(1000)
+  assert.deepEqual(starts, [0, 1000, 6000, 7000])
 })
 
 test('hiding a visible job returns it to backgroundMs', async () => {
@@ -155,13 +198,13 @@ test('hiding a visible job returns it to backgroundMs', async () => {
   scheduler.upsert(job)
   scheduler.setVisible('mine', true)
   await clock.tick(0)
-  await clock.tick(100)
-  assert.deepEqual(starts, [0, 100])
+  await clock.tick(1000)
+  assert.deepEqual(starts, [0, 1000])
   scheduler.setVisible('mine', false)
-  await clock.tick(999)
-  assert.deepEqual(starts, [0, 100])
+  await clock.tick(9999)
+  assert.deepEqual(starts, [0, 1000])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 100, 1100])
+  assert.deepEqual(starts, [0, 1000, 11_000])
 })
 
 test('setVisible during a run does not start a second run', async () => {
@@ -172,28 +215,28 @@ test('setVisible during a run does not start a second run', async () => {
   scheduler.upsert(job)
   await clock.tick(0)
   scheduler.setVisible('mine', true)
-  await clock.tick(500)
+  await clock.tick(5000)
   assert.deepEqual(starts, [0])
   release.resolve()
   await clock.tick(0)
-  await clock.tick(99)
+  await clock.tick(999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 600])
+  assert.deepEqual(starts, [0, 6000])
 })
 
 test('a rate-limited job waits retryAfterMs before running again', async () => {
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
-  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(5000))
+  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(30_000))
   scheduler.upsert(job)
   await clock.tick(0)
-  await clock.tick(4999)
+  await clock.tick(29_999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 5000])
-  await clock.tick(1000)
-  assert.deepEqual(starts, [0, 5000, 6000])
+  assert.deepEqual(starts, [0, 30_000])
+  await clock.tick(10_000)
+  assert.deepEqual(starts, [0, 30_000, 40_000])
 })
 
 test('a rate-limited job without retryAfterMs waits 60 seconds', async () => {
@@ -211,26 +254,26 @@ test('a rate-limited job without retryAfterMs waits 60 seconds', async () => {
 test('a rate limit shorter than the cadence never speeds the job up', async () => {
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
-  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(200))
+  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(2000))
   scheduler.upsert(job)
   await clock.tick(0)
-  await clock.tick(999)
+  await clock.tick(9999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 1000])
+  assert.deepEqual(starts, [0, 10_000])
 })
 
 test('a rate-limited job does not run when it becomes visible', async () => {
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
-  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(5000))
+  const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(30_000))
   scheduler.upsert(job)
   await clock.tick(0)
   scheduler.setVisible('mine', true)
-  await clock.tick(4999)
+  await clock.tick(29_999)
   assert.deepEqual(starts, [0])
   await clock.tick(1)
-  assert.deepEqual(starts, [0, 5000])
+  assert.deepEqual(starts, [0, 30_000])
 })
 
 test('a successful run clears an earlier rate-limit pause', async () => {
@@ -241,9 +284,100 @@ test('a successful run clears an earlier rate-limit pause', async () => {
   await clock.tick(0)
   await scheduler.runNow('mine')
   assert.deepEqual(starts, [0, 0])
-  await clock.tick(1000)
-  assert.deepEqual(starts, [0, 0, 1000])
+  await clock.tick(10_000)
+  assert.deepEqual(starts, [0, 0, 10_000])
 })
+
+const PAUSES: { label: string; retryAfterMs: number; pausedMs: number }[] = [
+  { label: '2 ** 40', retryAfterMs: 2 ** 40, pausedMs: 15 * 60_000 },
+  { label: 'Infinity', retryAfterMs: Infinity, pausedMs: 15 * 60_000 },
+  { label: 'NaN', retryAfterMs: NaN, pausedMs: 60_000 }
+]
+
+for (const { label, retryAfterMs, pausedMs } of PAUSES) {
+  test(`retryAfterMs of ${label} pauses for ${pausedMs} ms and the job does not spin`, async () => {
+    const clock = fakeClock()
+    const scheduler = createScheduler(clock)
+    const { job, starts } = trackedJob(clock, alwaysRateLimited(retryAfterMs))
+    scheduler.upsert(job)
+    await clock.tick(0)
+    await clock.tick(pausedMs - 1)
+    assert.deepEqual(starts, [0])
+    await clock.tick(1)
+    assert.deepEqual(starts, [0, pausedMs])
+    await clock.tick(HOUR)
+    assert.equal(starts.length, 1 + Math.floor((HOUR + pausedMs) / pausedMs))
+    assert.ok(starts.every((start, index) => start === index * pausedMs))
+  })
+}
+
+test('a timer that fires early reschedules instead of running the job', async () => {
+  const clock = fakeClock()
+  const scheduler = createScheduler(clock)
+  const { job, starts } = trackedJob(clock)
+  scheduler.upsert(job)
+  await clock.tick(0)
+  await clock.fireNext()
+  assert.deepEqual(starts, [0])
+  assert.equal(clock.pending(), 1)
+  await clock.tick(9999)
+  assert.deepEqual(starts, [0])
+  await clock.tick(1)
+  assert.deepEqual(starts, [0, 10_000])
+})
+
+test('a wait shorter than one second is lifted to one second', async () => {
+  const clock = fakeClock()
+  const scheduler = createScheduler(clock)
+  const { job, starts } = trackedJob(clock)
+  scheduler.upsert(job)
+  await clock.tick(0)
+  await clock.tick(600)
+  scheduler.setVisible('mine', true)
+  await clock.tick(999)
+  assert.deepEqual(starts, [0])
+  await clock.tick(1)
+  assert.deepEqual(starts, [0, 1600])
+})
+
+test('a wait longer than a timer can hold is split and the job still runs on time', async () => {
+  const clock = fakeClock()
+  const scheduler = createScheduler(clock)
+  const backgroundMs = 2 ** 33 + 5000
+  const { job, starts } = trackedJob(clock, async () => {}, { backgroundMs })
+  scheduler.upsert(job)
+  await clock.tick(0)
+  await clock.tick(backgroundMs - 1)
+  assert.deepEqual(starts, [0])
+  assert.equal(clock.pending(), 1)
+  await clock.tick(1)
+  assert.deepEqual(starts, [0, backgroundMs])
+})
+
+const INVALID_INTERVALS: { label: string; shape: Partial<Pick<Job, 'visibleMs' | 'backgroundMs'>> }[] = [
+  { label: 'visibleMs below 1000', shape: { visibleMs: 999 } },
+  { label: 'backgroundMs below 1000', shape: { backgroundMs: 999 } },
+  { label: 'a zero visibleMs', shape: { visibleMs: 0 } },
+  { label: 'a negative backgroundMs', shape: { backgroundMs: -5000 } },
+  { label: 'a NaN visibleMs', shape: { visibleMs: NaN } },
+  { label: 'an infinite backgroundMs', shape: { backgroundMs: Infinity } }
+]
+
+for (const { label, shape } of INVALID_INTERVALS) {
+  test(`upsert refuses ${label}`, async () => {
+    const clock = fakeClock()
+    const scheduler = createScheduler(clock)
+    assert.throws(() => scheduler.upsert(trackedJob(clock, async () => {}, { key: 'new', ...shape }).job), isError)
+    assert.equal(clock.pending(), 0)
+
+    const valid = trackedJob(clock)
+    scheduler.upsert(valid.job)
+    await clock.tick(0)
+    assert.throws(() => scheduler.upsert(trackedJob(clock, async () => {}, shape).job), isError)
+    await clock.tick(10_000)
+    assert.deepEqual(valid.starts, [0, 10_000])
+  })
+}
 
 const FAILURES: Record<string, () => Promise<void>> = {
   'a plain error': () => Promise.reject(new Error('Azure DevOps said something private')),
@@ -261,12 +395,12 @@ for (const [name, fail] of Object.entries(FAILURES)) {
     const { job, starts } = trackedJob(clock, fail)
     scheduler.upsert(job)
     await clock.tick(0)
-    await clock.tick(999)
+    await clock.tick(9999)
     assert.deepEqual(starts, [0])
     await clock.tick(1)
-    assert.deepEqual(starts, [0, 1000])
+    assert.deepEqual(starts, [0, 10_000])
     await scheduler.runNow('mine')
-    assert.deepEqual(starts, [0, 1000, 1000])
+    assert.deepEqual(starts, [0, 10_000, 10_000])
   })
 }
 
@@ -296,8 +430,8 @@ test('runNow before the first run replaces the pending first run', async () => {
   assert.deepEqual(starts, [0])
   await clock.tick(0)
   assert.deepEqual(starts, [0])
-  await clock.tick(1000)
-  assert.deepEqual(starts, [0, 1000])
+  await clock.tick(10_000)
+  assert.deepEqual(starts, [0, 10_000])
 })
 
 test('runNow on an unknown key resolves without running anything', async () => {
@@ -311,37 +445,37 @@ test('upserting an existing key swaps the job without a second concurrent run', 
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
   const release = deferred()
-  const first = trackedJob(clock, () => release.promise, { backgroundMs: 1000 })
-  const second = trackedJob(clock, async () => {}, { backgroundMs: 300 })
+  const first = trackedJob(clock, () => release.promise, { backgroundMs: 10_000 })
+  const second = trackedJob(clock, async () => {}, { backgroundMs: 3000 })
   scheduler.upsert(first.job)
   await clock.tick(0)
   scheduler.upsert(second.job)
-  await clock.tick(2000)
+  await clock.tick(20_000)
   assert.deepEqual(first.starts, [0])
   assert.deepEqual(second.starts, [])
   release.resolve()
   await clock.tick(0)
-  await clock.tick(299)
+  await clock.tick(2999)
   assert.deepEqual(second.starts, [])
   await clock.tick(1)
-  assert.deepEqual(second.starts, [2300])
+  assert.deepEqual(second.starts, [23_000])
   assert.deepEqual(first.starts, [0])
 })
 
 test('upserting an idle job moves it to the new cadence without running at once', async () => {
   const clock = fakeClock()
   const scheduler = createScheduler(clock)
-  const first = trackedJob(clock, async () => {}, { backgroundMs: 1000 })
-  const second = trackedJob(clock, async () => {}, { backgroundMs: 200 })
+  const first = trackedJob(clock, async () => {}, { backgroundMs: 10_000 })
+  const second = trackedJob(clock, async () => {}, { backgroundMs: 3000 })
   scheduler.upsert(first.job)
   await clock.tick(0)
   scheduler.upsert(second.job)
   await clock.tick(0)
   assert.deepEqual(second.starts, [])
-  await clock.tick(199)
+  await clock.tick(2999)
   assert.deepEqual(second.starts, [])
   await clock.tick(1)
-  assert.deepEqual(second.starts, [200])
+  assert.deepEqual(second.starts, [3000])
   assert.deepEqual(first.starts, [0])
 })
 
@@ -359,11 +493,11 @@ test('remove stops future runs and aborts the in-flight one', async () => {
   assert.equal(stuck.signals[0].aborted, true)
   assert.equal(other.signals[0].aborted, false)
 
-  await clock.tick(3000)
+  await clock.tick(30_000)
   await scheduler.runNow('stuck')
   assert.deepEqual(stuck.starts, [0])
   assert.deepEqual(idle.starts, [0])
-  assert.deepEqual(other.starts, [0, 1000, 2000, 3000])
+  assert.deepEqual(other.starts, [0, 10_000, 20_000, 30_000])
   assert.equal(clock.pending(), 1)
 })
 
@@ -387,7 +521,7 @@ test('dispose aborts in-flight runs, clears every timer and ignores later upsert
 
   const late = trackedJob(clock, async () => {}, { key: 'late' })
   scheduler.upsert(late.job)
-  await clock.tick(1000)
+  await clock.tick(10_000)
   assert.deepEqual(late.starts, [])
   assert.equal(clock.pending(), 0)
 })

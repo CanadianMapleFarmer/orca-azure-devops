@@ -22,6 +22,9 @@ export interface Scheduler {
 }
 
 const DEFAULT_RATE_LIMIT_PAUSE_MS = 60_000
+const MAX_RATE_LIMIT_PAUSE_MS = 15 * 60_000
+const MIN_DELAY_MS = 1000
+const MAX_DELAY_MS = 2 ** 31 - 1
 
 export const realClock: Clock = {
   now: () => Date.now(),
@@ -39,6 +42,19 @@ interface Entry {
   pausedUntil: number
 }
 
+function rateLimitPauseMs(retryAfterMs: number | undefined): number {
+  if (retryAfterMs === undefined || Number.isNaN(retryAfterMs)) return DEFAULT_RATE_LIMIT_PAUSE_MS
+  return Math.min(Math.max(retryAfterMs, 0), MAX_RATE_LIMIT_PAUSE_MS)
+}
+
+function assertValidIntervals(job: Job): void {
+  for (const ms of [job.visibleMs, job.backgroundMs]) {
+    if (!Number.isFinite(ms) || ms < MIN_DELAY_MS) {
+      throw new Error(`Polling job "${job.key}" needs finite intervals of at least ${MIN_DELAY_MS} ms.`)
+    }
+  }
+}
+
 export function createScheduler(clock: Clock): Scheduler {
   const entries = new Map<string, Entry>()
   let disposed = false
@@ -49,21 +65,34 @@ export function createScheduler(clock: Clock): Scheduler {
     entry.timer = undefined
   }
 
-  function delayFor(entry: Entry): number {
+  function intervalOf(entry: Entry): number {
+    return entry.visible ? entry.job.visibleMs : entry.job.backgroundMs
+  }
+
+  function remainingMs(entry: Entry): number {
     const now = clock.now()
-    const interval = entry.visible ? entry.job.visibleMs : entry.job.backgroundMs
-    const cadenceDue = entry.lastRunAt === undefined ? now : entry.lastRunAt + interval
-    return Math.max(0, Math.max(cadenceDue, entry.pausedUntil) - now)
+    const cadenceDue = entry.lastRunAt === undefined ? now : entry.lastRunAt + intervalOf(entry)
+    return Math.max(cadenceDue, entry.pausedUntil) - now
+  }
+
+  function timeoutFor(entry: Entry): number {
+    const remaining = remainingMs(entry)
+    if (remaining <= 0) return 0
+    const wait = Number.isFinite(remaining) ? remaining : intervalOf(entry)
+    return Math.min(Math.max(wait, MIN_DELAY_MS), MAX_DELAY_MS)
   }
 
   function schedule(entry: Entry): void {
     if (entry.inFlight) return
     clearTimer(entry)
-    const handle = clock.setTimeout(() => {
-      entry.timer = undefined
-      void start(entry)
-    }, delayFor(entry))
+    const handle = clock.setTimeout(() => fire(entry), timeoutFor(entry))
     entry.timer = { handle }
+  }
+
+  function fire(entry: Entry): void {
+    entry.timer = undefined
+    if (remainingMs(entry) > 0) schedule(entry)
+    else void start(entry)
   }
 
   async function attempt(job: Job, signal: AbortSignal): Promise<number> {
@@ -72,7 +101,7 @@ export function createScheduler(clock: Clock): Scheduler {
       return 0
     } catch (error) {
       if (!(error instanceof AdoError) || error.code !== 'rate_limited') return 0
-      return clock.now() + (error.retryAfterMs ?? DEFAULT_RATE_LIMIT_PAUSE_MS)
+      return clock.now() + rateLimitPauseMs(error.retryAfterMs)
     }
   }
 
@@ -100,6 +129,7 @@ export function createScheduler(clock: Clock): Scheduler {
 
   return {
     upsert(job) {
+      assertValidIntervals(job)
       if (disposed) return
       const existing = entries.get(job.key)
       if (existing) {
