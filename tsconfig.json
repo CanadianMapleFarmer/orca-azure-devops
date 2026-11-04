@@ -11,12 +11,10 @@
       "orca-frame",
       "orca-worker",
       "orca-services",
-      "orca-testing",
-      "node"
+      "orca-testing"
     ]
   },
   "include": [
-    "src",
-    "worker"
+    "src"
   ]
 }
