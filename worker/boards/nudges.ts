@@ -1,4 +1,4 @@
-import type { BoardConfig, Nudge, WorkItemSummary } from '../../src/shared/work'
+import { MAX_NUDGE_RULES, type BoardConfig, type Nudge, type WorkItemSummary } from '../../src/shared/work'
 import type { StorePort } from '../connections'
 
 export interface NudgeRule { branch: string; column: string }
@@ -18,6 +18,13 @@ function dismissal(itemId: number, prId: number): string {
   return `${itemId}:${prId}`
 }
 
+export function cleanRules(rules: readonly NudgeRule[]): NudgeRule[] {
+  const named = rules
+    .map(rule => ({ branch: branchName(rule.branch.trim()), column: rule.column }))
+    .filter(rule => rule.branch !== '' && rule.column !== '')
+  return [...new Map<string, NudgeRule>(named.map(rule => [rule.branch, rule])).values()].slice(0, MAX_NUDGE_RULES)
+}
+
 export function findNudges(cfg: BoardConfig, items: WorkItemSummary[], rules: NudgeRule[], dismissed: ReadonlySet<string>): Nudge[] {
   const order = cfg.columns.map(column => column.name)
   return items.flatMap(item => {
@@ -34,6 +41,7 @@ export function findNudges(cfg: BoardConfig, items: WorkItemSummary[], rules: Nu
 
 export interface NudgeStore {
   rules(org: string, teamId: string): Promise<NudgeRule[]>
+  saveRules(org: string, teamId: string, rules: NudgeRule[]): Promise<void>
   dismissed(org: string): Promise<Set<string>>
   dismiss(org: string, itemId: number, prId: number): Promise<void>
 }
@@ -50,6 +58,10 @@ export function createNudgeStore(store: StorePort): NudgeStore {
     async rules(org, teamId) {
       const list = await store.get<unknown>(nudgeRulesKey(org, teamId))
       return Array.isArray(list) ? list.filter(isRule) : []
+    },
+
+    saveRules(org, teamId, rules) {
+      return store.set(nudgeRulesKey(org, teamId), rules)
     },
 
     async dismissed(org) {

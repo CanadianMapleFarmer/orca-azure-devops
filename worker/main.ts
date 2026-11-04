@@ -101,6 +101,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     openBoard({ call: (method, params) => orca.host.call(method as never, params as never), fs, boardOf: org => boards.defaultBoard(org) }, input.org)
   )
   orca.panels.handle('work.dismissNudge', input => boards.dismissNudge(input))
+  orca.panels.handle('work.nudgeRules', input => boards.nudgeRules(input))
   orca.panels.handle('ui.visibility', input => boards.visibility(input))
   orca.commands.register('status', async () => statusText(await connections.list()))
   const orgs = await connections.list()

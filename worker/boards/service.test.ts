@@ -295,6 +295,102 @@ test('no rules means no nudges', async () => {
   assert.deepEqual(snapshot.nudges, [])
 })
 
+const RULES_KEY = `nudgeRules:${ORG}:${TEAM}`
+const UNKNOWN_COLUMN = "That column isn't on this board."
+const isBacklogConfig = (call: AdoCall) => call.path.endsWith('/work/backlogconfiguration')
+
+test('nudge rules read back what is stored without calling Azure DevOps', async () => {
+  const h = harness()
+  assert.deepEqual(await h.service.nudgeRules({ org: ORG, teamId: TEAM }), { rules: [] })
+  h.storage[RULES_KEY] = [{ branch: 'uat', column: 'Resolved' }]
+  assert.deepEqual(await h.service.nudgeRules({ org: ORG, teamId: TEAM }), { rules: [{ branch: 'uat', column: 'Resolved' }] })
+  assert.equal(h.ado.calls.length, 0)
+})
+
+test('saving nudge rules refreshes the snapshot so nudges appear and disappear', async () => {
+  const h = harness()
+  await h.service.snapshot(ORG)
+  assert.deepEqual(h.posts.at(-1)?.nudges, [])
+
+  const saved = await h.service.nudgeRules({ org: ORG, teamId: TEAM, rules: [{ branch: 'release/2026.11', column: 'Resolved' }] })
+  assert.deepEqual(saved, { rules: [{ branch: 'release/2026.11', column: 'Resolved' }] })
+  assert.deepEqual(h.storage[RULES_KEY], saved.rules)
+  await drain()
+  assert.deepEqual(h.posts.at(-1)?.nudges, [{ itemId: 1204, prId: 321, branch: 'release/2026.11', toColumn: 'Resolved' }])
+
+  await h.service.nudgeRules({ org: ORG, teamId: TEAM, rules: [] })
+  await drain()
+  assert.deepEqual(h.storage[RULES_KEY], [])
+  assert.deepEqual(h.posts.at(-1)?.nudges, [])
+  assert.equal(h.ado.calls.filter(isBacklogConfig).length, 1, 'the board configuration the service already cached is reused')
+})
+
+test('saved nudge rules are trimmed, lose refs/heads and drop rows without a branch or column', async () => {
+  const h = harness()
+  const saved = await h.service.nudgeRules({
+    org: ORG,
+    teamId: TEAM,
+    rules: [
+      { branch: '  refs/heads/release/2026.11  ', column: 'Resolved' },
+      { branch: '   ', column: 'Closed' },
+      { branch: 'uat', column: '' },
+      { branch: 'refs/heads/', column: 'Closed' },
+      { branch: 'main', column: 'Closed' }
+    ]
+  })
+  const expected = [{ branch: 'release/2026.11', column: 'Resolved' }, { branch: 'main', column: 'Closed' }]
+  assert.deepEqual(saved.rules, expected)
+  assert.deepEqual(h.storage[RULES_KEY], expected)
+})
+
+test('saved nudge rules keep one row per branch and the last one wins', async () => {
+  const h = harness()
+  const saved = await h.service.nudgeRules({
+    org: ORG,
+    teamId: TEAM,
+    rules: [
+      { branch: 'uat', column: 'Active' },
+      { branch: 'main', column: 'Closed' },
+      { branch: 'refs/heads/uat', column: 'Resolved' }
+    ]
+  })
+  assert.deepEqual(saved.rules, [{ branch: 'uat', column: 'Resolved' }, { branch: 'main', column: 'Closed' }])
+  assert.deepEqual(h.storage[RULES_KEY], saved.rules)
+})
+
+test('saved nudge rules are capped at 20, keeping the first', async () => {
+  const h = harness()
+  const many = Array.from({ length: 25 }, (_, index) => ({ branch: `release/${index}`, column: 'Closed' }))
+  const saved = await h.service.nudgeRules({ org: ORG, teamId: TEAM, rules: many })
+  assert.deepEqual(saved.rules, many.slice(0, 20))
+  assert.deepEqual(h.storage[RULES_KEY], many.slice(0, 20))
+})
+
+test('nudge rules naming a column that is not on the board are refused and nothing is saved', async () => {
+  const h = harness()
+  const before = [{ branch: 'uat', column: 'Resolved' }]
+  h.storage[RULES_KEY] = before
+  const error = await rejection(
+    h.service.nudgeRules({ org: ORG, teamId: TEAM, rules: [{ branch: 'main', column: 'Closed' }, { branch: 'qa', column: 'Shipped' }] })
+  )
+  assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, UNKNOWN_COLUMN])
+  assert.deepEqual(h.storage[RULES_KEY], before)
+  await drain()
+  assert.deepEqual(h.posts, [], 'a refused save refreshes nothing')
+})
+
+test('nudge rules can only be saved for the boards team the org is set to', async () => {
+  const h = harness()
+  const error = await rejection(h.service.nudgeRules({ org: ORG, teamId: 'another-team', rules: [{ branch: 'main', column: 'Closed' }] }))
+  assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, NO_BOARDS])
+  assert.equal(RULES_KEY in h.storage, false)
+
+  h.setOrgs([status({ boards: null })])
+  const without = await rejection(h.service.nudgeRules({ org: ORG, teamId: TEAM, rules: [{ branch: 'main', column: 'Closed' }] }))
+  assert.equal(without.message, NO_BOARDS)
+  assert.equal(RULES_KEY in h.storage, false)
+})
+
 test('dismissed nudges are capped at 500 with the oldest dropped', async () => {
   const h = harness()
   h.storage[`nudgeDismissed:${ORG}`] = Array.from({ length: 500 }, (_, index) => `${index}:1`)

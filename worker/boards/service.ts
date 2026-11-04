@@ -9,7 +9,7 @@ import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
-import { createNudgeStore, findNudges } from './nudges'
+import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
 import { capSnapshot, CHIPS_NEED_CODE_READ, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, restate, type ItemSource } from './snapshot'
 
@@ -36,6 +36,7 @@ export interface BoardsService {
   board(input: BoardArgs & { everyone: boolean }): Promise<BoardResult>
   defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
   dismissNudge(input: { org: string; itemId: number; prId: number }): Promise<{ ok: true }>
+  nudgeRules(input: { org: string; teamId: string; rules?: NudgeRule[] }): Promise<{ rules: NudgeRule[] }>
   visibility(input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: BoardRef }): { ok: true }
 }
 
@@ -53,6 +54,7 @@ const CONFLICT = "Someone else changed this item. It's been refreshed; try again
 const GONE = "That work item no longer exists, or you can't see it."
 const REOPEN_BOARD = 'Reopen this board and try again.'
 const LOAD_FAILED = "Couldn't load work items."
+const UNKNOWN_COLUMN = "That column isn't on this board."
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const { http, scheduler, now } = deps
@@ -251,7 +253,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return item
   }
 
-  return {
+  const service: BoardsService = {
     onOrgs(orgs) {
       const states = new Map(orgs.map(status => [status.org, status.state]))
       for (const org of new Set([...work.keys(), ...sources.keys()])) {
@@ -340,6 +342,18 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       return { projectId, teamId, boardId }
     },
 
+    async nudgeRules({ org, teamId, rules }) {
+      if (!rules) return { rules: await nudges.rules(org, teamId) }
+      const status = await statusOf(org)
+      if (status.boards?.teamId !== teamId) throw new AdoError('bad_request', 400, NO_BOARDS)
+      const cleaned = cleanRules(rules)
+      const columns = new Set((await defaultConfig(status)).columns.map(column => column.name))
+      if (cleaned.some(rule => !columns.has(rule.column))) throw new AdoError('bad_request', 400, UNKNOWN_COLUMN)
+      await nudges.saveRules(org, teamId, cleaned)
+      void service.refresh(org).catch(() => {})
+      return { rules: cleaned }
+    },
+
     async dismissNudge({ org, itemId, prId }) {
       await nudges.dismiss(org, itemId, prId)
       const entry = work.get(org)
@@ -362,6 +376,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       return { ok: true }
     }
   }
+  return service
 }
 
 function holds(snapshot: WorkSnapshot, id: number): boolean {

@@ -63,6 +63,8 @@ export interface WorkItemDetails {
   links: { kind: string; title: string; url: string }[]
 }
 
+export const MAX_NUDGE_RULES = 20
+
 export interface Nudge { itemId: number; prId: number; branch: string; toColumn: string }
 
 export interface WorkSnapshot {

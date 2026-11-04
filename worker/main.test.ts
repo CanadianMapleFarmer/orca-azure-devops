@@ -422,6 +422,28 @@ test('work handlers serve the connected org through the boards service', async (
   })
 })
 
+test('work.nudgeRules reads and saves the rules of the boards team', async () => {
+  const ado = fakeAdo()
+  await withFetch(signedIn(ado), async () => {
+    const w = await mountWorker(worker, { host: boardsHost(BOARDS) })
+    assert.deepEqual(await w.request('work.nudgeRules', { org: 'contoso', teamId: TEAM }), { rules: [] })
+
+    const rules = [{ branch: 'refs/heads/release/2026.11', column: 'Resolved' }]
+    const saved = await w.request('work.nudgeRules', { org: 'contoso', teamId: TEAM, rules })
+    assert.deepEqual(saved, { rules: [{ branch: 'release/2026.11', column: 'Resolved' }] })
+    assert.deepEqual(w.host.data().storage[`nudgeRules:contoso:${TEAM}`], saved.rules)
+    assert.deepEqual(await w.request('work.nudgeRules', { org: 'contoso', teamId: TEAM }), saved)
+    assert.ok(await until(() => workChanged(w.posts).length > 0), 'saving refreshed the snapshot')
+
+    await assert.rejects(
+      w.request('work.nudgeRules', { org: 'contoso', teamId: TEAM, rules: [{ branch: 'main', column: 'Shipped' }] }),
+      adoErrorWith('bad_request', 400, "That column isn't on this board.")
+    )
+    assert.equal(w.refusals.length, 0)
+    await w.deactivate()
+  })
+})
+
 test('work.snapshot tells an org without a boards team to pick one', async () => {
   const ado = fakeAdo()
   await withFetch(signedIn(ado), async () => {
