@@ -439,6 +439,18 @@ test('work handlers serve the connected org through the boards service', async (
   })
 })
 
+test('deactivate disposes the polling scheduler, aborting the "my work" load in flight', async () => {
+  const ado = fakeAdo()
+  const loading = ado.hang(isWiql)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: boardsHost(BOARDS) }, async w => {
+      assert.ok(await until(() => loading.length === 1), 'the "my work" job is loading')
+      await w.deactivate()
+      assert.equal(loading[0].signal?.aborted, true)
+    })
+  })
+})
+
 test('work.nudgeRules reads and saves the rules of the boards team', async () => {
   const ado = fakeAdo()
   await withFetch(signedIn(ado), async () => {
