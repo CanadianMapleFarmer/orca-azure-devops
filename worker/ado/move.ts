@@ -1,23 +1,15 @@
 import type { BoardConfig, MoveTarget, WorkItemSummary } from '../../src/shared/work'
 import { AdoError, type AdoHttp } from './http'
-import { shaped } from './shape'
+import { patchWorkItem, type PatchOp } from './patch'
 
 export type { MoveTarget }
 
-export interface PatchOp {
-  op: 'test' | 'replace'
-  path: string
-  value: unknown
-}
-
 const STATE_PATH = '/fields/System.State'
-const CONFLICT_MESSAGE = "Someone else changed this item. It's been refreshed; try again."
 const COLUMN_MISSING = "That column isn't on this board."
 const LANE_MISSING = "That lane isn't on this board."
 const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
 const MOVE_BY_COLUMN = 'Move this item by column.'
 const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
-const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected work item response.'
 
 export function targetsFor(item: WorkItemSummary, cfg: BoardConfig): { columns: string[]; lanes: string[]; states: string[] } {
   if (!isMapped(item, cfg)) return { columns: [], lanes: [], states: [] }
@@ -47,34 +39,7 @@ export async function moveItem(
 ): Promise<number> {
   const patch = buildMovePatch(item, cfg, to)
   if (patch.length === 0) return item.rev
-  const data = await sendPatch(http, org, projectId, item.id, patch)
-  return shaped(() => readRev(data), MALFORMED_MESSAGE)
-}
-
-async function sendPatch(http: AdoHttp, org: string, projectId: string, id: number, patch: PatchOp[]): Promise<{ rev?: unknown } | undefined> {
-  try {
-    const { data } = await http.json<{ rev?: unknown } | undefined>({
-      org,
-      project: projectId,
-      path: `/_apis/wit/workitems/${id}`,
-      method: 'PATCH',
-      body: patch,
-      contentType: 'application/json-patch+json'
-    })
-    return data
-  } catch (error) {
-    throw isStaleEdit(error) ? new AdoError('conflict', 409, CONFLICT_MESSAGE) : error
-  }
-}
-
-function isStaleEdit(error: unknown): boolean {
-  return error instanceof AdoError && (error.code === 'precondition_failed' || error.code === 'conflict')
-}
-
-function readRev(data: { rev?: unknown } | undefined): number {
-  const rev = data?.rev
-  if (typeof rev !== 'number') throw new TypeError('expected a revision')
-  return rev
+  return patchWorkItem(http, org, projectId, item.id, patch)
 }
 
 function boardChanges(item: WorkItemSummary, cfg: BoardConfig, to: MoveTarget): PatchOp[] {
