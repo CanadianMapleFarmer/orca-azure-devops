@@ -47,6 +47,20 @@ export async function loadPrChips(
 async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip | undefined> {
   const pullRequest = await fetchPullRequest(http, org, ref)
   if (!pullRequest) return undefined
+  const state = shape(() => prState(text(pullRequest.status)))
+  const evaluations = state === 'open' ? await fetchEvaluations(http, org, ref) : []
+  return shape(() => ({
+    prId: ref.prId,
+    repoId: ref.repoId,
+    projectId: ref.projectId,
+    target: text(pullRequest.targetRefName).replace(HEADS_PREFIX, ''),
+    state,
+    build: buildState(evaluations),
+    url: pullRequestUrl(pullRequest, org, ref)
+  }))
+}
+
+async function fetchEvaluations(http: AdoHttp, org: string, ref: PrRef): Promise<RawEvaluation[]> {
   const { data } = await http.json<{ value: RawEvaluation[] }>({
     org,
     project: ref.projectId,
@@ -54,15 +68,7 @@ async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip
     query: { artifactId: `vstfs:///CodeReview/CodeReviewId/${ref.projectId}/${ref.prId}` },
     apiVersion: '7.1-preview.1'
   })
-  return shape(() => ({
-    prId: ref.prId,
-    repoId: ref.repoId,
-    projectId: ref.projectId,
-    target: text(pullRequest.targetRefName).replace(HEADS_PREFIX, ''),
-    state: prState(text(pullRequest.status)),
-    build: buildState(array(data.value)),
-    url: pullRequestUrl(pullRequest, org, ref)
-  }))
+  return shape(() => array(data.value))
 }
 
 async function fetchPullRequest(http: AdoHttp, org: string, ref: PrRef): Promise<RawPullRequest | undefined> {

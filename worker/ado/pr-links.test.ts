@@ -118,18 +118,27 @@ test('loadPrChips maps status and build policy, and caches for 2 min', async () 
   let now = 1_000_000
   const first = await loadPrChips(http, ORG, [ref(321), ref(322)], cache, () => now)
   assert.deepEqual(first, [
-    { prId: 321, repoId: REPO, projectId: PROJECT, target: 'release/2026.11', state: 'merged', build: 'succeeded', url: `${WEB_URL}/pullrequest/321` },
+    { prId: 321, repoId: REPO, projectId: PROJECT, target: 'release/2026.11', state: 'merged', build: 'none', url: `${WEB_URL}/pullrequest/321` },
     { prId: 322, repoId: REPO, projectId: PROJECT, target: 'main', state: 'open', build: 'running', url: `${WEB_URL}/pullrequest/322` }
   ])
-  assert.equal(requested.length, 4)
+  assert.equal(requested.length, 3)
 
   now += 2 * MINUTE - 1
   assert.deepEqual(await loadPrChips(http, ORG, [ref(321), ref(322)], cache, () => now), first)
-  assert.equal(requested.length, 4)
+  assert.equal(requested.length, 3)
 
   now += 1
   assert.deepEqual(await loadPrChips(http, ORG, [ref(321), ref(322)], cache, () => now), first)
-  assert.equal(requested.length, 8)
+  assert.equal(requested.length, 6)
+})
+
+test('loadPrChips asks for policy evaluations only for open pull requests', async () => {
+  const approved = evaluations({ status: 'approved' })
+  const routes = { ...routesFor(321, 'completed', approved), ...routesFor(322, 'abandoned', approved), ...routesFor(323, 'active', approved) }
+  const { http, requested } = server(routes)
+  const chips = await loadPrChips(http, ORG, [ref(321), ref(322), ref(323)], newCache(), () => 0)
+  assert.deepEqual(chips.map(chip => [chip.prId, chip.state, chip.build]), [[321, 'merged', 'none'], [322, 'abandoned', 'none'], [323, 'open', 'succeeded']])
+  assert.deepEqual(requested.filter(url => url.includes('/policy/evaluations')), [evaluationsUrl(323)])
 })
 
 test('loadPrChips asks for the policy evaluations of the pull request artifact at the preview api version', async () => {
@@ -217,7 +226,7 @@ test('loadPrChips fetches each distinct pull request once and keeps the order of
   const { http, requested } = server({ ...routesFor(322, 'active'), ...routesFor(321, 'completed') })
   const chips = await loadPrChips(http, ORG, [ref(322), ref(321), ref(322)], newCache(), () => 0)
   assert.deepEqual(chips.map(chip => chip.prId), [322, 321])
-  assert.equal(requested.length, 4)
+  assert.equal(requested.length, 3)
 })
 
 test('loadPrChips fetches only what is not cached and keeps the order', async () => {
