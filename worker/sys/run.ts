@@ -19,6 +19,22 @@ export type RunCommand = (
 
 export class CommandTimeoutError extends Error {}
 
+type SignalGroup = (sig: NodeJS.Signals | 0) => boolean
+
+const live = new Set<SignalGroup>()
+
+export async function stopAllCommands(opts: { killAfterMs: number; withinMs: number }): Promise<void> {
+  const groups = [...live]
+  if (groups.length === 0) return
+  const deadline = Date.now() + opts.withinMs
+  for (const signalGroup of groups) signalGroup('SIGTERM')
+  const kill = setTimeout(() => groups.forEach(signalGroup => signalGroup('SIGKILL')), opts.killAfterMs)
+  while (groups.some(signalGroup => signalGroup(0)) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  clearTimeout(kill)
+}
+
 export const runCommand: RunCommand = (file, args, opts) =>
   new Promise((resolve, reject) => {
     const { signal, timeoutMs } = opts
@@ -27,8 +43,9 @@ export const runCommand: RunCommand = (file, args, opts) =>
     const child = spawn(file, args, { env: opts.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let stopped: Error | null = null
     let escalation: ReturnType<typeof setTimeout> | undefined
+    let closed = false
 
-    const signalGroup = (sig: NodeJS.Signals | 0): boolean => {
+    const signalGroup: SignalGroup = sig => {
       if (child.pid === undefined) return false
       try {
         process.kill(-child.pid, sig)
@@ -37,12 +54,16 @@ export const runCommand: RunCommand = (file, args, opts) =>
         return false
       }
     }
+    if (child.pid !== undefined) live.add(signalGroup)
 
     const stop = (reason: Error): void => {
       if (stopped) return
       stopped = reason
       signalGroup('SIGTERM')
-      escalation = setTimeout(() => signalGroup('SIGKILL'), KILL_GRACE_MS)
+      escalation = setTimeout(() => {
+        signalGroup('SIGKILL')
+        if (closed) live.delete(signalGroup)
+      }, KILL_GRACE_MS)
     }
 
     const collect = (stream: Readable, label: string): (() => string) => {
@@ -63,9 +84,12 @@ export const runCommand: RunCommand = (file, args, opts) =>
     signal?.addEventListener('abort', onAbort, { once: true })
 
     const finish = (): void => {
+      closed = true
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
-      if (escalation && !signalGroup(0)) clearTimeout(escalation)
+      if (escalation && signalGroup(0)) return
+      clearTimeout(escalation)
+      live.delete(signalGroup)
     }
 
     child.once('error', error => {

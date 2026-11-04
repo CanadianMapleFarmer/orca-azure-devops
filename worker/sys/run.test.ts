@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
-import { runCommand } from './run'
+import { runCommand, stopAllCommands } from './run'
 
 const NO_ENV = { PATH: '/usr/bin:/bin' }
 
@@ -122,6 +122,48 @@ test('a process group that ignores SIGTERM is killed after three seconds', async
     assert.ok(Date.now() - aborted >= 2_900, 'SIGKILL waits for the grace period')
     assert.equal(running(sleep), false, 'nothing from the wrapper is left running')
   })
+})
+
+const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
+
+test('stopAllCommands stops every running command group and resolves once they are gone', async () => {
+  const first = uniqueSleep()
+  const second = uniqueSleep()
+  await withWrapper([first], [first], async one => {
+    await withWrapper([second], [second], async two => {
+      const pending = [runCommand(one, [], { env: NO_ENV }), runCommand(two, [], { env: NO_ENV })]
+      for (const command of pending) command.catch(() => {})
+      assert.ok(await until(() => running(first) && running(second)), 'both wrappers started their children')
+      const started = Date.now()
+      await stopAllCommands(SHUTDOWN)
+      assert.ok(Date.now() - started < 1_000, 'SIGTERM was enough')
+      assert.equal(running(first), false)
+      assert.equal(running(second), false)
+      for (const command of pending) await assert.rejects(within(command, 1_000), /was terminated by SIGTERM/)
+    })
+  })
+})
+
+test('stopAllCommands kills a group that ignores SIGTERM at the kill time, within the budget', async () => {
+  const sleep = uniqueSleep()
+  await withWrapper(["trap '' TERM", sleep], [sleep], async az => {
+    runCommand(az, [], { env: NO_ENV }).catch(() => {})
+    assert.ok(await until(() => running(sleep)), 'the wrapper started its child')
+    const started = Date.now()
+    await stopAllCommands(SHUTDOWN)
+    const elapsed = Date.now() - started
+    assert.ok(elapsed >= 1_400 && elapsed < 1_900, `resolved after ${elapsed}ms`)
+    assert.equal(running(sleep), false, 'nothing from the wrapper is left running')
+  })
+})
+
+test('stopAllCommands has nothing to stop once commands have finished', async () => {
+  await runCommand('/bin/sh', ['-c', 'exit 0'], { env: NO_ENV })
+  await runCommand('/bin/sh', ['-c', 'exit 4'], { env: NO_ENV })
+  await assert.rejects(runCommand('/nonexistent/az', [], { env: NO_ENV }), /ENOENT/)
+  const started = Date.now()
+  await stopAllCommands(SHUTDOWN)
+  assert.ok(Date.now() - started < 100)
 })
 
 test('a group member that outlives the wrapper is still killed after the grace period', async () => {

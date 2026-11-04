@@ -9,7 +9,13 @@ import { AdoError, type AdoHttp } from './ado/http'
 import { createConnections } from './connections'
 import { statusBarFor, statusText } from './status-bar'
 import { findExecutable } from './sys/find-executable'
-import { runCommand } from './sys/run'
+import { runCommand, stopAllCommands } from './sys/run'
+
+const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
+
+export function deactivate(): Promise<void> {
+  return stopAllCommands(SHUTDOWN)
+}
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const home = os.homedir()

@@ -193,6 +193,28 @@ test('orgs.cancel stops a running az login, wrapper and all, and keeps none of i
   })
 })
 
+test('deactivate stops a running az login, wrapper and all, within the 2 s budget', async () => {
+  const sleep = `sleep 30.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`
+  await withHome(async home => {
+    const az = path.join(home, 'az')
+    await fs.writeFile(az, `#!/bin/sh\n${sleep}\n`, { mode: 0o755 })
+    try {
+      await withFakeFetch(async () => {
+        const w = await mountWorker(worker, { host: mockHost({ capabilities: CAPABILITIES, settings: { azPath: az } }) })
+        await w.request('orgs.connect', { orgInput: 'contoso', method: 'azure-cli' })
+        assert.ok(await until(() => running(sleep)), 'az login is running')
+
+        const started = Date.now()
+        await w.deactivate()
+        assert.ok(Date.now() - started < 2_000, 'within the deactivate budget')
+        assert.equal(running(sleep), false, 'nothing az started is left running')
+      })
+    } finally {
+      spawnSync('pkill', ['-9', '-f', sleep])
+    }
+  })
+})
+
 test('activate resets an org left signing-in by the previous worker', async () => {
   const host = mockHost({ capabilities: CAPABILITIES, storage: { orgs: [PAT_ORG], 'signing-in': ['contoso'] } })
   const w = await mountWorker(worker, { host })
