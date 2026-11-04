@@ -6,7 +6,7 @@ import { attachDrag } from './drag'
 import { layoutBoard, parentOptions, withParent, type Cell } from './layout'
 import { showPicker } from './picker'
 import { parseBoardRef, type BoardRef } from './ref'
-import { boardGrid, button, createCards, createToolbar, el } from './render'
+import { boardGrid, button, createCards, createToolbar, el, focusSelectorOf } from './render'
 
 interface State {
   ref: BoardRef
@@ -79,7 +79,7 @@ function paint(): void {
   note.textContent = current.board && items.length === 0 && !current.loading ? joined(current.message, 'No work items match.') : (current.message ?? '')
   note.hidden = note.textContent === ''
   cards.keep(new Set(all.map(item => item.id)))
-  const focused = focusedCard()
+  const focused = focusedSelector()
   if (current.board) {
     scroller.replaceChildren(boardGrid(layoutBoard(current.board, items, current.toggled), cards, id => current.pending.has(id), toggleLane))
   } else if (current.failure) {
@@ -87,12 +87,12 @@ function paint(): void {
   } else {
     scroller.replaceChildren(el('p', 'muted', 'Loading board…'))
   }
-  if (focused) scroller.querySelector<HTMLElement>(`.card[data-id="${focused}"]`)?.focus({ preventScroll: true })
+  if (focused) scroller.querySelector<HTMLElement>(focused)?.focus({ preventScroll: true })
 }
 
-function focusedCard(): string | undefined {
+function focusedSelector(): string | null {
   const active = document.activeElement
-  return active instanceof HTMLElement && scroller.contains(active) ? active.closest<HTMLElement>('.card')?.dataset.id : undefined
+  return active instanceof HTMLElement && scroller.contains(active) ? focusSelectorOf(active) : null
 }
 
 function joined(...parts: (string | undefined)[]): string {

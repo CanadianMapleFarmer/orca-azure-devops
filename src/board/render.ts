@@ -77,6 +77,7 @@ export function boardGrid(layout: { columns: string[]; lanes: Lane[] }, cards: C
     if (showLanes) {
       const count = Object.values(lane.cells).reduce((total, items) => total + items.length, 0)
       const head = button(`${lane.collapsed ? '▸' : '▾'} ${laneName} (${count})`, () => onToggle(lane.id), 'lane-head')
+      head.dataset.lane = lane.id
       head.setAttribute('aria-expanded', String(!lane.collapsed))
       grid.append(head)
     }
@@ -92,6 +93,17 @@ export function boardGrid(layout: { columns: string[]; lanes: Lane[] }, cards: C
     }
   }
   return grid
+}
+
+export function focusSelectorOf(focused: { closest(selector: string): { dataset: DOMStringMap } | null }): string | null {
+  const card = focused.closest('.card')?.dataset.id
+  if (card !== undefined) return `.card[data-id="${cssString(card)}"]`
+  const lane = focused.closest('.lane-head')?.dataset.lane
+  return lane === undefined ? null : `.lane-head[data-lane="${cssString(lane)}"]`
+}
+
+function cssString(value: string): string {
+  return value.replace(/[^\w-]/g, char => `\\${char.codePointAt(0)?.toString(16)} `)
 }
 
 export function createToolbar(handlers: { everyone(value: boolean): void; parent(id: number | null): void }) {
