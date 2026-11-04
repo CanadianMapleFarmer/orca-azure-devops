@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -45,6 +45,14 @@ async function installedVersion() {
   return stdout.trim()
 }
 
+async function cacheVersion() {
+  try {
+    return await installedVersion()
+  } catch {
+    return ''
+  }
+}
+
 async function typingsAreCurrent(version) {
   const expected = [...['orca', ...surfaceTypings].map((dir) => join(typesDir, dir, 'index.d.ts')), join(typesDir, 'tsconfig.json')]
   try {
@@ -84,9 +92,12 @@ async function writeDownloadedTypes(version) {
   await writeFile(join(typesDir, 'tsconfig.json'), `${JSON.stringify(typesTsconfig, null, 2)}\n`)
 }
 
-const version = await installedVersion()
-if (!(await typingsAreCurrent(version))) {
-  if (!(await orcaTypesWork())) await writeDownloadedTypes(version)
-  await mkdir(typesDir, { recursive: true })
-  await writeFile(versionFile, `${version}\n`)
+const version = await cacheVersion()
+if (!version || !(await typingsAreCurrent(version))) {
+  await rm(versionFile, { force: true })
+  if (!(await orcaTypesWork())) await writeDownloadedTypes(version || (await installedVersion()))
+  if (version) {
+    await mkdir(typesDir, { recursive: true })
+    await writeFile(versionFile, `${version}\n`)
+  }
 }
