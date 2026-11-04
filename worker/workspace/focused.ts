@@ -7,10 +7,10 @@ export async function listWorkspaces(call: HostCall): Promise<WorkspaceEntry[]> 
   return workspaces
 }
 
-export async function focusedWorkspace(call: HostCall): Promise<WorkspaceEntry | null> {
+export async function focusedWorkspace(call: HostCall, listed?: WorkspaceEntry[]): Promise<WorkspaceEntry | null> {
   const context: { branch: string; displayName: string } | null = await call('workspace.readContext')
   if (!context) return null
-  const workspaces = await listWorkspaces(call)
+  const workspaces = listed ?? (await listWorkspaces(call))
   // Folder workspaces have no branch, so they match by name alone.
   const matches = workspaces.filter(entry => entry.name === context.displayName && (entry.kind === 'folder' || entry.branch === context.branch))
   return matches.length === 1 ? matches[0] : null

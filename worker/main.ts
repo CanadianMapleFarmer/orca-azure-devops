@@ -73,7 +73,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   await connections.resetInterrupted()
 
   const hostCall: HostCall = (method, params) => orca.host.call(method as never, params as never)
-  const workspaceSettings = await watchWorkspaceSettings(orca.settings)
+  const workspaceSettings = await watchWorkspaceSettings(orca.settings, message => orca.log(message))
   const arm = createArm(Date.now)
   const links = await createLinkStore(store, Date.now)
   const context = createContextCache()

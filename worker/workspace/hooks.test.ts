@@ -1,5 +1,6 @@
 import { assert, mountWorker, test } from 'orca/testing'
 import type { StorePort } from '../connections'
+import { drain, memoryStore } from '../test-support'
 import { createContextCache } from './agents'
 import { createArm } from './arm'
 import { registerWorkspaceHooks, type WorkspaceHookDeps } from './hooks'
@@ -16,13 +17,7 @@ const HOOKS = ['workspace.create.before', 'workspace.create.after', 'agent.promp
 
 async function setup(over: Partial<WorkspaceHookDeps> = {}) {
   let now = T0
-  const data: Record<string, unknown> = {}
-  const store: StorePort = {
-    get: async <T,>(key: string) => (key in data ? (structuredClone(data[key]) as T) : null),
-    set: async (key, value) => {
-      data[key] = structuredClone(value)
-    }
-  }
+  const { data, store } = memoryStore()
   const arm = createArm(() => now)
   const links = await createLinkStore(store, () => now)
   const context = createContextCache()
@@ -40,14 +35,11 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
     w,
     arm,
     links,
+    context,
     data,
     state,
     advance: (ms: number) => void (now += ms)
   }
-}
-
-async function drain(): Promise<void> {
-  for (let turn = 0; turn < 10; turn += 1) await new Promise(resolve => setImmediate(resolve))
 }
 
 const status = (terminalId: string | undefined, workspaceId: string | null) =>
@@ -165,6 +157,17 @@ test('prompt context needs the item in the cache', async () => {
   assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), { kind: 'continue', event })
 })
 
+test('prompt context escapes brackets in the title', async () => {
+  const { w, links } = await setup({ itemInfo: () => ({ type: 'User Story', title: '[Bug] Search', url: ITEM_URL }) })
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  await w.emit('agent.status.changed', status('term-linked', 'ws-linked'))
+  const event = { agent: 'claude', terminalId: 'term-linked', prompt: 'Fix it', inputKind: 'launch' } as const
+  assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), {
+    kind: 'continue',
+    event: { ...event, prompt: `[ADO User Story #1204: \\[Bug\\] Search](${ITEM_URL})\n\nFix it` }
+  })
+})
+
 test('a prompt that already starts with the reference passes and counts as the terminal\'s one', async () => {
   const { w, links } = await setup()
   await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
@@ -173,6 +176,50 @@ test('a prompt that already starts with the reference passes and counts as the t
   const own = `${PREFIX}\n\n## Description\n\nFilter by make.`
   assert.deepEqual(await w.hooks.fire('agent.prompt.before', prompt(own)), { kind: 'continue', event: prompt(own) })
   assert.deepEqual(await w.hooks.fire('agent.prompt.before', prompt('Next')), { kind: 'continue', event: prompt('Next') })
+})
+
+test('a prompt whose reference has another title or type for the item still counts as carrying the context', async () => {
+  const { w, links } = await setup()
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  const references = [
+    `[ADO User Story #1204: Add vehicle search](${ITEM_URL})`,
+    `[ADO Bug #1204: Add vehicle search filters](${ITEM_URL})`,
+    `[ADO Product Backlog Item #1204: \\[Old\\] title](${ITEM_URL})`
+  ]
+  for (const [index, reference] of references.entries()) {
+    const terminalId = `term-${index}`
+    await w.emit('agent.status.changed', status(terminalId, 'ws-linked'))
+    const event = { agent: 'claude', terminalId, prompt: `${reference}\n\n## Description\n\nFilter by make.`, inputKind: 'launch' } as const
+    assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), { kind: 'continue', event }, reference)
+    const next = { ...event, prompt: 'Next' }
+    assert.deepEqual(await w.hooks.fire('agent.prompt.before', next), { kind: 'continue', event: next }, `${reference} counted`)
+  }
+})
+
+test('a prompt that references another item, or mentions the reference below its first line, still gets the context', async () => {
+  const { w, links } = await setup()
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  const prompts = [
+    `[ADO Bug #12041: Other](${ITEM_URL})\n\nGo`,
+    `[ADO Bug #1205: Other](${ITEM_URL})\n\nGo`,
+    `Go\n${PREFIX}`,
+    `[x] #1204: Go`
+  ]
+  for (const [index, text] of prompts.entries()) {
+    const terminalId = `term-${index}`
+    await w.emit('agent.status.changed', status(terminalId, 'ws-linked'))
+    const event = { agent: 'claude', terminalId, prompt: text, inputKind: 'orchestration' } as const
+    assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), { kind: 'continue', event: { ...event, prompt: `${PREFIX}\n\n${text}` } }, text)
+  }
+})
+
+test('a terminal marked as given the context gets no reference', async () => {
+  const { w, links, context } = await setup()
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  context.record('term-launched', 'ws-linked')
+  context.markGiven('term-launched')
+  const event = { agent: 'claude', terminalId: 'term-launched', prompt: 'Next step', inputKind: 'orchestration' } as const
+  assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), { kind: 'continue', event })
 })
 
 test('the workspace of a terminal comes from agent.launch.before and status events', async () => {

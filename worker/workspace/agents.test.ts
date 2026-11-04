@@ -14,9 +14,20 @@ test('itemLink is the one-line ADO reference', () => {
   assert.equal(itemLink(1204, { type: 'User Story', title: 'Add vehicle search filters', url: URL }), LINK)
 })
 
+test('itemLink escapes backslashes and brackets in the title so the link stays one link', () => {
+  const info = { type: 'Bug', title: '[Bug] Search \\ filter](https://example.com/x', url: URL }
+  assert.equal(itemLink(7, info), `[ADO Bug #7: \\[Bug\\] Search \\\\ filter\\](https://example.com/x](${URL})`)
+})
+
 test('itemPrompt opens with the reference, then the description and acceptance criteria', () => {
   const prompt = itemPrompt(details({ descriptionMd: 'Filter by **make**.', acceptanceMd: '- Filters persist', comments: [{ id: 1, author: 'Ada', createdAt: 1, textMd: 'Secret comment' }] }))
   assert.equal(prompt, `${LINK}\n\n## Description\n\nFilter by **make**.\n\n## Acceptance criteria\n\n- Filters persist`)
+})
+
+test('itemPrompt opens with the escaped reference when the title has brackets', () => {
+  const bracketed = details({ descriptionMd: 'Body.' })
+  bracketed.item = { ...bracketed.item, title: '[Bug] Search' }
+  assert.equal(itemPrompt(bracketed), `[ADO User Story #1204: \\[Bug\\] Search](${URL})\n\n## Description\n\nBody.`)
 })
 
 test('itemPrompt leaves out an empty section and is just the reference when both are empty', () => {
@@ -49,6 +60,22 @@ test('the context cache maps a terminal to its workspace, the newest record winn
   cache.record('term-1', 'ws-1')
   cache.record('term-1', 'ws-2')
   assert.equal(cache.workspaceOf('term-1'), 'ws-2')
+})
+
+test('the context cache remembers which terminals were given the context', () => {
+  const cache = createContextCache()
+  assert.equal(cache.wasGiven('term-1'), false)
+  cache.markGiven('term-1')
+  assert.equal(cache.wasGiven('term-1'), true)
+  assert.equal(cache.wasGiven('term-2'), false)
+})
+
+test('the context cache forgets the oldest given terminal after 500', () => {
+  const cache = createContextCache()
+  for (let index = 1; index <= 501; index += 1) cache.markGiven(`term-${index}`)
+  assert.equal(cache.wasGiven('term-1'), false)
+  assert.equal(cache.wasGiven('term-2'), true)
+  assert.equal(cache.wasGiven('term-501'), true)
 })
 
 test('the context cache keeps at most 500 terminals and drops the oldest', () => {

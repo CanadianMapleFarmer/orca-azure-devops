@@ -1,9 +1,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
-import { itemLink, type ContextCache, type ItemInfo } from './agents'
+import { carriesContext, itemLink, type ContextCache, type ItemInfo } from './agents'
 import type { Arm } from './arm'
 import type { LinkStore } from './links'
-
-const PREFIXED_CAP = 500
 
 export interface WorkspaceHookDeps {
   arm: Arm
@@ -14,8 +12,6 @@ export interface WorkspaceHookDeps {
 }
 
 export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookDeps): void {
-  const prefixed = new Set<string>()
-
   orca.hooks.on('workspace.create.before', (event, next) => {
     if (event.kind !== 'worktree') return
     const armed = deps.arm.take()
@@ -33,15 +29,13 @@ export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookD
   })
 
   orca.hooks.on('agent.prompt.before', (event, next) => {
-    if (!deps.agentContext() || prefixed.has(event.terminalId)) return
+    if (!deps.agentContext() || deps.context.wasGiven(event.terminalId)) return
     const workspaceId = deps.context.workspaceOf(event.terminalId)
     const ref = workspaceId && deps.links.byWorkspace(workspaceId)
     const info = ref && deps.itemInfo(ref.org, ref.itemId)
     if (!ref || !info) return
-    prefixed.add(event.terminalId)
-    if (prefixed.size > PREFIXED_CAP) prefixed.delete(prefixed.values().next().value as string)
-    const link = itemLink(ref.itemId, info)
-    return event.prompt.startsWith(link) ? undefined : next({ ...event, prompt: `${link}\n\n${event.prompt}` })
+    deps.context.markGiven(event.terminalId)
+    return carriesContext(event.prompt, ref.itemId) ? undefined : next({ ...event, prompt: `${itemLink(ref.itemId, info)}\n\n${event.prompt}` })
   })
 
   orca.events.on('agent.status.changed', status => {

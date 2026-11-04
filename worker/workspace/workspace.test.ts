@@ -3,6 +3,7 @@ import type { OrgConfig } from '../../src/shared/types'
 import { basicAuth } from '../auth/pat'
 import { BOARDS, fakeAdo, ORG_URL, type FakeAdo } from '../boards/fake-ado'
 import * as worker from '../main'
+import { drain } from '../test-support'
 
 const PAT = 'pat-workspace-test-8a41'
 const BRANCH = 'feature/1204-add-vehicle-search-filters'
@@ -143,7 +144,7 @@ test('a workspace started from an item is linked, and its agent launches there w
     assert.deepEqual(created, { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
     await w.hooks.fire('workspace.create.after', { workspaceId: STARTED.id, kind: 'worktree', path: STARTED.path, branch: BRANCH })
     desk.workspaces = [FOCUSED, STARTED]
-    await new Promise(resolve => setImmediate(resolve))
+    await drain()
     assert.equal((w.host.data().storage.workspaceLinks as Record<string, { itemId: number }>)[STARTED.id]?.itemId, 1204)
 
     assert.deepEqual(await w.request('work.startAgent', { org: 'contoso', id: 1204 }), { launched: true })
@@ -160,10 +161,47 @@ test('a workspace started from an item is linked, and its agent launches there w
     assert.deepEqual(await w.hooks.fire('agent.prompt.before', other), { kind: 'continue', event: { ...other, prompt: `${PREFIX}\n\nReview it` } })
 
     desk.workspaces = [FOCUSED]
+    const listed = host.callsOf('workspace.list').length
     assert.deepEqual(await w.request('work.startAgent', { org: 'contoso', id: 1204 }), { launched: true })
     assert.equal(launchOf(host, 1).workspaceId, FOCUSED.id, 'a removed workspace falls back to the focused one')
+    assert.equal(host.callsOf('workspace.list').length, listed + 1, 'the workspaces are listed once')
     assert.equal(w.refusals.length, 0)
     assert.deepEqual(w.logs, [])
+  })
+})
+
+async function startLinked(w: Awaited<ReturnType<typeof mountWorker>>, desk: Desk): Promise<void> {
+  await w.request('work.snapshot', { org: 'contoso' })
+  await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+  await w.hooks.fire('workspace.create.before', CREATE)
+  await w.hooks.fire('workspace.create.after', { workspaceId: STARTED.id, kind: 'worktree', path: STARTED.path, branch: BRANCH })
+  desk.workspaces = [FOCUSED, STARTED]
+  await drain()
+}
+
+test('the terminal startAgent launched gets no second reference', async () => {
+  await withDesk({ settings: { agentContext: true } }, async ({ w, host, desk }) => {
+    await startLinked(w, desk)
+    assert.deepEqual(await w.request('work.startAgent', { org: 'contoso', id: 1204 }), { launched: true })
+    const next = { agent: 'claude', terminalId: 'term-new', prompt: 'Next step', inputKind: 'orchestration' } as const
+    assert.deepEqual(await w.hooks.fire('agent.prompt.before', next), { kind: 'continue', event: next })
+    assert.equal(launchOf(host, 0).workspaceId, STARTED.id)
+  })
+})
+
+test('a launch prompt built from a newer title than the cached one is not prefixed again', async () => {
+  await withDesk({ settings: { agentContext: true } }, async ({ w, host, desk, ado }) => {
+    await startLinked(w, desk)
+    const item = ado.items.get(1204)
+    assert.ok(item)
+    item.fields['System.Title'] = 'Add vehicle search filters [v2]'
+    assert.deepEqual(await w.request('work.startAgent', { org: 'contoso', id: 1204 }), { launched: true })
+    const { prompt } = launchOf(host, 0)
+    assert.equal(prompt, `[ADO User Story #1204: Add vehicle search filters \\[v2\\]](${ITEM_URL})`)
+
+    await w.emit('agent.status.changed', { workspaceId: STARTED.id, paneKey: 'pane-3', terminalId: 'term-hooked-first', state: 'working', receivedAt: Date.now() })
+    const launch = { agent: 'claude', terminalId: 'term-hooked-first', prompt, inputKind: 'launch' } as const
+    assert.deepEqual(await w.hooks.fire('agent.prompt.before', launch), { kind: 'continue', event: launch })
   })
 })
 

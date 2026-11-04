@@ -5,6 +5,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { createScheduler } from '../poll/scheduler'
+import { drain } from '../test-support'
 import {
   BOARDS,
   fixture,
@@ -36,10 +37,6 @@ const NEEDS_CODE_READ = 'Linked PR status needs Code (Read) access.'
 const COLUMNS = ['New', 'Active', 'In Review', 'Resolved', 'Closed']
 const MINE_QUERY =
   "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Removed') ORDER BY [System.ChangedDate] DESC"
-
-async function drain(): Promise<void> {
-  for (let turn = 0; turn < 100; turn += 1) await new Promise(resolve => setImmediate(resolve))
-}
 
 function fakeClock() {
   let now = T0

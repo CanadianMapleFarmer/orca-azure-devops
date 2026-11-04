@@ -1,23 +1,20 @@
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import type { OrcaWorkerApi } from 'orca/worker'
+import { drain } from '../test-support'
 import { watchWorkspaceSettings, type WorkspaceSettings } from './settings'
-
-async function drain(): Promise<void> {
-  for (let turn = 0; turn < 10; turn += 1) await new Promise(resolve => setImmediate(resolve))
-}
 
 async function watched(host = mockHost()) {
   const seen: { settings?: WorkspaceSettings; api?: OrcaWorkerApi['settings'] } = {}
-  await mountWorker(
+  const w = await mountWorker(
     {
       default: async orca => {
         seen.api = orca.settings
-        seen.settings = await watchWorkspaceSettings(orca.settings)
+        seen.settings = await watchWorkspaceSettings(orca.settings, message => orca.log(message))
       }
     },
     { host }
   )
-  return { settings: seen.settings as WorkspaceSettings, api: seen.api as OrcaWorkerApi['settings'] }
+  return { w, settings: seen.settings as WorkspaceSettings, api: seen.api as OrcaWorkerApi['settings'] }
 }
 
 test('workspace settings fall back to the defaults', async () => {
@@ -44,15 +41,39 @@ test('workspace settings follow changes made while the worker runs', async () =>
   assert.deepEqual([settings.agentContext(), settings.defaultAgent(), settings.branchTemplate()], [true, 'codex', 'work/{id}'])
 })
 
-test('a failing settings read keeps the defaults', async () => {
-  const { settings } = await watched(
+const READ_FAILED = "Couldn't read settings; keeping the previous values."
+
+test('a failing settings read keeps the defaults and says so in the log without the error text', async () => {
+  const { w, settings } = await watched(
     mockHost({
       results: {
         'settings.get': () => {
-          throw hostError('unavailable')
+          throw hostError('unavailable', 'secret-detail')
         }
       }
     })
   )
   assert.deepEqual([settings.agentContext(), settings.defaultAgent(), settings.branchTemplate()], [false, 'claude', 'feature/{id}-{slug}'])
+  assert.deepEqual(w.logs, [READ_FAILED])
+})
+
+test('a settings read that fails after a change keeps the values read before', async () => {
+  let failing = false
+  const { w, settings, api } = await watched(
+    mockHost({
+      settings: { defaultAgent: 'codex' },
+      results: {
+        'settings.get': () => {
+          if (failing) throw hostError('unavailable')
+          return { settings: { defaultAgent: 'codex' } }
+        }
+      }
+    })
+  )
+  failing = true
+  await api.set('agentContext', true)
+  await drain()
+  assert.equal(settings.defaultAgent(), 'codex')
+  assert.equal(settings.agentContext(), false)
+  assert.deepEqual(w.logs, [READ_FAILED])
 })

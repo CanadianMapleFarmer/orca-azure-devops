@@ -23,13 +23,17 @@ function slugOf(title: string): string {
   return slug || 'item'
 }
 
+function validSegment(raw: string): string {
+  let segment = raw.replace(/\.{2,}/g, '.').replace(/^[.-]+/, '')
+  for (let previous = ''; previous !== segment; ) {
+    previous = segment
+    segment = segment.replace(/(\.lock)+$/, '').replace(/[.-]+$/, '')
+  }
+  return segment
+}
+
 function validRef(raw: string): string {
-  return raw
-    .replace(/[^A-Za-z0-9._/-]+/g, '-')
-    .split('/')
-    .map(part => part.replace(/\.{2,}/g, '.').replace(/^[.-]+/, '').replace(/(\.lock)+$/, '').replace(/[.-]+$/, ''))
-    .filter(Boolean)
-    .join('/')
+  return raw.replace(/[^A-Za-z0-9._/-]+/g, '-').split('/').map(validSegment).filter(Boolean).join('/')
 }
 
 function expand(template: string, item: { id: number; title: string }): string {

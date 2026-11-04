@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { assert, test } from 'orca/testing'
 import { branchFor, createArm } from './arm'
 
@@ -38,6 +39,28 @@ test('branchFor always returns a valid git ref', () => {
   assert.equal(branchFor('///', ITEM), 'feature/1204-add-vehicle-search-filters')
   assert.equal(branchFor('', ITEM), 'feature/1204-add-vehicle-search-filters')
   assert.equal(branchFor('...', ITEM), 'feature/1204-add-vehicle-search-filters')
+})
+
+test('branchFor strips trailing dots, dashes and .lock from each segment until it is stable', () => {
+  assert.equal(branchFor('{id}.lock.', ITEM), '1204')
+  assert.equal(branchFor('{slug}.lock!', ITEM), 'add-vehicle-search-filters')
+  assert.equal(branchFor('x.lock /{id}', ITEM), 'x/1204')
+  assert.equal(branchFor('a.lock.lock-.lock/{id}', ITEM), 'a/1204')
+})
+
+test('branchFor output passes git check-ref-format', () => {
+  const templates = [
+    'feature/{id}-{slug}', '{id}.lock.', '{slug}.lock!', 'x.lock /{id}', 'a..b//c.lock/{id}.', '.hidden/{id}-', '/{id}/', '@{slug}', '-{id}', '{slug}.lock.lock.',
+    'a@{b}~^:?*[\\/{id}', 'team notes/{id} {slug}', '{slug}/.lock', '...', ''
+  ]
+  const titles = [ITEM.title, 'Résumé — naïve façade ✓', '日本語', '[Bug] Search..lock', '   ', 'a'.repeat(80)]
+  for (const template of templates) {
+    for (const title of titles) {
+      const ref = branchFor(template, { id: 1204, title })
+      const check = spawnSync('git', ['check-ref-format', '--branch', ref])
+      assert.equal(check.status, 0, `${JSON.stringify(template)} with ${JSON.stringify(title)} gave ${JSON.stringify(ref)}`)
+    }
+  }
 })
 
 test('an arm is taken once and reports when it expires', () => {

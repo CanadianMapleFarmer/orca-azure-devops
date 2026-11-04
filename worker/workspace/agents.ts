@@ -1,5 +1,5 @@
 import type { WorkItemDetails } from '../../src/shared/work'
-import { focusedWorkspace, listWorkspaces, type HostCall } from './focused'
+import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from './focused'
 import type { LinkStore } from './links'
 
 export const NO_WORKSPACE = 'Start a workspace for this item first, or open one in Orca.'
@@ -10,12 +10,19 @@ const CONTEXT_CAP = 500
 export interface ContextCache {
   record(terminalId: string, workspaceId: string): void
   workspaceOf(terminalId: string): string | null
+  markGiven(terminalId: string): void
+  wasGiven(terminalId: string): boolean
 }
 
 export interface ItemInfo { type: string; title: string; url: string }
 
 export function itemLink(id: number, info: ItemInfo): string {
-  return `[ADO ${info.type} #${id}: ${info.title}](${info.url})`
+  return `[ADO ${info.type} #${id}: ${info.title.replace(/[\\[\]]/g, '\\$&')}](${info.url})`
+}
+
+export function carriesContext(prompt: string, id: number): boolean {
+  const first = prompt.split('\n', 1)[0]
+  return first.startsWith('[ADO ') && first.includes(` #${id}: `)
 }
 
 export function itemPrompt(details: WorkItemDetails, maxChars = DEFAULT_MAX_CHARS): string {
@@ -33,13 +40,20 @@ export function itemPrompt(details: WorkItemDetails, maxChars = DEFAULT_MAX_CHAR
 
 export function createContextCache(): ContextCache {
   const workspaces = new Map<string, string>()
+  const given = new Set<string>()
   return {
     record(terminalId, workspaceId) {
       workspaces.delete(terminalId)
       workspaces.set(terminalId, workspaceId)
       if (workspaces.size > CONTEXT_CAP) workspaces.delete(workspaces.keys().next().value as string)
     },
-    workspaceOf: terminalId => workspaces.get(terminalId) ?? null
+    workspaceOf: terminalId => workspaces.get(terminalId) ?? null,
+    markGiven(terminalId) {
+      given.delete(terminalId)
+      given.add(terminalId)
+      if (given.size > CONTEXT_CAP) given.delete(given.values().next().value as string)
+    },
+    wasGiven: terminalId => given.has(terminalId)
   }
 }
 
@@ -53,8 +67,12 @@ export interface AgentDeps {
 
 async function workspaceFor(deps: AgentDeps, org: string, id: number): Promise<string | null> {
   const linked = deps.links.byItem(org, id)
-  if (linked && (await listWorkspaces(deps.call)).some(entry => entry.id === linked)) return linked
-  return (await focusedWorkspace(deps.call))?.id ?? null
+  let listed: WorkspaceEntry[] | undefined
+  if (linked) {
+    listed = await listWorkspaces(deps.call)
+    if (listed.some(entry => entry.id === linked)) return linked
+  }
+  return (await focusedWorkspace(deps.call, listed))?.id ?? null
 }
 
 export async function startAgent(deps: AgentDeps, input: { org: string; id: number }): Promise<{ launched: boolean; message?: string }> {
@@ -63,5 +81,6 @@ export async function startAgent(deps: AgentDeps, input: { org: string; id: numb
   const prompt = itemPrompt(await deps.details(input.org, input.id))
   const { terminalId }: { terminalId: string } = await deps.call('agent.launch', { workspaceId, agent: deps.defaultAgent(), prompt })
   deps.context.record(terminalId, workspaceId)
+  deps.context.markGiven(terminalId)
   return { launched: true }
 }
