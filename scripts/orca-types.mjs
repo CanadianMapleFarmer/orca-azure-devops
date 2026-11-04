@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -7,6 +7,8 @@ import { promisify } from 'node:util'
 const run = promisify(execFile)
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const rawBase = 'https://raw.githubusercontent.com/stablyai/orca'
+const typesDir = join(root, '.orca', 'types')
+const versionFile = join(typesDir, '.orca-version')
 
 const moduleTypings = ['orca.d.ts', 'orca-components.d.ts', 'orca-components-layout.d.ts', 'orca-components-data.d.ts']
 const surfaceTypings = ['orca-host', 'orca-frame', 'orca-worker', 'orca-services', 'orca-testing']
@@ -40,9 +42,17 @@ async function orcaTypesWork() {
 
 async function installedVersion() {
   const { stdout } = await run('orca', ['--version'])
-  const version = stdout.trim()
-  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Unexpected orca --version output: ${version}`)
-  return version
+  return stdout.trim()
+}
+
+async function typingsAreCurrent(version) {
+  const expected = [...['orca', ...surfaceTypings].map((dir) => join(typesDir, dir, 'index.d.ts')), join(typesDir, 'tsconfig.json')]
+  try {
+    await Promise.all(expected.map((file) => access(file)))
+    return (await readFile(versionFile, 'utf8')).trim() === version
+  } catch {
+    return false
+  }
 }
 
 async function fetchText(url) {
@@ -53,6 +63,8 @@ async function fetchText(url) {
 
 // Mirrors `orca plugin types` for Orca builds that ship without the typings it reads.
 async function writeDownloadedTypes(version) {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Unexpected orca --version output: ${version}`)
+  console.error(`orca plugin types failed; downloading the typings for Orca ${version} from stablyai/orca`)
   const tagBase = `${rawBase}/v${version}/resources/plugins`
   const [moduleParts, surfaceParts] = await Promise.all([
     Promise.all(moduleTypings.map((file) => fetchText(`${tagBase}/declarative/${file}`))),
@@ -63,17 +75,18 @@ async function writeDownloadedTypes(version) {
     typings[dir] = surfaceParts[index]
   })
 
-  await mkdir(join(root, '.orca', 'types'), { recursive: true })
+  await mkdir(typesDir, { recursive: true })
   await writeFile(join(root, '.orca', '.gitignore'), '*\n')
   for (const [dir, text] of Object.entries(typings)) {
-    await mkdir(join(root, '.orca', 'types', dir), { recursive: true })
-    await writeFile(join(root, '.orca', 'types', dir, 'index.d.ts'), generatedNote + text)
+    await mkdir(join(typesDir, dir), { recursive: true })
+    await writeFile(join(typesDir, dir, 'index.d.ts'), generatedNote + text)
   }
-  await writeFile(join(root, '.orca', 'types', 'tsconfig.json'), `${JSON.stringify(typesTsconfig, null, 2)}\n`)
+  await writeFile(join(typesDir, 'tsconfig.json'), `${JSON.stringify(typesTsconfig, null, 2)}\n`)
 }
 
-if (!(await orcaTypesWork())) {
-  const version = await installedVersion()
-  console.error(`orca plugin types failed; downloading the typings for Orca ${version} from stablyai/orca`)
-  await writeDownloadedTypes(version)
+const version = await installedVersion()
+if (!(await typingsAreCurrent(version))) {
+  if (!(await orcaTypesWork())) await writeDownloadedTypes(version)
+  await mkdir(typesDir, { recursive: true })
+  await writeFile(versionFile, `${version}\n`)
 }
