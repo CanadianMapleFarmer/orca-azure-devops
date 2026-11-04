@@ -65,11 +65,15 @@ const closeDetails = (): void => set(openItem, null)
 
 async function fetchDetails(org: string, id: number): Promise<void> {
   try {
-    const details = await plugin.request('work.details', { org, id })
-    if (isOpen(org, id)) set(loaded, { status: 'ready', details })
+    await reloadDetails(org, id)
   } catch (error) {
     if (isOpen(org, id)) set(loaded, { status: 'failed', message: messageOf(error) })
   }
+}
+
+async function reloadDetails(org: string, id: number): Promise<void> {
+  const details = await plugin.request('work.details', { org, id })
+  if (isOpen(org, id)) set(loaded, { status: 'ready', details })
 }
 
 async function run(org: string, id: number, section: Section, work: () => Promise<void>): Promise<void> {
@@ -99,11 +103,15 @@ function postComment(org: string, id: number): Promise<void> {
 function linkPullRequest(org: string, id: number, rev: number): Promise<void> {
   const prUrl = read(linkDraft).trim()
   return run(org, id, 'link', async () => {
-    await plugin.request('work.linkPr', { org, id, rev, prUrl })
+    try {
+      await plugin.request('work.linkPr', { org, id, rev, prUrl })
+    } catch (error) {
+      await reloadDetails(org, id).catch(() => {})
+      throw error
+    }
     if (!isOpen(org, id)) return
     set(linkDraft, '')
-    const details = await plugin.request('work.details', { org, id })
-    if (isOpen(org, id)) set(loaded, { status: 'ready', details })
+    await reloadDetails(org, id)
   })
 }
 

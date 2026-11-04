@@ -491,14 +491,61 @@ test('linkPr links the pull request and returns the item with its chip', async (
   assert.deepEqual(item(h.posts.at(-1), 1205), linked)
 })
 
-test('a refused linkPr refreshes the item and reports the conflict', async () => {
+const PR_322 = `${ORG_URL}/Fabrikam%20Web/_git/web-app/pullrequest/322`
+const NOT_A_PR = "That isn't an Azure DevOps pull request link."
+const isCommentPost = (id: number) => (call: AdoCall) => call.method === 'POST' && call.path.endsWith(`/workItems/${id}/comments`)
+
+test('a linkPr refused because someone edited the item meanwhile reports the conflict, and the retry links it', async () => {
   const h = harness()
-  h.ado.state.staleStatus = 400
   await h.service.refresh(ORG)
-  const error = await rejection(h.service.linkPr({ org: ORG, id: 1205, rev: 2, prUrl: `${ORG_URL}/Fabrikam%20Web/_git/web-app/pullrequest/322` }))
+  const theirs = h.ado.items.get(1205)!
+  let edited = false
+  h.ado.on(
+    call => isPatch(call) && !edited,
+    () => {
+      edited = true
+      theirs.rev = 4
+      theirs.fields['System.Title'] = 'Fix the pagination offset'
+      return json(400, { message: 'TF26071: This work item has been changed by someone else since you opened it.' })
+    }
+  )
+  const error = await rejection(h.service.linkPr({ org: ORG, id: 1205, rev: 3, prUrl: PR_322 }))
   assert.deepEqual({ code: error.code, message: error.message }, { code: 'conflict', message: CONFLICT })
-  assert.equal(item(h.posts.at(-1), 1205)?.rev, 3)
-  assert.equal(h.ado.items.get(1205)?.relations, undefined)
+  assert.deepEqual([item(h.posts.at(-1), 1205)?.rev, item(h.posts.at(-1), 1205)?.title], [4, 'Fix the pagination offset'])
+  assert.equal(theirs.relations, undefined)
+
+  const linked = await h.service.linkPr({ org: ORG, id: 1205, rev: 3, prUrl: PR_322 })
+  assert.equal(linked.rev, 5)
+  assert.deepEqual(linked.prs.map(chip => chip.prId), [322])
+})
+
+test('linkPr succeeds after a comment in the same details session', async () => {
+  const h = harness()
+  await h.service.refresh(ORG)
+  h.ado.on(isCommentPost(1205), () => {
+    h.ado.items.get(1205)!.rev += 1
+    return json(200, { id: 78, text: 'Linking the fix', createdBy: { displayName: 'Alex Contoso' }, createdDate: '2026-11-04T09:00:00Z' })
+  })
+  const details = await h.service.details(ORG, 1205)
+  await h.service.comment(ORG, 1205, 'Linking the fix')
+  assert.equal(item(h.posts.at(-1), 1205)?.rev, 4, 'the comment publishes the item at its new rev')
+
+  const linked = await h.service.linkPr({ org: ORG, id: 1205, rev: details.item.rev, prUrl: PR_322 })
+  assert.equal(linked.rev, 5)
+  assert.deepEqual(linked.prs.map(chip => chip.prId), [322])
+  assert.deepEqual(item(h.posts.at(-1), 1205), linked)
+})
+
+test('a bad pull request link gets the link message, never the conflict, and nothing is sent', async () => {
+  const h = harness()
+  await h.service.refresh(ORG)
+  h.ado.items.get(1205)!.rev = 5
+  const calls = h.ado.calls.length
+  for (const prUrl of ['nope', 'https://dev.azure.com/fabrikam/Ops/_git/web-app/pullrequest/5', `${ORG_URL}/Fabrikam%20Web/_git/web-app/pullrequest/0`]) {
+    const error = await rejection(h.service.linkPr({ org: ORG, id: 1205, rev: 3, prUrl }))
+    assert.deepEqual({ code: error.code, status: error.status, message: error.message }, { code: 'bad_request', status: 400, message: NOT_A_PR }, prUrl)
+  }
+  assert.deepEqual(h.ado.calls.slice(calls), [])
 })
 
 test('orgs without boards get the settings message', async () => {

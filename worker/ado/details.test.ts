@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { WorkItemSummary } from '../../src/shared/work'
-import { addComment, linkPr, loadDetails } from './details'
-import { AdoError, createAdoHttp } from './http'
+import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from './details'
+import { AdoError, createAdoHttp, type AdoHttp } from './http'
 import type { RawWorkItem } from './workitems'
 
 const ORG = 'contoso'
@@ -307,9 +307,19 @@ function prServer(opts: { repoId?: string; projectId?: string; rev?: number; pat
 
 const PR_URL = `${BASE}/Contoso%20Ops/_git/web-app/pullrequest/55`
 
+async function linkPr(http: AdoHttp, prUrl: string, item: RawWorkItem = raw()): Promise<number> {
+  return addPullRequestLink(http, ORG, PROJECT, item, await resolvePullRequest(http, ORG, prUrl))
+}
+
+test('the link tests the rev of the item it was given', async () => {
+  const { http, calls } = prServer({ rev: 12 })
+  assert.equal(await linkPr(http, PR_URL, { ...raw(), rev: 11 }), 12)
+  assert.deepEqual(calls[1].body[0], { op: 'test', path: '/rev', value: 11 })
+})
+
 test('linkPr adds an ArtifactLink relation with the rev test and rejects non-PR URLs', async () => {
   const { http, calls } = prServer({ rev: 9 })
-  const rev = await linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw())
+  const rev = await linkPr(http, PR_URL)
   assert.equal(rev, 9)
   assert.equal(calls.length, 2)
   assert.equal(calls[0].method, 'GET')
@@ -348,7 +358,7 @@ test('linkPr adds an ArtifactLink relation with the rev test and rejects non-PR 
     `${BASE}/Contoso%20Ops/_git/%E0%A4%A/pullrequest/55`
   ]
   for (const prUrl of rejected) {
-    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, prUrl, raw()))
+    const error = await rejection(linkPr(http, prUrl))
     assert.equal(error.code, 'bad_request', prUrl)
     assert.equal(error.status, 400)
     assert.equal(error.message, NOT_A_PR)
@@ -368,7 +378,7 @@ test('linkPr accepts both URL forms, trailing segments and queries, and decodes 
   ]
   for (const prUrl of urls) {
     const { http, calls } = prServer()
-    await linkPr(http, ORG, PROJECT, 42, 7, prUrl, raw())
+    await linkPr(http, prUrl)
     assert.equal(calls[0].url, `${BASE}/Contoso%20Ops/_apis/git/repositories/web%20app/pullrequests/55?api-version=7.1`, prUrl)
     assert.equal(calls[1].method, 'PATCH', prUrl)
   }
@@ -380,7 +390,7 @@ test('a pull request from another organization is refused before any request', a
     'https://dev.azure.com/fabrikam/Ops/_git/web-app/pullrequest/55',
     'https://fabrikam.visualstudio.com/Ops/_git/web-app/pullrequest/55'
   ]) {
-    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, prUrl, raw()))
+    const error = await rejection(linkPr(http, prUrl))
     assert.equal(error.code, 'bad_request')
     assert.equal(error.message, NOT_A_PR)
   }
@@ -390,7 +400,7 @@ test('a pull request from another organization is refused before any request', a
 test('linkPr leaves an already linked pull request alone', async () => {
   const existing = { rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${OTHER_PROJECT.toUpperCase()}%2F${REPO}%2F55`, attributes: { name: 'Pull Request' } }
   const { http, calls } = prServer()
-  const rev = await linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw({}, [itemLink(PARENT, 3), existing]))
+  const rev = await linkPr(http, PR_URL, raw({}, [itemLink(PARENT, 3), existing]))
   assert.equal(rev, 7)
   assert.deepEqual(calls.map(call => call.method), ['GET'])
 })
@@ -398,7 +408,7 @@ test('linkPr leaves an already linked pull request alone', async () => {
 test('linkPr reports a stale rev as the refresh-and-retry conflict', async () => {
   for (const patchStatus of [409, 412]) {
     const { http } = prServer({ patchStatus })
-    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw()))
+    const error = await rejection(linkPr(http, PR_URL))
     assert.equal(error.code, 'conflict')
     assert.equal(error.status, 409)
     assert.equal(error.message, CONFLICT_MESSAGE)
@@ -407,12 +417,12 @@ test('linkPr reports a stale rev as the refresh-and-retry conflict', async () =>
 
 test('linkPr surfaces a pull request that cannot be read or is malformed', async () => {
   const missing = adoServer(() => reply(404, { message: 'TF401180: not found' }))
-  assert.equal((await rejection(linkPr(missing.http, ORG, PROJECT, 42, 7, PR_URL, raw()))).code, 'not_found')
+  assert.equal((await rejection(linkPr(missing.http, PR_URL))).code, 'not_found')
   assert.equal(missing.calls.length, 1)
 
   for (const body of [{}, { repository: {} }, { repository: { id: REPO } }, { repository: { id: REPO, project: {} } }]) {
     const { http, calls } = adoServer(() => reply(200, body))
-    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw()))
+    const error = await rejection(linkPr(http, PR_URL))
     assert.equal(error.code, 'server')
     assert.equal(error.message, 'Azure DevOps returned an unexpected pull request response.')
     assert.equal(calls.length, 1)
@@ -439,7 +449,7 @@ test('a failing link-title lookup shows ids, but throttling still fails the deta
 test('linkPr returns the hydrated item rev when the pull request is already linked', async () => {
   const existing = { rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${OTHER_PROJECT}%2F${REPO}%2F55`, attributes: { name: 'Pull Request' } }
   const { http, calls } = prServer()
-  const rev = await linkPr(http, ORG, PROJECT, 42, 5, PR_URL, { ...raw({}, [existing]), rev: 9 })
+  const rev = await linkPr(http, PR_URL, { ...raw({}, [existing]), rev: 9 })
   assert.equal(rev, 9)
   assert.deepEqual(calls.map(call => call.method), ['GET'])
 })
@@ -447,7 +457,7 @@ test('linkPr returns the hydrated item rev when the pull request is already link
 test('linkPr refuses a pull request whose repository or project id is empty', async () => {
   for (const ids of [{ repoId: '' }, { projectId: '' }]) {
     const { http, calls } = prServer(ids)
-    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw()))
+    const error = await rejection(linkPr(http, PR_URL))
     assert.equal(error.code, 'server')
     assert.equal(error.message, 'Azure DevOps returned an unexpected pull request response.')
     assert.deepEqual(calls.map(call => call.method), ['GET'])

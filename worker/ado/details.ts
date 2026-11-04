@@ -92,19 +92,14 @@ export async function addComment(http: AdoHttp, org: string, projectId: string, 
   return shaped(() => toComment(data, workItemUrl(orgUrl(org), projectId, id)), MALFORMED_COMMENT)
 }
 
-export async function linkPr(
-  http: AdoHttp,
-  org: string,
-  projectId: string,
-  id: number,
-  rev: number,
-  prUrl: string,
-  raw: RawWorkItem
-): Promise<number> {
-  const artifactUrl = await resolveArtifactUrl(http, org, parsePrUrl(prUrl, org))
+export async function resolvePullRequest(http: AdoHttp, org: string, prUrl: string): Promise<string> {
+  return resolveArtifactUrl(http, org, parsePrUrl(prUrl, org))
+}
+
+export async function addPullRequestLink(http: AdoHttp, org: string, projectId: string, raw: RawWorkItem, artifactUrl: string): Promise<number> {
   if ((raw.relations ?? []).some(link => link.url.toLowerCase() === artifactUrl.toLowerCase())) return raw.rev
-  return patchWorkItem(http, org, projectId, id, [
-    { op: 'test', path: '/rev', value: rev },
+  return patchWorkItem(http, org, projectId, raw.id, [
+    { op: 'test', path: '/rev', value: raw.rev },
     { op: 'add', path: '/relations/-', value: { rel: 'ArtifactLink', url: artifactUrl, attributes: { name: 'Pull Request' } } }
   ])
 }

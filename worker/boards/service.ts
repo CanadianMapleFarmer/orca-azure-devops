@@ -2,7 +2,7 @@ import { NO_BOARDS } from '../../src/shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
 import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
-import { addComment, linkPr as linkPullRequest, loadDetails } from '../ado/details'
+import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
@@ -240,13 +240,18 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     deps.post(entry.snapshot)
   }
 
+  async function republish(status: OrgStatus, cfg: BoardConfig, id: number): Promise<WorkItemSummary | null> {
+    const fresh = await loadItem(sourceOf(status), cfg, id).catch(() => null)
+    if (fresh) await publish(status, fresh.raw, fresh.item)
+    return fresh?.item ?? null
+  }
+
   async function change(status: OrgStatus, cfg: BoardConfig, id: number, rev: number, send: () => Promise<number>): Promise<WorkItemSummary> {
     try {
       await send()
     } catch (error) {
-      const fresh = await loadItem(sourceOf(status), cfg, id).catch(() => null)
-      if (fresh) await publish(status, fresh.raw, fresh.item)
-      if (fresh && fresh.item.rev !== rev) throw new AdoError('conflict', 409, CONFLICT)
+      const fresh = await republish(status, cfg, id)
+      if (fresh && fresh.rev !== rev) throw new AdoError('conflict', 409, CONFLICT)
       throw error
     }
     const { raw, item } = await reload(status, cfg, id)
@@ -325,14 +330,17 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     async comment(org, id, text) {
       const status = await statusOf(org)
       const { cfg } = await target(status, id)
-      return addComment(http, org, cfg.projectId, id, text)
+      const comment = await addComment(http, org, cfg.projectId, id, text)
+      await republish(status, cfg, id)
+      return comment
     },
 
-    async linkPr({ org, id, rev, prUrl, board }) {
+    async linkPr({ org, id, prUrl, board }) {
       const status = await statusOf(org)
+      const artifactUrl = await resolvePullRequest(http, org, prUrl)
       const { cfg } = await target(status, id, board)
       const { raw } = await reload(status, cfg, id)
-      return change(status, cfg, id, rev, () => linkPullRequest(http, org, cfg.projectId, id, rev, prUrl, raw))
+      return change(status, cfg, id, raw.rev, () => addPullRequestLink(http, org, cfg.projectId, raw, artifactUrl))
     },
 
     async board({ everyone, ...args }) {

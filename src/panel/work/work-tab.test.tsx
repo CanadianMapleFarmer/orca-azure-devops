@@ -470,6 +470,24 @@ test('a link the worker refuses shows its message', async () => {
   assert.equal(panel.valueOf({ label: 'Link a pull request' }), 'nope')
 })
 
+test('a failed Link reloads the details and keeps the typed link', async () => {
+  let loads = 0
+  const prUrl = 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web/pullrequest/56'
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': () => (++loads === 1 ? detailsOf() : detailsOf({ item: item(101, { title: 'Fix login redirect', rev: 9, state: 'Resolved' }) })),
+    'work.linkPr': () => {
+      throw hostError('action_failed', CONFLICT)
+    }
+  })
+  await panel.press({ type: 'Button', text: 'Details' })
+  await panel.type({ label: 'Link a pull request' }, prUrl)
+  await panel.press({ type: 'Button', text: 'Link' })
+  assert.equal(requestsTo(host, 'work.details').length, 2)
+  assert.deepEqual((panel.find({ type: 'KeyValue' })?.props.items as { label: string; value: unknown }[])[1], { label: 'State', value: 'Resolved' })
+  assert.equal(panel.valueOf({ label: 'Link a pull request' }), prUrl)
+  assert.ok(panel.findAll({ type: 'Callout' }).some(callout => callout.props.tone === 'danger' && callout.text === CONFLICT))
+})
+
 test('Start a workspace names the branch to create', async () => {
   const host = await open(snapshotOf({ mine: [item(101)] }), {
     'work.details': detailsOf(),
