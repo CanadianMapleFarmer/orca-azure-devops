@@ -23,6 +23,7 @@ import { actionError, busy, messageOf, view, type Busy } from './state'
 type Named = { id: string; name: string }
 
 const LONG_WAIT = { timeoutMs: 90_000 }
+const MAX_LISTED = 500
 
 export const settingsOrg = atom<string | null>(null)
 const projects = atom<Named[]>([])
@@ -31,9 +32,11 @@ const projectId = atom<string | null>(null)
 const teamId = atom<string | null>(null)
 const allCode = atom(true)
 const codeIds = atom<string[]>([])
+const loadedFor = atom<string | null>(null)
 const loadingProjects = atom(false)
 const loadingTeams = atom(false)
 const saving = atom(false)
+const confirmingRemove = atom(false)
 
 let generation = 0
 
@@ -50,6 +53,7 @@ async function loadTeams(org: string, project: string, current: number): Promise
 }
 
 async function loadProjects(org: string, current: number): Promise<void> {
+  set(loadedFor, org)
   set(loadingProjects, true)
   try {
     const list = await plugin.request('ado.projects', { org })
@@ -75,15 +79,25 @@ export function openSettings(org: OrgStatus): void {
   set(teamId, org.boards?.teamId ?? null)
   set(allCode, saved === 'all')
   set(codeIds, saved === 'all' ? [] : saved.map(project => project.id))
+  set(loadedFor, null)
+  set(loadingProjects, false)
   set(loadingTeams, false)
   set(saving, false)
+  set(confirmingRemove, false)
   set(view, 'settings')
   if (org.state === 'connected') void loadProjects(org.org, generation)
+}
+
+export function syncSettings(list: readonly OrgStatus[]): void {
+  if (read(view) !== 'settings') return
+  const target = list.find(item => item.org === read(settingsOrg))
+  if (target?.state === 'connected' && read(loadedFor) !== target.org) void loadProjects(target.org, generation)
 }
 
 function leaveSettings(): void {
   generation += 1
   set(actionError, null)
+  set(confirmingRemove, false)
   set(view, 'hub')
 }
 
@@ -117,7 +131,9 @@ function pickTeam(org: string, id: string): void {
 
 function setAllCode(org: string, on: boolean): void {
   set(allCode, on)
-  if (on) void save(() => plugin.request('orgs.setCodeProjects', { org, projects: 'all' }))
+  if (!on) return
+  set(codeIds, [])
+  void save(() => plugin.request('orgs.setCodeProjects', { org, projects: 'all' }))
 }
 
 function tickCodeProject(org: string, id: string, on: boolean): void {
@@ -137,6 +153,7 @@ async function leaveAfter(kind: Exclude<Busy, null>, run: () => Promise<unknown>
     set(actionError, messageOf(error))
   } finally {
     set(busy, null)
+    set(confirmingRemove, false)
   }
 }
 
@@ -144,6 +161,14 @@ export const signOut = (org: string): Promise<void> =>
   leaveAfter('sign-out', () => plugin.request('orgs.signOut', { org }, LONG_WAIT))
 
 const removeOrg = (org: string): Promise<void> => leaveAfter('remove', () => plugin.request('orgs.remove', { org }, LONG_WAIT))
+
+function CapNote({ total }: { total: number }): OrcaNode {
+  return total > MAX_LISTED ? (
+    <Text muted size="xs">
+      {`Showing the first ${MAX_LISTED}.`}
+    </Text>
+  ) : null
+}
 
 function Targets({ org }: { org: string }): OrcaNode {
   if (read(loadingProjects)) return <Skeleton lines={4} label="Loading projects" />
@@ -154,30 +179,33 @@ function Targets({ org }: { org: string }): OrcaNode {
   const chosen = read(codeIds)
   const frozen = read(saving)
   const teamsLoading = read(loadingTeams)
+  const teamList = read(teams)
   return (
     <Stack gap="md">
       <Select
         label="Boards project"
         placeholder="Choose a project"
-        options={list.map(item => ({ value: item.id, label: item.name }))}
+        options={list.slice(0, MAX_LISTED).map(item => ({ value: item.id, label: item.name }))}
         value={project ?? ''}
         disabled={frozen}
         onChange={id => pickProject(org, id)}
       />
+      <CapNote total={list.length} />
       <Select
         label="Team"
         placeholder="Choose a team"
-        options={read(teams).map(item => ({ value: item.id, label: item.name }))}
+        options={teamList.slice(0, MAX_LISTED).map(item => ({ value: item.id, label: item.name }))}
         value={read(teamId) ?? ''}
         disabled={!project || teamsLoading || frozen}
         onChange={id => pickTeam(org, id)}
       />
+      <CapNote total={teamList.length} />
       {teamsLoading ? <Spinner label="Loading teams…" /> : null}
       <Separator />
       <Switch label="All projects with code" checked={all} disabled={frozen} onChange={on => setAllCode(org, on)} />
       {all ? null : (
         <Stack gap="xs">
-          {list.map(item => (
+          {list.slice(0, MAX_LISTED).map(item => (
             <Checkbox
               key={item.id}
               label={item.name}
@@ -186,6 +214,7 @@ function Targets({ org }: { org: string }): OrcaNode {
               onChange={on => tickCodeProject(org, item.id, on)}
             />
           ))}
+          <CapNote total={list.length} />
           {chosen.length === 0 ? (
             <Text muted size="xs">
               Pick at least one project. Nothing is saved until you do.
@@ -201,6 +230,7 @@ function Targets({ org }: { org: string }): OrcaNode {
 export function OrgSettings({ org }: { org: OrgStatus }): OrcaNode {
   const working = read(busy)
   const error = read(actionError)
+  const confirming = read(confirmingRemove)
   return (
     <Stack gap="md">
       <Row align="center" gap="sm">
@@ -217,9 +247,20 @@ export function OrgSettings({ org }: { org: OrgStatus }): OrcaNode {
         <Button tone="danger" disabled={working !== null} onPress={() => signOut(org.org)}>
           Sign out
         </Button>
-        <Button variant="outline" disabled={working !== null} onPress={() => removeOrg(org.org)}>
-          Remove organization
-        </Button>
+        {confirming ? (
+          <Row gap="sm">
+            <Button tone="danger" disabled={working !== null} onPress={() => removeOrg(org.org)}>
+              Confirm remove
+            </Button>
+            <Button variant="ghost" disabled={working !== null} onPress={() => set(confirmingRemove, false)}>
+              Cancel
+            </Button>
+          </Row>
+        ) : (
+          <Button variant="outline" disabled={working !== null} onPress={() => set(confirmingRemove, true)}>
+            Remove organization
+          </Button>
+        )}
       </Row>
     </Stack>
   )

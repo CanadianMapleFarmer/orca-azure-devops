@@ -20,7 +20,7 @@ import {
   type PanelContext
 } from 'orca'
 import type { OrgState, OrgStatus } from '../shared/types'
-import { OrgSettings, openSettings, settingsOrg, signOut } from './org-settings'
+import { OrgSettings, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
 import { Setup, connecting, openSetup, reconnect } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
 
@@ -68,6 +68,7 @@ export function setup(ctx: PanelContext): void {
     plugin.on('orgs.changed', payload => {
       set(orgs, payload.orgs)
       set(listing, { status: 'ready' })
+      syncSettings(payload.orgs)
     })
   )
   void loadOrgs()

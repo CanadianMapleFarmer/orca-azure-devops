@@ -334,6 +334,7 @@ test('settings saves the boards project and team', async () => {
   await panel.press(SETTINGS)
   assert.deepEqual(optionValues('Boards project'), ['proj-web', 'proj-boards'])
   assert.equal(panel.find({ label: 'Team' })?.disabled, true)
+  assert.equal(panel.find({ text: /Showing the first/ }), null)
 
   await panel.select({ label: 'Boards project' }, 'proj-boards')
   assert.deepEqual(requestsTo(host, 'ado.teams').map(call => call.input), [{ org: 'contoso', projectId: 'proj-boards' }])
@@ -460,6 +461,7 @@ test('settings removes the org with a long timeout', async () => {
   })
   await panel.press(SETTINGS)
   await panel.press({ text: 'Remove organization' })
+  await panel.press({ text: 'Confirm remove' })
   const [call] = requestsTo(host, 'orgs.remove')
   assert.deepEqual(call, { name: 'orgs.remove', input: { org: 'contoso' }, timeoutMs: 90000 })
 
@@ -494,4 +496,91 @@ test('settings has a way back', async () => {
   await panel.press(SETTINGS)
   await panel.press({ text: 'Back' })
   assert.ok(panel.find({ type: 'Tabs' }))
+})
+
+test('code projects shown always match what the worker holds', async () => {
+  let held: 'all' | string[] = ['proj-web']
+  const status = () =>
+    org('contoso', {
+      codeProjects: held === 'all' ? 'all' : PROJECTS.filter(project => held.includes(project.id))
+    })
+  await open([status()], {
+    ...settingsRequests,
+    'orgs.setCodeProjects': ({ projects }) => {
+      held = projects
+      return status()
+    }
+  })
+  await panel.press(SETTINGS)
+  assert.equal(panel.valueOf({ label: 'All projects with code' }), false)
+  assert.equal(panel.valueOf({ label: 'Web' }), true)
+
+  await panel.toggle({ label: 'All projects with code' })
+  assert.equal(held, 'all')
+  await panel.post('orgs.changed', { orgs: [status()] })
+
+  await panel.toggle({ label: 'All projects with code' })
+  assert.equal(held, 'all')
+  assert.equal(panel.valueOf({ label: 'Web' }), false)
+  assert.equal(panel.valueOf({ label: 'Boards' }), false)
+  assert.ok(panel.find({ text: /Pick at least one project/ }))
+
+  await panel.toggle({ label: 'Boards' })
+  assert.deepEqual(held, ['proj-boards'])
+  await panel.post('orgs.changed', { orgs: [status()] })
+
+  await panel.press({ text: 'Back' })
+  await panel.press(SETTINGS)
+  assert.equal(panel.valueOf({ label: 'All projects with code' }), false)
+  assert.equal(panel.valueOf({ label: 'Boards' }), true)
+  assert.equal(panel.valueOf({ label: 'Web' }), false)
+})
+
+test('long project and team lists stop at 500 entries with a note', async () => {
+  const many = Array.from({ length: 501 }, (_, index) => ({ id: `item-${index}`, name: `Item ${index}` }))
+  await open([org('contoso')], { 'ado.projects': many, 'ado.teams': many })
+  const note = { text: 'Showing the first 500.' }
+  await panel.press(SETTINGS)
+  assert.equal(optionValues('Boards project').length, 500)
+  assert.equal(panel.findAll(note).length, 1)
+
+  await panel.select({ label: 'Boards project' }, 'item-0')
+  assert.equal(optionValues('Team').length, 500)
+  assert.equal(panel.findAll(note).length, 2)
+
+  await panel.toggle({ label: 'All projects with code' })
+  assert.equal(panel.findAll({ type: 'Checkbox' }).length, 500)
+  assert.equal(panel.findAll(note).length, 3)
+})
+
+test('Remove organization asks for a second press before it removes anything', async () => {
+  const host = await open([org('contoso')], { ...settingsRequests, 'orgs.remove': () => ({ ok: true as const }) })
+  await panel.press(SETTINGS)
+  await panel.press({ text: 'Remove organization' })
+  assert.deepEqual(requestsTo(host, 'orgs.remove'), [])
+  assert.equal(panel.find({ text: 'Remove organization' }), null)
+  assert.ok(panel.find({ text: 'Confirm remove' }))
+
+  await panel.press({ text: 'Cancel' })
+  assert.deepEqual(requestsTo(host, 'orgs.remove'), [])
+  assert.ok(panel.find({ text: 'Remove organization' }))
+  assert.equal(panel.find({ text: 'Confirm remove' }), null)
+
+  await panel.press({ text: 'Remove organization' })
+  await panel.press({ text: 'Back' })
+  await panel.press(SETTINGS)
+  assert.ok(panel.find({ text: 'Remove organization' }))
+})
+
+test('settings opened while signing in load the projects once the org connects', async () => {
+  const host = await open([org('contoso', { state: 'signing-in', account: null })], settingsRequests)
+  await panel.press(SETTINGS)
+  assert.deepEqual(requestsTo(host, 'ado.projects'), [])
+
+  await panel.post('orgs.changed', { orgs: [org('contoso')] })
+  assert.equal(requestsTo(host, 'ado.projects').length, 1)
+  assert.deepEqual(optionValues('Boards project'), ['proj-web', 'proj-boards'])
+
+  await panel.post('orgs.changed', { orgs: [org('contoso')] })
+  assert.equal(requestsTo(host, 'ado.projects').length, 1)
 })
