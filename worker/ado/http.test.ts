@@ -124,6 +124,25 @@ test('honours Retry-After then gives up after two retries', async () => {
   assert.equal(error.retryAfterMs, 2000)
 })
 
+test('fails at once without sleeping when Retry-After is over ten seconds', async () => {
+  const { fetch, calls } = fakeFetch(jsonResponse({ message: 'Slow down.' }, 429, { 'retry-after': '120' }), jsonResponse({}))
+  const waits: number[] = []
+  const error = await failure(clientFor(fetch, { sleep: async ms => void waits.push(ms) }).json(REPOS))
+  assert.deepEqual(waits, [])
+  assert.equal(calls.length, 1)
+  assert.equal(error.code, 'rate_limited')
+  assert.equal(error.status, 429)
+  assert.equal(error.retryAfterMs, 120000)
+})
+
+test('still waits when Retry-After is exactly ten seconds', async () => {
+  const { fetch, calls } = fakeFetch(new Response('', { status: 429, headers: { 'retry-after': '10' } }), jsonResponse({ ok: true }))
+  const waits: number[] = []
+  await clientFor(fetch, { sleep: async ms => void waits.push(ms) }).json(REPOS)
+  assert.deepEqual(waits, [10000])
+  assert.equal(calls.length, 2)
+})
+
 test('recovers when the throttle lifts after one retry', async () => {
   const { fetch, calls } = fakeFetch(new Response('', { status: 429, headers: { 'retry-after': '1' } }), jsonResponse({ ok: true }))
   const waits: number[] = []

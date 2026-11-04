@@ -44,6 +44,7 @@ const DEFAULT_API_VERSION = '7.1'
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_RETRY_AFTER_MS = 1000
 const MAX_THROTTLE_RETRIES = 2
+const MAX_RETRY_WAIT_MS = 10_000
 const PREVIEW_VERSION_EXCEPTION = 'VssInvalidPreviewVersionException'
 
 const FIXED_MESSAGE: Record<AdoErrorCode, string> = {
@@ -121,9 +122,11 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
       }
       if (isThrottle(res)) {
         const retryAfterMs = parseRetryAfter(res.headers)
-        if (throttleRetries >= MAX_THROTTLE_RETRIES) throw adoError('rate_limited', res, problem.message, retryAfterMs)
+        const waitMs = retryAfterMs ?? DEFAULT_RETRY_AFTER_MS
+        if (throttleRetries >= MAX_THROTTLE_RETRIES || waitMs > MAX_RETRY_WAIT_MS)
+          throw adoError('rate_limited', res, problem.message, retryAfterMs)
         throttleRetries += 1
-        await sleep(retryAfterMs ?? DEFAULT_RETRY_AFTER_MS)
+        await sleep(waitMs)
         continue
       }
       throw adoError(codeFor(res.status), res, problem.message)
