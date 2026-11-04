@@ -56,9 +56,14 @@ test('decodeTokenClaims returns null for anything that is not a JWT with an obje
   for (const token of [...notObjects, ...malformed]) assert.equal(decodeTokenClaims(token), null, token)
 })
 
-test('decodeTokenClaims never throws, even on invalid UTF-8 or a non-string', () => {
-  const invalidUtf8 = btoa(String.fromCharCode(0x7b, 0xff, 0xfe, 0x7d)).replaceAll('=', '')
-  assert.equal(decodeTokenClaims(`e30.${invalidUtf8}.sig`), null)
+test('decodeTokenClaims returns null when the payload bytes are not valid UTF-8', () => {
+  const bytes = [...'{"upn":"'].map(char => char.charCodeAt(0)).concat(0xff, 0x22, 0x7d)
+  const payload = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+  assert.equal(payload, 'eyJ1cG4iOiL_In0')
+  assert.equal(decodeTokenClaims(`e30.${payload}.sig`), null)
+})
+
+test('decodeTokenClaims never throws on a non-string', () => {
   assert.equal(decodeTokenClaims(undefined as unknown as string), null)
   assert.equal(decodeTokenClaims(null as unknown as string), null)
 })
