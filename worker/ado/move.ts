@@ -1,15 +1,11 @@
 import type { BoardConfig, MoveTarget, WorkItemSummary } from '../../src/shared/work'
-import { AdoError, type AdoHttp } from './http'
+import { badRequest, INCOMPLETE_CONFIG, MOVE_BY_COLUMN, UNKNOWN_COLUMN, UNKNOWN_LANE, UNMAPPED_TYPE } from '../messages'
+import type { AdoHttp } from './http'
 import { patchWorkItem, type PatchOp } from './patch'
 
 export type { MoveTarget }
 
 const STATE_PATH = '/fields/System.State'
-const COLUMN_MISSING = "That column isn't on this board."
-const LANE_MISSING = "That lane isn't on this board."
-const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
-const MOVE_BY_COLUMN = 'Move this item by column.'
-const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
 
 export function targetsFor(item: WorkItemSummary, cfg: BoardConfig): { columns: string[]; lanes: string[]; states: string[] } {
   if (!isMapped(item, cfg)) return { columns: [], lanes: [], states: [] }
@@ -57,7 +53,7 @@ function stateChanges(item: WorkItemSummary, to: MoveTarget): PatchOp[] {
 
 function columnChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): PatchOp[] {
   const column = cfg.columns.find(candidate => candidate.name === name && mapsType(candidate, item))
-  if (!column) throw badRequest(COLUMN_MISSING)
+  if (!column) throw badRequest(UNKNOWN_COLUMN)
   if (item.column === column.name) return []
   const state = column.stateMappings[item.type]
   return [
@@ -68,7 +64,7 @@ function columnChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): P
 }
 
 function laneChanges(item: WorkItemSummary, cfg: BoardConfig, name: string): PatchOp[] {
-  if (!cfg.lanes.some(lane => lane.name === name)) throw badRequest(LANE_MISSING)
+  if (!cfg.lanes.some(lane => lane.name === name)) throw badRequest(UNKNOWN_LANE)
   return name === (item.lane ?? '') ? [] : [replace(fieldPath(cfg.fields.lane), name)]
 }
 
@@ -87,8 +83,4 @@ function fieldPath(referenceName: string): string {
 
 function replace(path: string, value: unknown): PatchOp {
   return { op: 'replace', path, value }
-}
-
-function badRequest(message: string): AdoError {
-  return new AdoError('bad_request', 400, message)
 }

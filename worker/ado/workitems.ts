@@ -1,4 +1,5 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
+import { MALFORMED } from '../messages'
 import type { AdoHttp } from './http'
 import { expectList, shaped } from './shape'
 
@@ -15,7 +16,6 @@ export interface PrRef { projectId: string; repoId: string; prId: number }
 const WIQL_TOP = 500
 const BATCH_SIZE = 200
 export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
-const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected work item response.'
 
 export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
   return select([
@@ -157,5 +157,5 @@ export function timestamp(value: unknown): number {
 }
 
 function shape<T>(build: () => T): T {
-  return shaped(build, MALFORMED_MESSAGE)
+  return shaped(build, MALFORMED.workItem)
 }

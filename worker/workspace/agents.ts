@@ -1,8 +1,7 @@
 import type { WorkItemDetails } from '../../src/shared/work'
+import { NO_ITEM_WORKSPACE, REST_IN_ADO } from '../messages'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from './focused'
 import type { LinkStore } from './links'
-
-export const NO_WORKSPACE = 'Start a workspace for this item first, or open one in Orca.'
 
 const DEFAULT_MAX_CHARS = 4000
 const CONTEXT_CAP = 500
@@ -33,7 +32,7 @@ export function itemPrompt(details: WorkItemDetails, maxChars = DEFAULT_MAX_CHAR
   ].filter(Boolean)
   const text = [itemLink(item.id, item), ...sections].join('\n\n')
   if (text.length <= maxChars) return text
-  const rest = `\n\n… open in Azure DevOps for the rest: ${item.url}`
+  const rest = `\n\n${REST_IN_ADO}: ${item.url}`
   const kept = text.slice(0, Math.max(0, maxChars - rest.length)).replace(/[\uD800-\uDBFF]$/, '')
   return kept.trimEnd() + rest
 }
@@ -77,7 +76,7 @@ async function workspaceFor(deps: AgentDeps, org: string, id: number): Promise<s
 
 export async function startAgent(deps: AgentDeps, input: { org: string; id: number }): Promise<{ launched: boolean; message?: string }> {
   const workspaceId = await workspaceFor(deps, input.org, input.id)
-  if (!workspaceId) return { launched: false, message: NO_WORKSPACE }
+  if (!workspaceId) return { launched: false, message: NO_ITEM_WORKSPACE }
   const prompt = itemPrompt(await deps.details(input.org, input.id))
   const { terminalId }: { terminalId: string } = await deps.call('agent.launch', { workspaceId, agent: deps.defaultAgent(), prompt })
   deps.context.record(terminalId, workspaceId)

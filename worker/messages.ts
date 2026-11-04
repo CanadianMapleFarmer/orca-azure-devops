@@ -1,0 +1,47 @@
+import { AdoError } from './ado/http'
+
+export const NOT_CONNECTED = 'Connect this organization first.'
+export const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
+export const GONE = "That work item no longer exists, or you can't see it."
+export const LOAD_FAILED = "Couldn't load work items."
+export const REOPEN_BOARD = 'Reopen this board and try again.'
+export const UNKNOWN_COLUMN = "That column isn't on this board."
+export const UNKNOWN_LANE = "That lane isn't on this board."
+export const UNMAPPED_TYPE = "This item type isn't on the board. Move it by state instead."
+export const MOVE_BY_COLUMN = 'Move this item by column.'
+export const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
+export const CHIPS_NEED_CODE_READ = 'Linked PR status needs Code (Read) access.'
+export const NOT_A_PR = "That isn't an Azure DevOps pull request link."
+export const EMPTY_COMMENT = 'Write a comment first.'
+export const UNKNOWN_AUTHOR = 'Unknown'
+export const REST_IN_ADO = '… open in Azure DevOps for the rest'
+export const NO_LOCAL_WORKSPACE = 'Open a local workspace first, or use + → Azure DevOps board.'
+export const BAD_BOARD = "That board can't be opened."
+export const NO_ITEM_WORKSPACE = 'Start a workspace for this item first, or open one in Orca.'
+export const SETTINGS_READ_FAILED = "Couldn't read settings; keeping the previous values."
+export const BOARDS_TEAM_GONE = 'That project or team no longer exists.'
+export const NO_CODE_PROJECTS = 'Pick at least one project, or choose all projects.'
+export const CODE_PROJECTS_GONE = 'One or more projects no longer exist.'
+
+export const MALFORMED = {
+  workItem: 'Azure DevOps returned an unexpected work item response.',
+  pullRequest: 'Azure DevOps returned an unexpected pull request response.',
+  comment: 'Azure DevOps returned an unexpected comment response.',
+  boardConfig: 'Azure DevOps returned an unexpected board configuration.'
+} as const
+
+export function noBoardNamed(name: string): string {
+  return `The team has no board named "${name}".`
+}
+
+export function showingNewest(count: number): string {
+  return `Showing the ${count.toLocaleString('en-US')} most recently changed items.`
+}
+
+export function badRequest(message: string): AdoError {
+  return new AdoError('bad_request', 400, message)
+}
+
+export function failureMessage(error: unknown): string {
+  return error instanceof AdoError ? error.message : LOAD_FAILED
+}

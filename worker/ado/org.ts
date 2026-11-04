@@ -11,7 +11,11 @@ export function isValidOrgName(name: string): boolean {
 export function parseOrgInput(input: string): { org: string; url: string } | null {
   const text = input.trim().toLowerCase()
   const org = isValidOrgName(text) ? text : orgFromUrl(text)
-  return org && isValidOrgName(org) ? { org, url: `https://dev.azure.com/${org}` } : null
+  return org && isValidOrgName(org) ? { org, url: orgWebUrl(org) } : null
+}
+
+export function orgWebUrl(org: string): string {
+  return `https://dev.azure.com/${encodeURIComponent(org)}`
 }
 
 function orgFromUrl(text: string): string | null {

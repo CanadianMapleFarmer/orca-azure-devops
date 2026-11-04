@@ -1,13 +1,11 @@
 import type { BoardConfig, PrChip, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
-import { loadTypeStates, type TypeState } from '../ado/board-config'
+import { DONE_CATEGORIES, loadTypeStates, type TypeState } from '../ado/board-config'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
 import { hydrate, queryBoardIds, queryIds, textOr, toSummary, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
+import { CHIPS_NEED_CODE_READ, showingNewest } from '../messages'
 
-export const CHIPS_NEED_CODE_READ = 'Linked PR status needs Code (Read) access.'
-
-const DONE_CATEGORIES = new Set(['Completed', 'Removed'])
 const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
 const MAX_ITEMS = 1000
@@ -101,7 +99,7 @@ export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
     mine: snapshot.mine.filter(item => kept.has(item)),
     other: snapshot.other.filter(item => kept.has(item)),
     nudges: snapshot.nudges.filter(nudge => ids.has(nudge.itemId)),
-    message: joinMessages(snapshot.message, `Showing the ${kept.size.toLocaleString('en-US')} most recently changed items.`)
+    message: joinMessages(snapshot.message, showingNewest(kept.size))
   }
 }
 

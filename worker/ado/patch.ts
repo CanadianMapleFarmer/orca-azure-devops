@@ -1,3 +1,4 @@
+import { CONFLICT, MALFORMED } from '../messages'
 import { AdoError, type AdoHttp } from './http'
 import { shaped } from './shape'
 
@@ -7,12 +8,9 @@ export interface PatchOp {
   value: unknown
 }
 
-const CONFLICT_MESSAGE = "Someone else changed this item. It's been refreshed; try again."
-const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected work item response.'
-
 export async function patchWorkItem(http: AdoHttp, org: string, projectId: string, id: number, ops: PatchOp[]): Promise<number> {
   const data = await send(http, org, projectId, id, ops)
-  return shaped(() => readRev(data), MALFORMED_MESSAGE)
+  return shaped(() => readRev(data), MALFORMED.workItem)
 }
 
 async function send(http: AdoHttp, org: string, projectId: string, id: number, ops: PatchOp[]): Promise<{ rev?: unknown } | undefined> {
@@ -27,7 +25,7 @@ async function send(http: AdoHttp, org: string, projectId: string, id: number, o
     })
     return data
   } catch (error) {
-    throw isStaleEdit(error) ? new AdoError('conflict', 409, CONFLICT_MESSAGE) : error
+    throw isStaleEdit(error) ? new AdoError('conflict', 409, CONFLICT) : error
   }
 }
 

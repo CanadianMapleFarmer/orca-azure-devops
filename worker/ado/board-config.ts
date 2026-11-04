@@ -1,4 +1,5 @@
 import type { BoardColumn, BoardConfig } from '../../src/shared/work'
+import { MALFORMED, noBoardNamed } from '../messages'
 import { AdoError, type AdoHttp } from './http'
 import { expectText, shaped } from './shape'
 
@@ -42,9 +43,8 @@ export interface TypeState {
   category: string
 }
 
-const DONE_CATEGORIES = new Set(['Completed', 'Removed'])
+export const DONE_CATEGORIES = new Set(['Completed', 'Removed'])
 const DEFAULT_TTL_MS = 60 * 60 * 1000
-const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected board configuration.'
 
 export function boardConfigKey({ org, projectId, teamId, boardId }: BoardArgs): string {
   return `${org}/${projectId}/${teamId}/${boardId ?? 'default'}`
@@ -92,7 +92,7 @@ async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<Ra
   const name = shape(() => expectText(backlog.requirementBacklog.name))
   const lowerName = name.toLowerCase()
   const match = boards.find(board => board.name === name) ?? boards.find(board => board.name.toLowerCase() === lowerName)
-  if (!match) throw new AdoError('not_found', 404, `The team has no board named "${name}".`)
+  if (!match) throw new AdoError('not_found', 404, noBoardNamed(name))
   return fetchBoard(http, args, match.id)
 }
 
@@ -138,7 +138,7 @@ function toColumn(column: RawColumn): BoardColumn {
 }
 
 function shape<T>(build: () => T): T {
-  return shaped(build, MALFORMED_MESSAGE)
+  return shaped(build, MALFORMED.boardConfig)
 }
 
 export interface BoardConfigCache {

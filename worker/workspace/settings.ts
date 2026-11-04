@@ -1,8 +1,8 @@
 import type { OrcaWorkerApi } from 'orca/worker'
+import { SETTINGS_READ_FAILED } from '../messages'
 import { DEFAULT_BRANCH_TEMPLATE } from './arm'
 
 const DEFAULT_AGENT = 'claude'
-const READ_FAILED = "Couldn't read settings; keeping the previous values."
 
 export interface WorkspaceSettings {
   agentContext(): boolean
@@ -14,7 +14,7 @@ export async function watchWorkspaceSettings(settings: OrcaWorkerApi['settings']
   let values: Record<string, unknown> = {}
   const refresh = async () => {
     values = await settings.get().catch(() => {
-      log(READ_FAILED)
+      log(SETTINGS_READ_FAILED)
       return values
     })
   }

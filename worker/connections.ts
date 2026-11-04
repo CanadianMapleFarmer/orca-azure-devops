@@ -5,6 +5,7 @@ import { discoverTenant, parseOrgInput } from './ado/org'
 import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
 import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
+import { NOT_CONNECTED } from './messages'
 import { CommandTimeoutError } from './sys/run'
 
 export interface StorePort {
@@ -53,7 +54,7 @@ const MESSAGES = {
   interrupted: 'Sign-in was interrupted. Try again.',
   expired: 'Your sign-in expired. Reconnect to continue.',
   otherAccount: 'This org is signed in as a different account.',
-  notConnected: 'Connect this organization first.',
+  notConnected: NOT_CONNECTED,
   signedOut: 'Signed out.',
   wipeFailed: "Couldn't delete this org's saved sign-in. Sign out to try again.",
   removeWipeFailed: "Couldn't delete this org's saved sign-in. It will be retried the next time Orca starts the plugin.",

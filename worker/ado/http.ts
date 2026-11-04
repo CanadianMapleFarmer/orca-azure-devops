@@ -40,6 +40,8 @@ export interface AdoHttpDeps {
   timeoutMs?: number
 }
 
+import { orgWebUrl } from './org'
+
 const DEFAULT_API_VERSION = '7.1'
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_RETRY_AFTER_MS = 1000
@@ -144,7 +146,7 @@ function buildUrl(req: AdoRequest, apiVersion: string): string {
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
     .map(([key, value]) => `${encodeQuery(key)}=${encodeQuery(String(value))}`)
   pairs.push(`api-version=${encodeQuery(apiVersion)}`)
-  return `https://dev.azure.com/${encodeURIComponent(req.org)}${project}${req.path}?${pairs.join('&')}`
+  return `${orgWebUrl(req.org)}${project}${req.path}?${pairs.join('&')}`
 }
 
 function encodeQuery(text: string): string {

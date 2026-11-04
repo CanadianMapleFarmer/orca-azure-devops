@@ -1,4 +1,6 @@
-const SUFFIX = '\n\n… open in Azure DevOps for the rest'
+import { REST_IN_ADO } from '../messages'
+
+const SUFFIX = `\n\n${REST_IN_ADO}`
 
 function openFence(markdown: string): string {
   let open = ''

@@ -1,6 +1,8 @@
 import type { PrChip, WorkComment, WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
+import { badRequest, EMPTY_COMMENT, MALFORMED, NOT_A_PR, UNKNOWN_AUTHOR } from '../messages'
 import { htmlToMarkdown } from './html'
 import { AdoError, type AdoHttp } from './http'
+import { orgWebUrl } from './org'
 import { patchWorkItem } from './patch'
 import { pullRequestWebUrl } from './pr-links'
 import { expectList, expectText, shaped } from './shape'
@@ -29,7 +31,6 @@ const COMMENT_CAP = 4_000
 const COMMENT_LIMIT = 50
 const TITLE_LIMIT = 50
 const COMMENTS_API_VERSION = '7.1-preview.4'
-const UNKNOWN_AUTHOR = 'Unknown'
 const WORK_ITEM_LINKS = [
   { kind: 'parent', rel: 'System.LinkTypes.Hierarchy-Reverse' },
   { kind: 'child', rel: 'System.LinkTypes.Hierarchy-Forward' },
@@ -38,10 +39,6 @@ const WORK_ITEM_LINKS = [
 const WORK_ITEM_RELATION_ID = /\/_apis\/wit\/workitems\/(\d+)\/?$/i
 const VISUALSTUDIO_HOST = /^([^.]+)\.visualstudio\.com$/
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-const NOT_A_PR = "That isn't an Azure DevOps pull request link."
-const EMPTY_COMMENT = 'Write a comment first.'
-const MALFORMED_COMMENT = 'Azure DevOps returned an unexpected comment response.'
-const MALFORMED_PR = 'Azure DevOps returned an unexpected pull request response.'
 
 export async function loadDetails(
   http: AdoHttp,
@@ -71,7 +68,7 @@ export async function loadDetails(
         return {
           kind,
           title: textOr(found?.fields['System.Title'], '') || `#${id}`,
-          url: workItemUrl(orgUrl(org), textOr(found?.fields['System.TeamProject'], '') || home, id)
+          url: workItemUrl(orgWebUrl(org), textOr(found?.fields['System.TeamProject'], '') || home, id)
         }
       }),
       ...pullRequestLinks(org, relations, chips)
@@ -89,7 +86,7 @@ export async function addComment(http: AdoHttp, org: string, projectId: string, 
     body: { text: toHtml(text) },
     apiVersion: COMMENTS_API_VERSION
   })
-  return shaped(() => toComment(data, workItemUrl(orgUrl(org), projectId, id)), MALFORMED_COMMENT)
+  return shaped(() => toComment(data, workItemUrl(orgWebUrl(org), projectId, id)), MALFORMED.comment)
 }
 
 export async function resolvePullRequest(http: AdoHttp, org: string, prUrl: string): Promise<string> {
@@ -114,7 +111,7 @@ async function fetchComments(http: AdoHttp, org: string, projectId: string, summ
   })
   return shaped(
     () => expectList<RawComment>(data.comments).slice(0, COMMENT_LIMIT).map(raw => toComment(raw, summary.url)),
-    MALFORMED_COMMENT
+    MALFORMED.comment
   )
 }
 
@@ -128,7 +125,7 @@ async function resolveArtifactUrl(http: AdoHttp, org: string, pr: ParsedPrUrl): 
     const projectId = expectId(data.repository?.project?.id)
     const repoId = expectId(data.repository?.id)
     return `${PR_ARTIFACT_PREFIX}${projectId}%2F${repoId}%2F${pr.prId}`
-  }, MALFORMED_PR)
+  }, MALFORMED.pullRequest)
 }
 
 function parsePrUrl(prUrl: string, org: string): ParsedPrUrl {
@@ -210,10 +207,6 @@ function commentsPath(id: number): string {
   return `/_apis/wit/workItems/${id}/comments`
 }
 
-function orgUrl(org: string): string {
-  return `https://dev.azure.com/${encodeURIComponent(org)}`
-}
-
 function untitled(error: unknown): RawWorkItem[] {
   if (error instanceof AdoError && error.code === 'rate_limited') throw error
   return []
@@ -223,8 +216,4 @@ function expectId(value: unknown): string {
   const id = expectText(value)
   if (id === '') throw new TypeError('expected an id')
   return id
-}
-
-function badRequest(message: string): AdoError {
-  return new AdoError('bad_request', 400, message)
 }

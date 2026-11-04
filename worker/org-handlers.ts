@@ -1,7 +1,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { listProjects, listTeams, resolveBoards, resolveProjects } from './ado/core'
-import { AdoError } from './ado/http'
 import type { Connections } from './connections'
+import { badRequest, BOARDS_TEAM_GONE, CODE_PROJECTS_GONE, NO_CODE_PROJECTS } from './messages'
 
 export function registerOrgHandlers(orca: OrcaWorkerApi, connections: Connections): void {
   orca.panels.handle('orgs.list', () => connections.list())
@@ -16,14 +16,14 @@ export function registerOrgHandlers(orca: OrcaWorkerApi, connections: Connection
   orca.panels.handle('ado.teams', input => listTeams(connections.http, input.org, input.projectId))
   orca.panels.handle('orgs.setBoards', async ({ org, projectId, teamId }) => {
     const target = await resolveBoards(connections.http, org, projectId, teamId)
-    if (!target) throw new AdoError('bad_request', 400, 'That project or team no longer exists.')
+    if (!target) throw badRequest(BOARDS_TEAM_GONE)
     return connections.update(org, { boards: target })
   })
   orca.panels.handle('orgs.setCodeProjects', async ({ org, projects }) => {
     if (projects === 'all') return connections.update(org, { codeProjects: 'all' })
-    if (projects.length === 0) throw new AdoError('bad_request', 400, 'Pick at least one project, or choose all projects.')
+    if (projects.length === 0) throw badRequest(NO_CODE_PROJECTS)
     const chosen = await resolveProjects(connections.http, org, projects)
-    if (!chosen) throw new AdoError('bad_request', 400, 'One or more projects no longer exist.')
+    if (!chosen) throw badRequest(CODE_PROJECTS_GONE)
     return connections.update(org, { codeProjects: chosen })
   })
 }

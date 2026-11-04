@@ -7,11 +7,12 @@ import { AdoError, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
-import { capSnapshot, CHIPS_NEED_CODE_READ, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, restate, type ItemSource } from './snapshot'
+import { capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, restate, type ItemSource } from './snapshot'
 
 export type { BoardChange, BoardRef, BoardResult }
 
@@ -50,12 +51,6 @@ interface OrgWork {
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
 const MINE_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
-const NOT_CONNECTED = 'Connect this organization first.'
-const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
-const GONE = "That work item no longer exists, or you can't see it."
-const REOPEN_BOARD = 'Reopen this board and try again.'
-const LOAD_FAILED = "Couldn't load work items."
-const UNKNOWN_COLUMN = "That column isn't on this board."
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const { http, scheduler, now } = deps
@@ -105,7 +100,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   async function defaultConfig(status: OrgStatus): Promise<BoardConfig> {
-    if (!status.boards) throw new AdoError('bad_request', 400, NO_BOARDS)
+    if (!status.boards) throw badRequest(NO_BOARDS)
     return config({ org: status.org, projectId: status.boards.projectId, teamId: status.boards.teamId })
   }
 
@@ -150,7 +145,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       } catch (error) {
         entry.failure = error
         if (work.get(org) === entry && entry.snapshot) {
-          entry.snapshot = { ...entry.snapshot, stale: true, message: loadFailureMessage(error) }
+          entry.snapshot = { ...entry.snapshot, stale: true, message: failureMessage(error) }
           deps.post(entry.snapshot)
         }
         throw error
@@ -189,7 +184,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     if (view) return view.result.board
     const own = status.boards?.teamId === ref.teamId ? status.boards.projectId : undefined
     const projectId = homes.get(`${status.org}/${ref.teamId}`) ?? own
-    if (!projectId) throw new AdoError('bad_request', 400, REOPEN_BOARD)
+    if (!projectId) throw badRequest(REOPEN_BOARD)
     return config({ org: status.org, projectId, teamId: ref.teamId, boardId: ref.boardId })
   }
 
@@ -360,10 +355,10 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     async nudgeRules({ org, teamId, rules }) {
       if (!rules) return { rules: await nudges.rules(org, teamId) }
       const status = await statusOf(org)
-      if (status.boards?.teamId !== teamId) throw new AdoError('bad_request', 400, NO_BOARDS)
+      if (status.boards?.teamId !== teamId) throw badRequest(NO_BOARDS)
       const cleaned = cleanRules(rules)
       const columns = new Set((await defaultConfig(status)).columns.map(column => column.name))
-      if (cleaned.some(rule => !columns.has(rule.column))) throw new AdoError('bad_request', 400, UNKNOWN_COLUMN)
+      if (cleaned.some(rule => !columns.has(rule.column))) throw badRequest(UNKNOWN_COLUMN)
       await nudges.saveRules(org, teamId, cleaned)
       void service.refresh(org).catch(() => {})
       return { rules: cleaned }
@@ -400,8 +395,4 @@ function holds(snapshot: WorkSnapshot, id: number): boolean {
 
 function replaced(items: WorkItemSummary[], item: WorkItemSummary): WorkItemSummary[] {
   return items.some(entry => entry.id === item.id) ? items.map(entry => (entry.id === item.id ? item : entry)) : items
-}
-
-function loadFailureMessage(error: unknown): string {
-  return error instanceof AdoError ? error.message : LOAD_FAILED
 }

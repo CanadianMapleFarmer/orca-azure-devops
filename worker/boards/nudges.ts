@@ -1,9 +1,9 @@
 import { MAX_NUDGE_RULES, type BoardConfig, type Nudge, type WorkItemSummary } from '../../src/shared/work'
+import { branchName } from '../ado/pr-links'
 import type { StorePort } from '../connections'
 
 export interface NudgeRule { branch: string; column: string }
 
-const HEADS_PREFIX = /^refs\/heads\//
 const DISMISSED_CAP = 500
 
 export function nudgeRulesKey(org: string, teamId: string): string {
@@ -78,10 +78,6 @@ export function createNudgeStore(store: StorePort): NudgeStore {
       return write
     }
   }
-}
-
-function branchName(ref: string): string {
-  return ref.replace(HEADS_PREFIX, '')
 }
 
 function isRule(value: unknown): value is NudgeRule {

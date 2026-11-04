@@ -1,5 +1,7 @@
 import type { PrChip } from '../../src/shared/work'
+import { MALFORMED } from '../messages'
 import { AdoError, type AdoHttp } from './http'
+import { orgWebUrl } from './org'
 import { expectList, expectText, malformed, shaped } from './shape'
 import type { PrRef } from './workitems'
 
@@ -26,7 +28,6 @@ const MAX_CONCURRENT = 6
 const HEADS_PREFIX = /^refs\/heads\//
 const BUILD_POLICY_TYPE = 'Build'
 const BUILD_SEVERITY: Record<BuildState, number> = { none: 0, succeeded: 1, running: 2, failed: 3 }
-const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected pull request response.'
 
 export async function loadPrChips(
   http: AdoHttp,
@@ -56,7 +57,7 @@ async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip
     prId: ref.prId,
     repoId: ref.repoId,
     projectId: ref.projectId,
-    target: expectText(pullRequest.targetRefName).replace(HEADS_PREFIX, ''),
+    target: branchName(expectText(pullRequest.targetRefName)),
     state,
     build: buildState(evaluations),
     url: pullRequestUrl(pullRequest, org, ref)
@@ -77,7 +78,7 @@ async function fetchEvaluations(http: AdoHttp, org: string, ref: PrRef): Promise
 async function fetchPullRequest(http: AdoHttp, org: string, ref: PrRef): Promise<RawPullRequest | undefined> {
   try {
     const { data } = await http.json<RawPullRequest>({ org, project: ref.projectId, path: `/_apis/git/pullrequests/${ref.prId}` })
-    return data ?? malformed(MALFORMED_MESSAGE)
+    return data ?? malformed(MALFORMED.pullRequest)
   } catch (error) {
     if (error instanceof AdoError && error.code === 'not_found') return undefined
     throw error
@@ -90,7 +91,11 @@ function pullRequestUrl(pullRequest: RawPullRequest, org: string, ref: PrRef): s
 }
 
 export function pullRequestWebUrl(org: string, ref: PrRef): string {
-  return `https://dev.azure.com/${encodeURIComponent(org)}/${encodeURIComponent(ref.projectId)}/_git/${encodeURIComponent(ref.repoId)}/pullrequest/${ref.prId}`
+  return `${orgWebUrl(org)}/${encodeURIComponent(ref.projectId)}/_git/${encodeURIComponent(ref.repoId)}/pullrequest/${ref.prId}`
+}
+
+export function branchName(ref: string): string {
+  return ref.replace(HEADS_PREFIX, '')
 }
 
 function prState(status: string): PrChip['state'] {
@@ -144,5 +149,5 @@ async function mapLimit<T, R>(items: T[], limit: number, run: (item: T) => Promi
 }
 
 function shape<T>(build: () => T): T {
-  return shaped(build, MALFORMED_MESSAGE)
+  return shaped(build, MALFORMED.pullRequest)
 }
