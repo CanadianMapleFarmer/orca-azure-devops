@@ -20,8 +20,11 @@ export function itemLink(id: number, info: ItemInfo): string {
 }
 
 export function carriesContext(prompt: string, id: number): boolean {
-  const first = prompt.split('\n', 1)[0]
-  return first.startsWith('[ADO ') && first.includes(` #${id}: `)
+  return new RegExp(`^\\[ADO [^#]*#${escapeRegExp(String(id))}: `).test(prompt.split('\n', 1)[0])
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export function itemPrompt(details: WorkItemDetails, maxChars = DEFAULT_MAX_CHARS): string {

@@ -1,5 +1,6 @@
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import type { OrcaWorkerApi } from 'orca/worker'
+import manifest from '../../orca-plugin.json' with { type: 'json' }
 import { drain } from '../test-support'
 import { watchWorkspaceSettings, type WorkspaceSettings } from './settings'
 
@@ -76,4 +77,9 @@ test('a settings read that fails after a change keeps the values read before', a
   assert.equal(settings.defaultAgent(), 'codex')
   assert.equal(settings.agentContext(), false)
   assert.deepEqual(w.logs, [READ_FAILED])
+})
+
+test('the default agent setting names the Start an agent button', () => {
+  const setting = manifest.contributes.settings.find(entry => entry.key === 'defaultAgent')
+  assert.equal(setting?.description, 'The agent "Start an agent" launches, such as claude or codex.')
 })

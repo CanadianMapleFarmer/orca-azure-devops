@@ -68,7 +68,7 @@
       {
         "key": "defaultAgent",
         "title": "Default agent",
-        "description": "The agent \"Start agent\" launches, such as claude or codex.",
+        "description": "The agent \"Start an agent\" launches, such as claude or codex.",
         "type": "string",
         "default": "claude",
         "placeholder": "claude"

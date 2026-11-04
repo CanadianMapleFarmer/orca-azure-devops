@@ -201,6 +201,7 @@ test('a prompt that references another item, or mentions the reference below its
   await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
   const prompts = [
     `[ADO Bug #12041: Other](${ITEM_URL})\n\nGo`,
+    `[ADO Bug #1301: Regression of #1204: x](${ITEM_URL})\n\nGo`,
     `[ADO Bug #1205: Other](${ITEM_URL})\n\nGo`,
     `Go\n${PREFIX}`,
     `[x] #1204: Go`

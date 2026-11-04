@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
-import { createContextCache, itemLink, itemPrompt } from './agents'
+import { carriesContext, createContextCache, itemLink, itemPrompt } from './agents'
 
 const URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/1204'
 const LINK = `[ADO User Story #1204: Add vehicle search filters](${URL})`
@@ -12,6 +12,14 @@ function details(over: Partial<WorkItemDetails> = {}): WorkItemDetails {
 
 test('itemLink is the one-line ADO reference', () => {
   assert.equal(itemLink(1204, { type: 'User Story', title: 'Add vehicle search filters', url: URL }), LINK)
+})
+
+test('carriesContext matches the reference to this item only at the start of the first line', () => {
+  assert.equal(carriesContext(`${LINK}\n\nGo`, 1204), true)
+  assert.equal(carriesContext('[ADO Bug #1204: Fix [a] thing](u)', 1204), true)
+  assert.equal(carriesContext('[ADO Bug #1301: Regression of #1204: x](u)', 1204), false)
+  assert.equal(carriesContext('[ADO Bug #12041: Other](u)', 1204), false)
+  assert.equal(carriesContext(`Go\n${LINK}`, 1204), false)
 })
 
 test('itemLink escapes backslashes and brackets in the title so the link stays one link', () => {
