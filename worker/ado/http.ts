@@ -1,3 +1,5 @@
+import { orgWebUrl } from './org'
+
 export type AdoErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'precondition_failed'
   | 'rate_limited' | 'bad_request' | 'server' | 'network'
 
@@ -39,8 +41,6 @@ export interface AdoHttpDeps {
   sleep?: (ms: number) => Promise<void>
   timeoutMs?: number
 }
-
-import { orgWebUrl } from './org'
 
 const DEFAULT_API_VERSION = '7.1'
 const DEFAULT_TIMEOUT_MS = 30_000

@@ -553,6 +553,20 @@ test('linkPr succeeds after a comment in the same details session', async () => 
   assert.deepEqual(item(h.posts.at(-1), 1205), linked)
 })
 
+test('a posted comment is returned even when publishing the reloaded item fails', async () => {
+  const h = harness()
+  await h.service.refresh(ORG)
+  Object.defineProperty(h.storage, `nudgeDismissed:${ORG}`, {
+    enumerable: true,
+    get() {
+      throw new Error('storage unavailable')
+    }
+  })
+  const added = await h.service.comment(ORG, 1204, 'Ready for review')
+  assert.equal(added.textMd, 'Ready for review')
+  assert.equal(h.ado.calls.filter(isCommentPost(1204)).length, 1)
+})
+
 test('a bad pull request link gets the link message, never the conflict, and nothing is sent', async () => {
   const h = harness()
   await h.service.refresh(ORG)

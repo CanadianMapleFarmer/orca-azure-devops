@@ -327,7 +327,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const status = await statusOf(org)
       const { cfg } = await target(status, id)
       const comment = await addComment(http, org, cfg.projectId, id, text)
-      await republish(status, cfg, id)
+      await republish(status, cfg, id).catch(() => null)
       return comment
     },
 
