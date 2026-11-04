@@ -4,8 +4,10 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import type { OrgStatus } from '../src/shared/types'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
+import { listTeamBoards } from './ado/board-config'
 import { listProjects, listTeams, resolveBoards, resolveProjects } from './ado/core'
 import { AdoError } from './ado/http'
+import { openBoard } from './boards/board-file'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { createScheduler, realClock } from './poll/scheduler'
@@ -94,6 +96,10 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('work.comment', input => boards.comment(input.org, input.id, input.text))
   orca.panels.handle('work.linkPr', input => boards.linkPr(input))
   orca.panels.handle('work.board', input => boards.board(input))
+  orca.panels.handle('work.boards', input => listTeamBoards(connections.http, input))
+  orca.panels.handle('work.openBoard', input =>
+    openBoard({ call: (method, params) => orca.host.call(method as never, params as never), fs, boardOf: org => boards.defaultBoard(org) }, input.org)
+  )
   orca.panels.handle('work.dismissNudge', input => boards.dismissNudge(input))
   orca.panels.handle('ui.visibility', input => boards.visibility(input))
   orca.commands.register('status', async () => statusText(await connections.list()))

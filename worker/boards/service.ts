@@ -35,6 +35,7 @@ export interface BoardsService {
   comment(org: string, id: number, text: string): Promise<WorkComment>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
   board(input: BoardArgs & { everyone: boolean }): Promise<BoardResult>
+  defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
   dismissNudge(input: { org: string; itemId: number; prId: number }): Promise<{ ok: true }>
   visibility(input: { surface: 'work' | 'board'; org: string; visible: boolean }): { ok: true }
 }
@@ -48,7 +49,7 @@ interface OrgWork {
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
 const MINE_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
-const NO_BOARDS = "Pick a boards project and team in this org's settings."
+export const NO_BOARDS = "Pick a boards project and team in this org's settings."
 const NOT_CONNECTED = 'Connect this organization first.'
 const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 const GONE = "That work item no longer exists, or you can't see it."
@@ -332,6 +333,13 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const board = await config(args)
       homes.set(`${args.org}/${args.teamId}`, args.projectId)
       return boardViews.open(args.org, args, board.boardId, everyone)
+    },
+
+    async defaultBoard(org) {
+      const status = await statusOf(org)
+      if (!status.boards) return null
+      const { projectId, teamId, boardId } = await defaultConfig(status)
+      return { projectId, teamId, boardId }
     },
 
     async dismissNudge({ org, itemId, prId }) {

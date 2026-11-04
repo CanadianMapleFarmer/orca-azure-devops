@@ -539,6 +539,19 @@ test('the board loads every 30 s while a board is visible', async () => {
   assert.equal(h.ado.count(isBoardWiql), 5, 'a board of an org that is not connected is not polled')
 })
 
+test('defaultBoard names the requirement board of the org boards team, or null without one', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  assert.deepEqual(await h.service.defaultBoard(ORG), { projectId: PROJECT, teamId: TEAM, boardId: STORIES })
+  const configCalls = h.ado.calls.length
+  assert.deepEqual(await h.service.defaultBoard(ORG), { projectId: PROJECT, teamId: TEAM, boardId: STORIES })
+  assert.equal(h.ado.calls.length, configCalls, 'the board configuration is cached')
+
+  h.setOrgs([status({ boards: null })])
+  assert.equal(await h.service.defaultBoard(ORG), null)
+  assert.equal(h.ado.calls.length, configCalls)
+})
+
 test('details load the item with its description, comments and links', async () => {
   const h = harness()
   const details = await h.service.details(ORG, 1204)

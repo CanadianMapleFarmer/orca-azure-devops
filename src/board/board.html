@@ -1,0 +1,167 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Azure DevOps board</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--orca-background);
+        color: var(--orca-foreground);
+        font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        overflow: hidden;
+      }
+      #app { display: flex; flex-direction: column; height: 100vh; }
+      [hidden] { display: none !important; }
+      .muted { color: var(--orca-muted-foreground); }
+      select, button { font: inherit; color: inherit; }
+      select {
+        background: var(--orca-background);
+        color: var(--orca-foreground);
+        border: 1px solid var(--orca-input);
+        border-radius: var(--orca-radius);
+        padding: 3px 6px;
+        max-width: 280px;
+      }
+      button:focus-visible, select:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: 1px; }
+      .button {
+        align-self: flex-start;
+        border: 0;
+        border-radius: var(--orca-radius);
+        padding: 5px 12px;
+        background: var(--orca-primary);
+        color: var(--orca-primary-foreground);
+        cursor: pointer;
+      }
+      .button.secondary { background: var(--orca-secondary); color: var(--orca-secondary-foreground); }
+      .button:disabled { opacity: 0.5; cursor: default; }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--orca-border);
+      }
+      .title { font-weight: 600; }
+      .toolbar .muted { margin-right: auto; }
+      .segmented { display: inline-flex; border: 1px solid var(--orca-input); border-radius: var(--orca-radius); overflow: hidden; }
+      .segmented button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; }
+      .segmented button[aria-pressed='true'] { background: var(--orca-secondary); color: var(--orca-secondary-foreground); }
+
+      .banner {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 8px 12px 0;
+        padding: 8px 10px;
+        border-radius: var(--orca-radius);
+        background: var(--orca-destructive);
+        color: var(--orca-destructive-foreground);
+      }
+      .banner span { flex: 1; }
+      .note { margin: 6px 12px 0; }
+
+      .board { flex: 1; overflow: auto; padding: 0 12px 12px; }
+      .board > p { margin: 16px 0; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(var(--columns, 1), minmax(220px, 1fr));
+        gap: 8px;
+        min-width: min-content;
+      }
+      .column-head {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 10px 4px 6px;
+        font-weight: 600;
+        background: var(--orca-background);
+        border-bottom: 2px solid var(--orca-border);
+      }
+      .lane-head {
+        grid-column: 1 / -1;
+        text-align: left;
+        border: 0;
+        border-radius: var(--orca-radius);
+        padding: 4px 8px;
+        background: var(--orca-muted);
+        cursor: pointer;
+      }
+      .cell {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-height: 64px;
+        padding: 6px;
+        border-radius: var(--orca-radius);
+        background: color-mix(in srgb, var(--orca-muted) 55%, transparent);
+      }
+      .cell.drop { outline: 2px dashed var(--orca-ring); outline-offset: -2px; }
+
+      .card {
+        padding: 8px;
+        border: 1px solid var(--orca-border);
+        border-radius: var(--orca-radius);
+        background: var(--orca-card);
+        color: var(--orca-card-foreground);
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+      }
+      .card:focus-visible { outline: 2px solid var(--orca-ring); outline-offset: 1px; }
+      .card.dragging { opacity: 0.4; }
+      .card.busy { opacity: 0.6; cursor: progress; }
+      .card.ghost {
+        position: fixed;
+        z-index: 10;
+        pointer-events: none;
+        cursor: grabbing;
+        box-shadow: 0 8px 20px color-mix(in srgb, var(--orca-foreground) 25%, transparent);
+      }
+      .meta { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12px; color: var(--orca-muted-foreground); }
+      .who {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        border-radius: 11px;
+        font-size: 10px;
+        font-weight: 600;
+        background: var(--orca-accent);
+        color: var(--orca-accent-foreground);
+      }
+      .card-title { margin-top: 4px; overflow-wrap: anywhere; }
+      .parent { margin-top: 4px; font-size: 12px; color: var(--orca-muted-foreground); overflow-wrap: anywhere; }
+      .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+      .chip { padding: 0 6px; border: 1px solid var(--orca-border); border-radius: 9px; font-size: 11px; color: var(--orca-muted-foreground); }
+      .chip.success { border-color: var(--orca-primary); color: var(--orca-foreground); }
+      .chip.warning { border-color: var(--orca-accent); background: var(--orca-accent); color: var(--orca-accent-foreground); }
+      .chip.danger { border-color: var(--orca-destructive); color: var(--orca-destructive); }
+
+      .picker {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: min(420px, calc(100% - 32px));
+        margin: 32px auto;
+        padding: 16px;
+        border: 1px solid var(--orca-border);
+        border-radius: var(--orca-radius);
+        background: var(--orca-card);
+        color: var(--orca-card-foreground);
+      }
+      .picker h1 { margin: 0; font-size: 15px; }
+      .picker p { margin: 0; }
+      .field { display: flex; flex-direction: column; gap: 4px; }
+      .field select { max-width: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./board.ts"></script>
+  </body>
+</html>

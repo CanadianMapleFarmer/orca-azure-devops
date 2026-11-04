@@ -382,11 +382,12 @@ async function withFetch(fetch: typeof globalThis.fetch, run: () => Promise<void
   }
 }
 
-function boardsHost(boards: typeof BOARDS | null) {
+function boardsHost(boards: typeof BOARDS | null, results: Record<string, unknown> = {}) {
   return mockHost({
-    capabilities: CAPABILITIES,
+    capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
     storage: { orgs: [{ ...PAT_ORG, pinned: ADA, boards }] },
-    secrets: { 'pat:contoso': PAT }
+    secrets: { 'pat:contoso': PAT },
+    results
   })
 }
 
@@ -446,5 +447,73 @@ test('org changes reach the boards service: setting a boards team starts polling
 
     await w.request('orgs.signOut', { org: 'contoso' })
     await w.deactivate()
+  })
+})
+
+test('work.boards lists the boards of a team', async () => {
+  const ado = fakeAdo()
+  await withFetch(signedIn(ado), async () => {
+    const w = await mountWorker(worker, { host: boardsHost(BOARDS) })
+    const boards = await w.request('work.boards', { org: 'contoso', projectId: PROJECT, teamId: TEAM })
+    assert.deepEqual(boards.map(board => board.name), ['Epics', 'Stories', 'Features'])
+    assert.equal(boards[1].id, STORIES)
+    assert.equal(w.refusals.length, 0)
+    await w.deactivate()
+  })
+})
+
+const FOCUSED = { branch: 'feature/1204-search', displayName: 'web-app', terminals: [] }
+
+function workspaceAt(path: string, hostId: string | null = null) {
+  return { workspaces: [{ id: 'ws-web', kind: 'worktree', name: 'web-app', path, branch: 'feature/1204-search', hostId }], truncated: false }
+}
+
+test('work.openBoard writes the board file into the focused local workspace and opens it', async () => {
+  const ado = fakeAdo()
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await withFetch(signedIn(ado), async () => {
+      const host = boardsHost(BOARDS, {
+        'workspace.readContext': () => FOCUSED,
+        'workspace.list': () => workspaceAt(dir),
+        'editor.open': { opened: true }
+      })
+      const w = await mountWorker(worker, { host })
+      assert.deepEqual(await w.request('work.openBoard', { org: 'contoso' }), { opened: true })
+      assert.deepEqual(host.callsOf('editor.open'), [{ workspaceId: 'ws-web', path: `.orca-ado/contoso.${TEAM}.adoboard` }])
+      const written = JSON.parse(await fs.readFile(path.join(dir, '.orca-ado', `contoso.${TEAM}.adoboard`), 'utf8'))
+      assert.deepEqual(written, { org: 'contoso', projectId: PROJECT, teamId: TEAM, boardId: STORIES })
+      assert.equal(await fs.readFile(path.join(dir, '.orca-ado', '.gitignore'), 'utf8'), '*\n')
+      assert.equal(w.refusals.length, 0)
+      await w.deactivate()
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('work.openBoard refuses without a focused local workspace or a boards team', async () => {
+  const ado = fakeAdo()
+  await withFetch(signedIn(ado), async () => {
+    const noWorkspace = { opened: false, message: 'Open a local workspace first, or use + → Azure DevOps board.' }
+    const unfocused = await mountWorker(worker, { host: boardsHost(BOARDS, { 'workspace.readContext': () => null }) })
+    assert.deepEqual(await unfocused.request('work.openBoard', { org: 'contoso' }), noWorkspace)
+    await unfocused.deactivate()
+
+    const remoteHost = boardsHost(BOARDS, { 'workspace.readContext': () => FOCUSED, 'workspace.list': () => workspaceAt('/srv/web-app', 'ssh:build-box') })
+    const remote = await mountWorker(worker, { host: remoteHost })
+    assert.deepEqual(await remote.request('work.openBoard', { org: 'contoso' }), noWorkspace)
+    assert.deepEqual(remoteHost.callsOf('editor.open'), [])
+    await remote.deactivate()
+
+    const noBoards = await mountWorker(worker, {
+      host: boardsHost(null, { 'workspace.readContext': () => FOCUSED, 'workspace.list': () => workspaceAt('/repos/web-app') })
+    })
+    assert.deepEqual(await noBoards.request('work.openBoard', { org: 'contoso' }), {
+      opened: false,
+      message: "Pick a boards project and team in this org's settings."
+    })
+    await noBoards.deactivate()
+    assert.equal(ado.calls.length, 0)
   })
 })

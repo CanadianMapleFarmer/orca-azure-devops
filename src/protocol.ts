@@ -28,6 +28,7 @@ declare module 'orca' {
       input: { org: string; projectId: string; teamId: string; boardId?: string; everyone: boolean }
       output: { board: BoardConfig; items: WorkItemSummary[]; message?: string }
     }
+    'work.boards': { input: { org: string; projectId: string; teamId: string }; output: { id: string; name: string }[] }
     'work.openBoard': { input: { org: string }; output: { opened: boolean; message?: string } }
     'work.dismissNudge': { input: { org: string; itemId: number; prId: number }; output: { ok: true } }
     'work.nudgeRules': {
