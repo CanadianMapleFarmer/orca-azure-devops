@@ -4,13 +4,13 @@ import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
 import { hydrate, queryBoardIds, queryIds, textOr, toSummary, WIQL_TOP, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
+import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { joinMessages, showingNewest } from '../messages'
 import type { BoardResult } from './board-views'
 
 const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
 const MAX_ITEMS = 1000
-const POST_BUDGET_BYTES = 240 * 1024
 const BOARD_BUDGET_BYTES = 900 * 1024
 
 type Base = ReturnType<typeof toSummary>
@@ -94,7 +94,7 @@ export function movesByState(item: { type: string; column: string | null }, cfg:
 
 export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
   const all = [...snapshot.mine, ...snapshot.other]
-  const kept = newestThatFit(all, POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] }), MAX_ITEMS)
+  const kept = newestThatFit(all, POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] }), item => item.changedAt, MAX_ITEMS)
   if (kept.size === all.length) return snapshot
   const ids = new Set([...kept].map(item => item.id))
   return {
@@ -108,19 +108,9 @@ export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
 
 export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
   const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
-  const kept = newestThatFit(result.items, BOARD_BUDGET_BYTES - header)
+  const kept = newestThatFit(result.items, BOARD_BUDGET_BYTES - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result
   return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
-}
-
-function newestThatFit(items: WorkItemSummary[], budget: number, maxItems = Infinity): Set<WorkItemSummary> {
-  const kept = new Set<WorkItemSummary>()
-  for (const item of [...items].sort((a, b) => b.changedAt - a.changedAt)) {
-    budget -= byteLength(item) + 1
-    if (kept.size === maxItems || budget < 0) break
-    kept.add(item)
-  }
-  return kept
 }
 
 export function foldChips(chips: PrChip[]): PrChip[] {
@@ -181,8 +171,4 @@ async function parentTitles(source: ItemSource, cfg: BoardConfig, bases: Base[])
     titles.set(parent.id, textOr(parent.fields['System.Title'], ''))
   }
   return titles
-}
-
-function byteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value))
 }

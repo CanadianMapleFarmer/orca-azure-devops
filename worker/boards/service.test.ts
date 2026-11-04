@@ -5,7 +5,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { createScheduler } from '../poll/scheduler'
-import { drain } from '../test-support'
+import { drain, fakeClock } from '../test-support'
 import {
   BOARDS,
   fixture,
@@ -38,37 +38,6 @@ const COLUMNS = ['New', 'Active', 'In Review', 'Resolved', 'Closed']
 const MINE_QUERY =
   "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Removed') ORDER BY [System.ChangedDate] DESC"
 
-function fakeClock() {
-  let now = T0
-  let nextHandle = 1
-  const timers = new Map<number, { due: number; fn: () => void }>()
-  return {
-    now: () => now,
-    setTimeout(fn: () => void, ms: number): unknown {
-      const handle = nextHandle++
-      timers.set(handle, { due: now + ms, fn })
-      return handle
-    },
-    clearTimeout(handle: unknown): void {
-      timers.delete(handle as number)
-    },
-    async tick(ms: number): Promise<void> {
-      const target = now + ms
-      for (let fired = 0; ; fired += 1) {
-        if (fired > 1000) throw new Error('more than 1000 timers fired in one tick')
-        const next = [...timers.entries()].filter(([, timer]) => timer.due <= target).sort(([ha, a], [hb, b]) => a.due - b.due || ha - hb)[0]
-        if (!next) break
-        timers.delete(next[0])
-        now = Math.max(now, next[1].due)
-        next[1].fn()
-        await drain()
-      }
-      now = target
-      await drain()
-    }
-  }
-}
-
 function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   return {
     org: ORG,
@@ -85,7 +54,7 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
 
 function harness() {
   const ado = fakeAdo()
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const storage: Record<string, unknown> = {}
   const heldReads = new Map<string, Promise<void>>()
   const store: StorePort = {

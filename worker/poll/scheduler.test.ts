@@ -1,81 +1,10 @@
 import { assert, test } from 'orca/testing'
 import { AdoError } from '../ado/http'
+import { fakeClock, type FakeClock } from '../test-support'
 import { createScheduler, realClock, type Job } from './scheduler'
 
 const T0 = 1_000_000
-const MAX_TIMEOUT_MS = 2 ** 31 - 1
-const MAX_FIRINGS_PER_TICK = 1000
 const HOUR = 3_600_000
-
-function fakeClock() {
-  let now = T0
-  let nextHandle = 1
-  const timers = new Map<number, { due: number; fn: () => void }>()
-  const badDelays: number[] = []
-  const flush = () => new Promise<void>(resolve => setImmediate(resolve))
-
-  function earliest(limit: number) {
-    return [...timers.entries()]
-      .filter(([, timer]) => timer.due <= limit)
-      .sort(([ha, a], [hb, b]) => a.due - b.due || ha - hb)[0]
-  }
-
-  function assertHonouredDelays(): void {
-    if (badDelays.length > 0) {
-      throw new Error(`the scheduler asked for timeouts the runtime would not honour: ${badDelays.join(', ')}`)
-    }
-  }
-
-  async function tick(ms: number): Promise<void> {
-    const target = now + ms
-    let fired = 0
-    for (;;) {
-      const next = earliest(target)
-      if (!next) break
-      fired += 1
-      if (fired > MAX_FIRINGS_PER_TICK) {
-        throw new Error(`more than ${MAX_FIRINGS_PER_TICK} timers fired in one tick: the scheduler is spinning`)
-      }
-      const [handle, timer] = next
-      timers.delete(handle)
-      now = Math.max(now, timer.due)
-      timer.fn()
-      await flush()
-      assertHonouredDelays()
-    }
-    now = target
-    await flush()
-    assertHonouredDelays()
-  }
-
-  async function fireNext(): Promise<void> {
-    const next = earliest(Infinity)
-    if (!next) throw new Error('no timer is pending')
-    timers.delete(next[0])
-    next[1].fn()
-    await flush()
-    assertHonouredDelays()
-  }
-
-  return {
-    now: () => now,
-    setTimeout(fn: () => void, ms: number): unknown {
-      const honoured = ms === 0 || (Number.isFinite(ms) && ms >= 1000 && ms <= MAX_TIMEOUT_MS)
-      if (!honoured) badDelays.push(ms)
-      const handle = nextHandle++
-      timers.set(handle, { due: now + (honoured ? ms : 1), fn })
-      return handle
-    },
-    clearTimeout(handle: unknown): void {
-      timers.delete(handle as number)
-    },
-    pending: () => timers.size,
-    tick,
-    fireNext
-  }
-}
-
-type FakeClock = ReturnType<typeof fakeClock>
 
 function isError(error: unknown): boolean {
   return error instanceof Error
@@ -129,7 +58,7 @@ function alwaysRateLimited(retryAfterMs: number | undefined) {
 }
 
 test('the first run waits for the next macrotask', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -140,7 +69,7 @@ test('the first run waits for the next macrotask', async () => {
 })
 
 test('runs immediately then every backgroundMs', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -154,7 +83,7 @@ test('runs immediately then every backgroundMs', async () => {
 })
 
 test('the next run is timed from the end of the previous one', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, () => new Promise<void>(resolve => clock.setTimeout(resolve, 3000)))
   scheduler.upsert(job)
@@ -166,7 +95,7 @@ test('the next run is timed from the end of the previous one', async () => {
 })
 
 test('visible jobs use visibleMs and run at once when they become visible and are stale', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -192,7 +121,7 @@ test('visible jobs use visibleMs and run at once when they become visible and ar
 })
 
 test('hiding a visible job returns it to backgroundMs', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -208,7 +137,7 @@ test('hiding a visible job returns it to backgroundMs', async () => {
 })
 
 test('setVisible during a run does not start a second run', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const release = deferred()
   const { job, starts } = trackedJob(clock, () => release.promise)
@@ -226,7 +155,7 @@ test('setVisible during a run does not start a second run', async () => {
 })
 
 test('a rate-limited job waits retryAfterMs before running again', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(30_000))
   scheduler.upsert(job)
@@ -240,7 +169,7 @@ test('a rate-limited job waits retryAfterMs before running again', async () => {
 })
 
 test('a rate-limited job without retryAfterMs waits 60 seconds', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(undefined))
   scheduler.upsert(job)
@@ -252,7 +181,7 @@ test('a rate-limited job without retryAfterMs waits 60 seconds', async () => {
 })
 
 test('a rate limit shorter than the cadence never speeds the job up', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(2000))
   scheduler.upsert(job)
@@ -264,7 +193,7 @@ test('a rate limit shorter than the cadence never speeds the job up', async () =
 })
 
 test('a rate-limited job does not run when it becomes visible', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(30_000))
   scheduler.upsert(job)
@@ -277,7 +206,7 @@ test('a rate-limited job does not run when it becomes visible', async () => {
 })
 
 test('a successful run clears an earlier rate-limit pause', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock, rateLimitedOnFirstRun(60_000))
   scheduler.upsert(job)
@@ -296,7 +225,7 @@ const PAUSES: { label: string; retryAfterMs: number; pausedMs: number }[] = [
 
 for (const { label, retryAfterMs, pausedMs } of PAUSES) {
   test(`retryAfterMs of ${label} pauses for ${pausedMs} ms and the job does not spin`, async () => {
-    const clock = fakeClock()
+    const clock = fakeClock(T0)
     const scheduler = createScheduler(clock)
     const { job, starts } = trackedJob(clock, alwaysRateLimited(retryAfterMs))
     scheduler.upsert(job)
@@ -312,7 +241,7 @@ for (const { label, retryAfterMs, pausedMs } of PAUSES) {
 }
 
 test('a timer that fires early reschedules instead of running the job', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -327,7 +256,7 @@ test('a timer that fires early reschedules instead of running the job', async ()
 })
 
 test('a wait shorter than one second is lifted to one second', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -341,7 +270,7 @@ test('a wait shorter than one second is lifted to one second', async () => {
 })
 
 test('a wait longer than a timer can hold is split and the job still runs on time', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const backgroundMs = 2 ** 33 + 5000
   const { job, starts } = trackedJob(clock, async () => {}, { backgroundMs })
@@ -365,7 +294,7 @@ const INVALID_INTERVALS: { label: string; shape: Partial<Pick<Job, 'visibleMs' |
 
 for (const { label, shape } of INVALID_INTERVALS) {
   test(`upsert refuses ${label}`, async () => {
-    const clock = fakeClock()
+    const clock = fakeClock(T0)
     const scheduler = createScheduler(clock)
     assert.throws(() => scheduler.upsert(trackedJob(clock, async () => {}, { key: 'new', ...shape }).job), isError)
     assert.equal(clock.pending(), 0)
@@ -390,7 +319,7 @@ const FAILURES: Record<string, () => Promise<void>> = {
 
 for (const [name, fail] of Object.entries(FAILURES)) {
   test(`${name} keeps the normal cadence and never escapes`, async () => {
-    const clock = fakeClock()
+    const clock = fakeClock(T0)
     const scheduler = createScheduler(clock)
     const { job, starts } = trackedJob(clock, fail)
     scheduler.upsert(job)
@@ -405,7 +334,7 @@ for (const [name, fail] of Object.entries(FAILURES)) {
 }
 
 test('runNow joins an in-flight run instead of starting a second', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const release = deferred()
   const { job, starts } = trackedJob(clock, () => release.promise)
@@ -422,7 +351,7 @@ test('runNow joins an in-flight run instead of starting a second', async () => {
 })
 
 test('runNow before the first run replaces the pending first run', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const { job, starts } = trackedJob(clock)
   scheduler.upsert(job)
@@ -435,14 +364,14 @@ test('runNow before the first run replaces the pending first run', async () => {
 })
 
 test('runNow on an unknown key resolves without running anything', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   await scheduler.runNow('missing')
   assert.equal(clock.pending(), 0)
 })
 
 test('upserting an existing key swaps the job without a second concurrent run', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const release = deferred()
   const first = trackedJob(clock, () => release.promise, { backgroundMs: 10_000 })
@@ -463,7 +392,7 @@ test('upserting an existing key swaps the job without a second concurrent run', 
 })
 
 test('upserting an idle job moves it to the new cadence without running at once', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const first = trackedJob(clock, async () => {}, { backgroundMs: 10_000 })
   const second = trackedJob(clock, async () => {}, { backgroundMs: 3000 })
@@ -480,7 +409,7 @@ test('upserting an idle job moves it to the new cadence without running at once'
 })
 
 test('remove stops future runs and aborts the in-flight one', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const stuck = trackedJob(clock, abortableRun, { key: 'stuck' })
   const idle = trackedJob(clock, async () => {}, { key: 'idle' })
@@ -502,7 +431,7 @@ test('remove stops future runs and aborts the in-flight one', async () => {
 })
 
 test('dispose aborts in-flight runs, clears every timer and ignores later upserts', async () => {
-  const clock = fakeClock()
+  const clock = fakeClock(T0)
   const scheduler = createScheduler(clock)
   const stuck = trackedJob(clock, abortableRun, { key: 'stuck' })
   const idle = trackedJob(clock, async () => {}, { key: 'idle' })
