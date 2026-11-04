@@ -222,13 +222,20 @@ test('a card shows at most two chips and counts the rest', async () => {
   ])
 })
 
-test('400 cards with four chips each still render', async () => {
-  const mine = Array.from({ length: 400 }, (_, index) =>
-    item(index + 1, { prs: [1, 2, 3, 4].map(number => pr(index * 4 + number, { state: 'open', build: 'running' })) })
+test('300 cards with four chips each and 25 nudges still render, with 10 nudges shown', async () => {
+  const mine = Array.from({ length: 300 }, (_, index) =>
+    item(index + 1, { prs: [1, 2, 3, 4].map(number => pr(index * 4 + number, { state: 'merged' })) })
   )
-  await open(snapshotOf({ mine }))
-  assert.equal(panel.findAll({ type: 'Card' }).length, 400)
-  assert.equal(panel.findAll({ type: 'Badge', text: '+2' }).length, 400)
+  const nudges = Array.from({ length: 25 }, (_, index) => ({ itemId: index + 1, prId: index * 4 + 1, branch: 'main', toColumn: 'Done' }))
+  await open(snapshotOf({ mine, nudges }))
+  assert.equal(panel.findAll({ type: 'Card' }).length, 300)
+  assert.equal(panel.findAll({ type: 'Badge', text: '+2' }).length, 300)
+  const shown = panel.findAll({ type: 'Callout' }).map(callout => callout.props.title)
+  assert.deepEqual(
+    shown,
+    Array.from({ length: 10 }, (_, index) => `#${index + 1} — PR ${index * 4 + 1} merged into main`)
+  )
+  assert.ok(panel.find({ type: 'Text', text: '15 more suggestions on the board.' })?.props.muted)
 })
 
 test('the header shows the board name and a refresh that replaces the snapshot', async () => {
@@ -335,6 +342,14 @@ test('nudge Move and Dismiss call the right requests', async () => {
 
   await panel.post('work.changed', snapshotOf({ mine: [item(101, { rev: 13, column: 'Done' }), item(102)], nudges: [] }))
   assert.equal(calloutTitled('#101 — PR 55 merged into main'), undefined)
+})
+
+test('ten nudges are all shown without a note', async () => {
+  const mine = Array.from({ length: 10 }, (_, index) => item(index + 1))
+  const nudges = mine.map(entry => ({ itemId: entry.id, prId: entry.id, branch: 'main', toColumn: 'Done' }))
+  await open(snapshotOf({ mine, nudges }))
+  assert.equal(panel.findAll({ type: 'Callout' }).length, 10)
+  assert.equal(panel.find({ type: 'Text', text: /more suggestions/ }), null)
 })
 
 test('a failed nudge move shows the message', async () => {
@@ -547,28 +562,28 @@ test('a details view without acceptance criteria omits that section', async () =
   assert.equal(panel.findAll({ type: 'List' }).length, 0)
 })
 
-test('a long list renders 400 cards, board groups first, and says how many are not shown', async () => {
+test('a long list renders 300 cards, board groups first, and says how many are not shown', async () => {
   const many = (from: number, count: number, over: Partial<WorkItemSummary>) =>
     Array.from({ length: count }, (_, index) => item(from + index, { title: `Story ${from + index}`, ...over }))
-  const mine = [...many(1000, 200, { column: 'Active' }), ...many(2000, 300, { column: 'New' })]
-  await open(snapshotOf({ mine, other: many(3000, 100, { type: 'Task', column: null, targets: { columns: [], states: ['Closed'] } }) }))
+  const mine = [...many(1000, 150, { column: 'Active' }), ...many(2000, 200, { column: 'New' })]
+  await open(snapshotOf({ mine, other: many(3000, 250, { type: 'Task', column: null, targets: { columns: [], states: ['Closed'] } }) }))
   const cards = panel.findAll({ type: 'Card' })
-  assert.equal(cards.length, 400)
+  assert.equal(cards.length, 300)
   assert.deepEqual(
     panel.findAll({ type: 'Collapsible' }).map(group => group.props.title),
-    ['New (300)', 'Active (200)', 'Other (100)']
+    ['New (200)', 'Active (150)', 'Other (250)']
   )
   assert.equal(cards[0]?.label, 'Story 2000')
-  assert.equal(cards[299]?.label, 'Story 2299')
-  assert.equal(cards[300]?.label, 'Story 1000')
-  assert.equal(cards[399]?.label, 'Story 1099')
-  assert.ok(panel.find({ type: 'Text', text: 'Showing 400 of 600 items. Open the board to see the rest.' })?.props.muted)
+  assert.equal(cards[199]?.label, 'Story 2199')
+  assert.equal(cards[200]?.label, 'Story 1000')
+  assert.equal(cards[299]?.label, 'Story 1099')
+  assert.ok(panel.find({ type: 'Text', text: 'Showing 300 of 600 items. Open the board to see the rest.' })?.props.muted)
 })
 
-test('exactly 400 items are all shown without a note', async () => {
-  await open(snapshotOf({ mine: Array.from({ length: 400 }, (_, index) => item(index + 1)) }))
-  assert.equal(panel.findAll({ type: 'Card' }).length, 400)
-  assert.equal(panel.find({ type: 'Text', text: /Showing 400 of/ }), null)
+test('exactly 300 items are all shown without a note', async () => {
+  await open(snapshotOf({ mine: Array.from({ length: 300 }, (_, index) => item(index + 1)) }))
+  assert.equal(panel.findAll({ type: 'Card' }).length, 300)
+  assert.equal(panel.find({ type: 'Text', text: /Showing 300 of/ }), null)
 })
 
 test('stale snapshot shows the warning but keeps the items', async () => {

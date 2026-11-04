@@ -6,7 +6,8 @@ import { ItemCard } from './item-card'
 import { ItemDetails } from './item-details'
 import { dismiss, load, move, NO_BOARDS, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
 
-const MAX_CARDS = 400
+const MAX_CARDS = 300
+const MAX_NUDGES = 10
 
 function columnGroups(current: WorkSnapshot): { name: string; items: WorkItemSummary[] }[] {
   const names = current.board?.columns.map(column => column.name) ?? []
@@ -59,7 +60,7 @@ function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
   if (listed.length === 0) return null
   return (
     <Stack gap="sm">
-      {listed.map(({ nudge, item }) => (
+      {listed.slice(0, MAX_NUDGES).map(({ nudge, item }) => (
         <Callout key={`${nudge.itemId}:${nudge.prId}`} tone="accent" title={`#${nudge.itemId} — PR ${nudge.prId} merged into ${nudge.branch}`}>
           <Stack gap="xs">
             <Text size="sm">{item.title}</Text>
@@ -74,6 +75,11 @@ function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
           </Stack>
         </Callout>
       ))}
+      {listed.length > MAX_NUDGES ? (
+        <Text size="sm" muted>
+          {`${listed.length - MAX_NUDGES} more suggestions on the board.`}
+        </Text>
+      ) : null}
     </Stack>
   )
 }
