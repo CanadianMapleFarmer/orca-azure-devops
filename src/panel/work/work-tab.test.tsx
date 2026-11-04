@@ -1,26 +1,14 @@
-import { afterEach, assert, hostError, mockHost, mount, test, type MockRequests, type TestPanel } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { OrgStatus } from '../../shared/types'
 import type { BoardConfig, PrChip, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../shared/work'
-import * as panelModule from '../panel'
+import { closeCleanly, mountPanel, org as orgStatus, requestsTo, type TestHost } from '../test-support'
 
 const NOW = 1_700_000_000_000
 const NO_BOARDS = "Pick a boards project and team in this org's settings."
 const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 const BOARDS = { projectId: 'proj-web', projectName: 'Fabrikam Web', teamId: 'team-web', teamName: 'Web Team' }
 
-function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
-  return {
-    org: name,
-    url: `https://dev.azure.com/${name}`,
-    method: 'azure-cli',
-    state: 'connected',
-    account: { adoId: `u-${name}`, uniqueName: `ada@${name}.com`, displayName: 'Ada Lovelace', tenantId: null, objectId: null },
-    tokenStore: { kind: 'az-profile', path: `/Users/ada/.orca-azure-devops/az/${name}` },
-    boards: BOARDS,
-    codeProjects: 'all',
-    ...over
-  }
-}
+const org = (name: string, over: Partial<OrgStatus> = {}): OrgStatus => orgStatus(name, { boards: BOARDS, ...over })
 
 const COLUMN_NAMES = ['New', 'Active', 'Done']
 
@@ -107,13 +95,7 @@ function detailsOf(over: Partial<WorkItemDetails> = {}): WorkItemDetails {
 
 let panel: TestPanel
 
-async function closeCleanly(): Promise<void> {
-  const issues = { errors: panel.errors, warnings: panel.warnings, refusals: panel.refusals }
-  await panel.unmount()
-  assert.deepEqual(issues, { errors: [], warnings: [], refusals: [] })
-}
-
-afterEach(closeCleanly)
+afterEach(() => closeCleanly(panel))
 
 interface OpenOptions {
   orgs?: OrgStatus[]
@@ -122,22 +104,12 @@ interface OpenOptions {
 }
 
 async function open(snapshot: MockRequests['work.snapshot'], more: MockRequests = {}, options: OpenOptions = {}) {
-  const host = mockHost({
-    requests: {
-      'orgs.list': options.orgs ?? [org('contoso')],
-      'ui.visibility': { ok: true },
-      'work.snapshot': snapshot,
-      ...more
-    }
-  })
-  panel = await mount(panelModule, { host, visible: options.visible, persisted: options.persisted })
-  return host
+  const mounted = await mountPanel(options.orgs ?? [org('contoso')], { 'work.snapshot': snapshot, ...more }, options)
+  panel = mounted.panel
+  return mounted.host
 }
 
-const requestsTo = (host: ReturnType<typeof mockHost>, name: string) =>
-  (host.callsOf('plugin.request') as { name: string; input: unknown; timeoutMs?: number }[]).filter(call => call.name === name)
-
-const inputsTo = (host: ReturnType<typeof mockHost>, name: string) => requestsTo(host, name).map(call => call.input)
+const inputsTo = (host: TestHost, name: string) => requestsTo(host, name).map(call => call.input)
 
 const titles = () => panel.findAll({ type: 'Card' }).map(card => card.label)
 

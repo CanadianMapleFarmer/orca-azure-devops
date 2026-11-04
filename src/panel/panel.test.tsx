@@ -1,61 +1,25 @@
-import { afterEach, assert, hostError, mockHost, mount, test, type MockRequests, type TestPanel } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import * as panelModule from './panel'
+import { closeCleanly, mountPanel, optionValuesOf, org, PROJECTS, requestsTo, SETTINGS } from './test-support'
 
 const PAT = 'secret'
-const SETTINGS = { label: 'Organization settings' }
 
-const PROJECTS = [
-  { id: 'proj-web', name: 'Web' },
-  { id: 'proj-boards', name: 'Boards' }
-]
 const TEAMS: Record<string, { id: string; name: string }[]> = {
   'proj-boards': [{ id: 'team-ops', name: 'Ops' }, { id: 'team-alpha', name: 'Alpha' }],
   'proj-web': [{ id: 'team-web', name: 'Web Team' }]
 }
 
-function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
-  return {
-    org: name,
-    url: `https://dev.azure.com/${name}`,
-    method: 'azure-cli',
-    state: 'connected',
-    account: { adoId: `u-${name}`, uniqueName: `ada@${name}.com`, displayName: 'Ada Lovelace', tenantId: null, objectId: null },
-    tokenStore: { kind: 'az-profile', path: `/Users/ada/.orca-azure-devops/az/${name}` },
-    boards: null,
-    codeProjects: 'all',
-    ...over
-  }
-}
-
 let panel: TestPanel
 
-async function closeCleanly(): Promise<void> {
-  const issues = { errors: panel.errors, warnings: panel.warnings, refusals: panel.refusals }
-  await panel.unmount()
-  assert.deepEqual(issues, { errors: [], warnings: [], refusals: [] })
-}
-
-afterEach(closeCleanly)
+afterEach(() => closeCleanly(panel))
 
 async function open(list: OrgStatus[], requests: MockRequests = {}, persisted?: { plugin?: Record<string, unknown> }) {
-  const host = mockHost({
-    requests: {
-      'orgs.list': list,
-      'ui.visibility': { ok: true },
-      'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
-      ...requests
-    }
-  })
-  panel = await mount(panelModule, { host, persisted })
-  return host
+  const mounted = await mountPanel(list, requests, { persisted })
+  panel = mounted.panel
+  return mounted.host
 }
 
-const requestsTo = (host: ReturnType<typeof mockHost>, name: string) =>
-  (host.callsOf('plugin.request') as { name: string; input: unknown; timeoutMs?: number }[]).filter(call => call.name === name)
-
-const optionValues = (label: string) =>
-  ((panel.find({ label })?.props as { options: { value: string }[] }).options ?? []).map(option => option.value)
+const optionValues = (label: string) => optionValuesOf(panel, label)
 
 const summaryText = () => panel.summary().join('\n')
 
@@ -346,7 +310,7 @@ test('the hub names the pinned account when the org is expired, mismatched or si
     await open([org('contoso', over)])
     assert.ok(panel.find({ text: 'pinned to ada@contoso.com' }), over.state)
     assert.equal(panel.find({ text: /^signed in as/ }), null, over.state)
-    await closeCleanly()
+    await closeCleanly(panel)
   }
   await open([org('contoso', { state: 'disconnected', account: null })])
   assert.equal(panel.find({ text: /^pinned to/ }), null, 'nothing pinned, nothing named')
@@ -356,7 +320,7 @@ test('org settings show where the tokens live', async () => {
   await open([org('contoso')], settingsRequests)
   await panel.press(SETTINGS)
   assert.ok(panel.find({ text: 'Tokens: /Users/ada/.orca-azure-devops/az/contoso' }))
-  await closeCleanly()
+  await closeCleanly(panel)
 
   await open([org('contoso', { method: 'pat', tokenStore: { kind: 'orca-secrets' } })], settingsRequests)
   await panel.press(SETTINGS)

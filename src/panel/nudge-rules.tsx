@@ -120,6 +120,7 @@ function RuleRows({ org, team }: { org: string; team: string }): OrcaNode {
   const list = read(rules)
   const names = read(ruleColumns)
   const frozen = read(rulesSaving)
+  const incomplete = list.some(row => row.branch.trim() !== '' && row.column === '')
   return (
     <Stack gap="sm">
       {list.map((row, index) => (
@@ -152,7 +153,7 @@ function RuleRows({ org, team }: { org: string; team: string }): OrcaNode {
         <Button variant="outline" disabled={frozen || list.length >= MAX_NUDGE_RULES} onPress={addRule}>
           Add rule
         </Button>
-        <Button disabled={frozen} onPress={() => void saveRules(org, team)}>
+        <Button disabled={frozen || incomplete} onPress={() => void saveRules(org, team)}>
           Save rules
         </Button>
       </Row>

@@ -1,57 +1,19 @@
-import { afterEach, assert, hostError, mockHost, mount, test, type MockRequests, type TestPanel } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
 import type { WorkSnapshot } from '../shared/work'
-import * as panelModule from './panel'
-
-const SETTINGS = { label: 'Organization settings' }
-
-const PROJECTS = [
-  { id: 'proj-web', name: 'Web' },
-  { id: 'proj-boards', name: 'Boards' }
-]
-
-function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
-  return {
-    org: name,
-    url: `https://dev.azure.com/${name}`,
-    method: 'azure-cli',
-    state: 'connected',
-    account: { adoId: `u-${name}`, uniqueName: `ada@${name}.com`, displayName: 'Ada Lovelace', tenantId: null, objectId: null },
-    tokenStore: { kind: 'az-profile', path: `/Users/ada/.orca-azure-devops/az/${name}` },
-    boards: null,
-    codeProjects: 'all',
-    ...over
-  }
-}
+import { closeCleanly, mountPanel, optionValuesOf, org, PROJECTS, requestsTo, SETTINGS } from './test-support'
 
 let panel: TestPanel
 
-async function closeCleanly(): Promise<void> {
-  const issues = { errors: panel.errors, warnings: panel.warnings, refusals: panel.refusals }
-  await panel.unmount()
-  assert.deepEqual(issues, { errors: [], warnings: [], refusals: [] })
-}
-
-afterEach(closeCleanly)
+afterEach(() => closeCleanly(panel))
 
 async function open(list: OrgStatus[], requests: MockRequests = {}) {
-  const host = mockHost({
-    requests: {
-      'orgs.list': list,
-      'ui.visibility': { ok: true },
-      'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
-      ...requests
-    }
-  })
-  panel = await mount(panelModule, { host })
-  return host
+  const mounted = await mountPanel(list, requests)
+  panel = mounted.panel
+  return mounted.host
 }
 
-const requestsTo = (host: ReturnType<typeof mockHost>, name: string) =>
-  (host.callsOf('plugin.request') as { name: string; input: unknown }[]).filter(call => call.name === name)
-
-const optionValues = (label: string) =>
-  ((panel.find({ label })?.props as { options: { value: string }[] }).options ?? []).map(option => option.value)
+const optionValues = (label: string) => optionValuesOf(panel, label)
 
 const settingsRequests: MockRequests = {
   'ado.projects': PROJECTS,
@@ -65,13 +27,13 @@ const SUGGEST_MOVES = { type: 'Collapsible' }
 
 type Rule = { branch: string; column: string }
 
-function snapshotFor(name: string): WorkSnapshot {
+function snapshotFor(name: string, teamId = OPS.teamId): WorkSnapshot {
   return {
     org: name,
     board: {
       org: name,
       projectId: OPS.projectId,
-      teamId: OPS.teamId,
+      teamId,
       boardId: 'board-stories',
       boardName: 'Stories',
       requirementTypes: ['User Story'],
@@ -276,4 +238,163 @@ test('changing the boards team closes Suggest moves and loads that team\'s rules
     { org: 'contoso', teamId: 'team-ops' },
     { org: 'contoso', teamId: 'team-alpha' }
   ])
+})
+
+test('Save rules waits for a column on every branch that is filled in', async () => {
+  const { saves } = await openRules()
+  await panel.press({ text: 'Add rule' })
+  await panel.press({ text: 'Add rule' })
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, false)
+
+  await panel.type(branches()[0], 'uat')
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, true)
+
+  await panel.select(columns()[0], 'Resolved')
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, false)
+
+  await panel.type(branches()[1], '   ')
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, false, 'a blank branch needs no column')
+  await panel.type(branches()[1], 'qa')
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, true)
+
+  await panel.press(panel.findAll({ label: 'Remove rule' })[1])
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, false)
+  await panel.press({ text: 'Save rules' })
+  assert.deepEqual(saves, [{ org: 'contoso', teamId: 'team-ops', rules: [{ branch: 'uat', column: 'Resolved' }] }])
+})
+
+type Held = { rules: Rule[] }
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {}
+  let reject: (error: unknown) => void = () => {}
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+const branchValues = () => branches().map(row => row.props.value)
+const loadingRules = () => panel.find({ type: 'Skeleton' }) !== null
+const savingRules = () => panel.find({ type: 'Spinner' }) !== null
+
+const UAT: Rule = { branch: 'uat', column: 'Resolved' }
+const QA: Rule = { branch: 'qa', column: 'Active' }
+const STALE: Rule = { branch: 'stale', column: 'New' }
+
+test('settings for another org open with Suggest moves closed and empty', async () => {
+  const stored: Record<string, Rule[]> = { contoso: [UAT], fabrikam: [QA] }
+  const saves: unknown[] = []
+  const host = await open([org('contoso', { boards: OPS }), org('fabrikam', { boards: ALPHA })], {
+    ...settingsRequests,
+    'work.snapshot': input => snapshotFor(input.org, input.org === 'fabrikam' ? ALPHA.teamId : OPS.teamId),
+    'work.nudgeRules': ({ org: name, teamId, rules }) => {
+      if (!rules) return { rules: stored[name] }
+      saves.push({ org: name, teamId, rules })
+      return { rules }
+    }
+  })
+  await panel.press(SETTINGS)
+  await panel.toggle(SUGGEST_MOVES)
+  assert.deepEqual(branchValues(), ['uat'])
+
+  await panel.press({ text: 'Back' })
+  await panel.select({ label: 'Organization' }, 'fabrikam')
+  await panel.press(SETTINGS)
+  assert.equal(panel.find(SUGGEST_MOVES)?.props?.open, false)
+  assert.equal(branches().length, 0)
+  assert.equal(panel.find({ type: 'Callout' }), null)
+
+  await panel.toggle(SUGGEST_MOVES)
+  assert.deepEqual(requestsTo(host, 'work.nudgeRules').map(call => call.input), [
+    { org: 'contoso', teamId: 'team-ops' },
+    { org: 'fabrikam', teamId: 'team-alpha' }
+  ])
+  assert.deepEqual(branchValues(), ['qa'])
+  await panel.press({ text: 'Save rules' })
+  assert.deepEqual(saves, [{ org: 'fabrikam', teamId: 'team-alpha', rules: [QA] }])
+})
+
+function heldActs() {
+  const acts: Promise<void>[] = []
+  return {
+    during(act: Promise<void>): Promise<void> {
+      acts.push(act)
+      return flush()
+    },
+    finished: () => Promise.all(acts)
+  }
+}
+
+async function staleLoad(finishStale: (held: ReturnType<typeof deferred<Held>>) => void): Promise<void> {
+  const loads = [deferred<Held>(), deferred<Held>()]
+  let started = 0
+  const { requests } = ruleRequests()
+  requests['work.nudgeRules'] = () => loads[started++].promise
+  await open([org('contoso', { boards: OPS })], requests)
+  await panel.press(SETTINGS)
+  const { during, finished } = heldActs()
+  await during(panel.toggle(SUGGEST_MOVES))
+  assert.ok(loadingRules())
+
+  await during(panel.press({ text: 'Back' }))
+  await during(panel.press(SETTINGS))
+  await during(panel.toggle(SUGGEST_MOVES))
+  assert.equal(started, 2)
+
+  loads[1].resolve({ rules: [UAT] })
+  await flush()
+  finishStale(loads[0])
+  await finished()
+  assert.deepEqual(branchValues(), ['uat'])
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(loadingRules(), false)
+}
+
+test('a rules load that finishes after settings were re-entered adds no rows', async () => {
+  await staleLoad(held => held.resolve({ rules: [STALE] }))
+})
+
+test('a rules load that fails after settings were re-entered shows no error', async () => {
+  await staleLoad(held => held.reject(hostError('action_failed', 'Stale load failed.')))
+})
+
+async function staleSave(finishStale: (held: ReturnType<typeof deferred<Held>>) => void): Promise<void> {
+  const saves = [deferred<Held>(), deferred<Held>()]
+  let started = 0
+  const { requests } = ruleRequests()
+  requests['work.nudgeRules'] = ({ teamId, rules }) => (rules ? saves[started++].promise : { rules: [teamId === 'team-alpha' ? QA : UAT] })
+  await open([org('contoso', { boards: OPS })], requests)
+  await panel.press(SETTINGS)
+  await panel.toggle(SUGGEST_MOVES)
+  const { during, finished } = heldActs()
+  await during(panel.press({ text: 'Save rules' }))
+  assert.ok(savingRules())
+
+  await during(panel.post('orgs.changed', { orgs: [org('contoso', { boards: ALPHA })] }))
+  await during(panel.toggle(SUGGEST_MOVES))
+  await during(panel.press({ text: 'Save rules' }))
+  assert.equal(started, 2)
+
+  saves[1].resolve({ rules: [QA] })
+  await flush()
+  finishStale(saves[0])
+  await finished()
+  assert.deepEqual(branchValues(), ['qa'])
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(panel.find({ text: 'Save rules' })?.disabled, false)
+  assert.equal(savingRules(), false)
+}
+
+test('a save that finishes after the team changed leaves the rows alone', async () => {
+  await staleSave(held => held.resolve({ rules: [STALE] }))
+})
+
+test('a save that fails after the team changed shows no error', async () => {
+  await staleSave(held => held.reject(hostError('action_failed', "That column isn't on this board.")))
 })

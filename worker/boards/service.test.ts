@@ -343,6 +343,22 @@ test('saved nudge rules are trimmed, lose refs/heads and drop rows without a bra
   assert.deepEqual(h.storage[RULES_KEY], expected)
 })
 
+test('saved nudge rules are trimmed again after refs/heads is stripped, and other casings are kept as typed', async () => {
+  const h = harness()
+  const saved = await h.service.nudgeRules({
+    org: ORG,
+    teamId: TEAM,
+    rules: [
+      { branch: 'refs/heads/ uat', column: 'Resolved' },
+      { branch: 'uat', column: 'Closed' },
+      { branch: 'Refs/Heads/release', column: 'Active' },
+      { branch: 'refs/heads/   ', column: 'Active' }
+    ]
+  })
+  assert.deepEqual(saved.rules, [{ branch: 'uat', column: 'Closed' }, { branch: 'Refs/Heads/release', column: 'Active' }])
+  assert.deepEqual(h.storage[RULES_KEY], saved.rules)
+})
+
 test('saved nudge rules keep one row per branch and the last one wins', async () => {
   const h = harness()
   const saved = await h.service.nudgeRules({

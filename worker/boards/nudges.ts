@@ -20,7 +20,7 @@ function dismissal(itemId: number, prId: number): string {
 
 export function cleanRules(rules: readonly NudgeRule[]): NudgeRule[] {
   const named = rules
-    .map(rule => ({ branch: branchName(rule.branch.trim()), column: rule.column }))
+    .map(rule => ({ branch: branchName(rule.branch.trim()).trim(), column: rule.column }))
     .filter(rule => rule.branch !== '' && rule.column !== '')
   return [...new Map<string, NudgeRule>(named.map(rule => [rule.branch, rule])).values()].slice(0, MAX_NUDGE_RULES)
 }
