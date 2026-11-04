@@ -1,4 +1,5 @@
-import type { AdoHttp } from './http'
+import type { BoardsTarget } from '../../src/shared/types'
+import { AdoError, type AdoHttp } from './http'
 
 export interface ConnectionData {
   authenticatedUser: { id: string; providerDisplayName?: string; properties?: { Account?: { $value?: string } } }
@@ -40,6 +41,25 @@ export async function listTeams(http: AdoHttp, org: string, projectId: string): 
     if (data.value.length < PAGE_SIZE) break
   }
   return byName(items)
+}
+
+export async function resolveBoards(http: AdoHttp, org: string, projectId: string, teamId: string): Promise<BoardsTarget | null> {
+  try {
+    const project = (await listProjects(http, org)).find(item => item.id === projectId)
+    if (!project) return null
+    const team = (await listTeams(http, org, projectId)).find(item => item.id === teamId)
+    return team ? { projectId, projectName: project.name, teamId, teamName: team.name } : null
+  } catch (error) {
+    if (error instanceof AdoError && error.code === 'not_found') return null
+    throw error
+  }
+}
+
+export async function resolveProjects(http: AdoHttp, org: string, ids: string[]): Promise<NamedItem[] | null> {
+  const known = new Map((await listProjects(http, org)).map(project => [project.id, project]))
+  const unique = [...new Set(ids)]
+  const chosen = unique.flatMap(id => known.get(id) ?? [])
+  return chosen.length === unique.length ? chosen : null
 }
 
 function byName(items: NamedItem[]): NamedItem[] {

@@ -55,7 +55,7 @@ export async function loadDetails(
   const titleIds = [...new Set(linked.map(link => link.id))].slice(0, TITLE_LIMIT)
   const [comments, titled] = await Promise.all([
     fetchComments(http, org, projectId, summary),
-    hydrate(http, org, projectId, titleIds)
+    hydrate(http, org, projectId, titleIds).catch(untitled)
   ])
   const titles = new Map(titled.map(item => [item.id, item]))
   const home = textOr(raw.fields['System.TeamProject'], '') || projectId
@@ -101,7 +101,7 @@ export async function linkPr(
   raw: RawWorkItem
 ): Promise<number> {
   const artifactUrl = await resolveArtifactUrl(http, org, parsePrUrl(prUrl, org))
-  if ((raw.relations ?? []).some(link => link.url.toLowerCase() === artifactUrl.toLowerCase())) return rev
+  if ((raw.relations ?? []).some(link => link.url.toLowerCase() === artifactUrl.toLowerCase())) return raw.rev
   return patchWorkItem(http, org, projectId, id, [
     { op: 'test', path: '/rev', value: rev },
     { op: 'add', path: '/relations/-', value: { rel: 'ArtifactLink', url: artifactUrl, attributes: { name: 'Pull Request' } } }
@@ -129,8 +129,8 @@ async function resolveArtifactUrl(http: AdoHttp, org: string, pr: ParsedPrUrl): 
     path: `/_apis/git/repositories/${encodeURIComponent(pr.repo)}/pullrequests/${pr.prId}`
   })
   return shaped(() => {
-    const projectId = expectText(data.repository?.project?.id)
-    const repoId = expectText(data.repository?.id)
+    const projectId = expectId(data.repository?.project?.id)
+    const repoId = expectId(data.repository?.id)
     return `${PR_ARTIFACT_PREFIX}${projectId}%2F${repoId}%2F${pr.prId}`
   }, MALFORMED_PR)
 }
@@ -215,6 +215,17 @@ function commentsPath(id: number): string {
 
 function orgUrl(org: string): string {
   return `https://dev.azure.com/${encodeURIComponent(org)}`
+}
+
+function untitled(error: unknown): RawWorkItem[] {
+  if (error instanceof AdoError && error.code === 'rate_limited') throw error
+  return []
+}
+
+function expectId(value: unknown): string {
+  const id = expectText(value)
+  if (id === '') throw new TypeError('expected an id')
+  return id
 }
 
 function badRequest(message: string): AdoError {

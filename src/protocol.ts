@@ -36,5 +36,6 @@ declare module 'orca' {
     'orgs.changed': { orgs: OrgStatus[] }
     'orgs.connectFailed': ConnectFailure
     'work.changed': WorkSnapshot
+    'work.boardChanged': { org: string; teamId: string; boardId: string }
   }
 }

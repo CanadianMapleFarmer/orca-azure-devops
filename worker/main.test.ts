@@ -6,6 +6,7 @@ import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
+import { BOARDS, fakeAdo, isWiql, json as reply, ORG_URL, PROJECT, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
 
 function running(pattern: string): boolean {
@@ -273,6 +274,7 @@ test('orgs.setBoards stores the project and team names and posts orgs.changed', 
     assert.deepEqual(storedOrg(w).boards, boards)
     assert.deepEqual(orgsChanged(w.posts).at(-1)?.[0].boards, boards)
     assert.equal(w.refusals.length, 0)
+    await w.deactivate()
   })
 })
 
@@ -357,5 +359,92 @@ test('orgs.setCodeProjects stores each project once, in first-seen order', async
     const expected = [{ id: 'proj-web', name: 'Web' }, { id: 'proj-infra', name: 'infra' }]
     assert.deepEqual(status.codeProjects, expected)
     assert.deepEqual(storedOrg(w).codeProjects, expected)
+  })
+})
+
+const ADA = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT, objectId: null }
+
+function signedIn(ado: FakeAdo): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    if (request.headers.get('authorization') !== basicAuth(PAT)) return new Response('', { status: 401 })
+    return ado.fetch(input, init)
+  }) as typeof fetch
+}
+
+async function withFetch(fetch: typeof globalThis.fetch, run: () => Promise<void>): Promise<void> {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = fetch
+  try {
+    await run()
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}
+
+function boardsHost(boards: typeof BOARDS | null) {
+  return mockHost({
+    capabilities: CAPABILITIES,
+    storage: { orgs: [{ ...PAT_ORG, pinned: ADA, boards }] },
+    secrets: { 'pat:contoso': PAT }
+  })
+}
+
+function workChanged(posts: readonly { event: string; payload?: unknown }[]) {
+  return posts.filter(post => post.event === 'work.changed').map(post => post.payload as { mine: { id: number }[] })
+}
+
+test('work handlers serve the connected org through the boards service', async () => {
+  const ado = fakeAdo()
+  await withFetch(signedIn(ado), async () => {
+    const w = await mountWorker(worker, { host: boardsHost(BOARDS) })
+    const snapshot = await w.request('work.snapshot', { org: 'contoso' })
+    assert.deepEqual(snapshot.mine.map(item => item.id), [1204, 1205])
+    assert.deepEqual(snapshot.other.map(item => item.id), [1207])
+    assert.equal((await w.request('work.refresh', { org: 'contoso' })).board?.boardId, STORIES)
+    assert.ok(workChanged(w.posts).length > 0)
+
+    assert.deepEqual(await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true }), { ok: true })
+    assert.equal((await w.request('work.details', { org: 'contoso', id: 1204 })).item.id, 1204)
+    assert.equal((await w.request('work.comment', { org: 'contoso', id: 1204, text: 'Ready' })).id, 77)
+    const moved = await w.request('work.move', { org: 'contoso', id: 1204, rev: 9, to: { column: 'Resolved' } })
+    assert.deepEqual([moved.column, moved.rev], ['Resolved', 10])
+    const linked = await w.request('work.linkPr', { org: 'contoso', id: 1205, rev: 3, prUrl: `${ORG_URL}/Fabrikam%20Web/_git/web-app/pullrequest/322` })
+    assert.deepEqual(linked.prs.map(chip => chip.prId), [322])
+    const board = await w.request('work.board', { org: 'contoso', projectId: PROJECT, teamId: TEAM, everyone: false })
+    assert.equal(board.board.boardId, STORIES)
+    assert.deepEqual(await w.request('ui.visibility', { surface: 'board', org: 'contoso', visible: false }), { ok: true })
+    assert.deepEqual(await w.request('work.dismissNudge', { org: 'contoso', itemId: 1204, prId: 321 }), { ok: true })
+    assert.deepEqual(w.host.data().storage['nudgeDismissed:contoso'], ['1204:321'])
+    assert.equal(w.refusals.length, 0)
+    await w.deactivate()
+  })
+})
+
+test('work.snapshot tells an org without a boards team to pick one', async () => {
+  const ado = fakeAdo()
+  await withFetch(signedIn(ado), async () => {
+    const w = await mountWorker(worker, { host: boardsHost(null) })
+    const snapshot = await w.request('work.snapshot', { org: 'contoso' })
+    assert.equal(snapshot.board, null)
+    assert.equal(snapshot.message, "Pick a boards project and team in this org's settings.")
+    assert.equal(ado.calls.length, 0)
+    await w.deactivate()
+  })
+})
+
+test('org changes reach the boards service: setting a boards team starts polling "my work"', async () => {
+  const ado = fakeAdo()
+  ado.on(call => call.path === '/contoso/_apis/projects', () => reply(200, { value: [{ id: PROJECT, name: BOARDS.projectName }] }))
+  ado.on(call => call.path === `/contoso/_apis/projects/${PROJECT}/teams`, () => reply(200, { value: [{ id: TEAM, name: BOARDS.teamName }] }))
+  await withFetch(signedIn(ado), async () => {
+    const w = await mountWorker(worker, { host: boardsHost(null) })
+    await w.request('orgs.setBoards', { org: 'contoso', projectId: PROJECT, teamId: TEAM })
+    assert.ok(await until(() => workChanged(w.posts).length > 0), 'the new job loaded and posted a snapshot')
+    assert.deepEqual(workChanged(w.posts)[0].mine.map(item => item.id), [1204, 1205])
+    assert.equal(ado.calls.filter(isWiql).length, 1)
+
+    await w.request('orgs.signOut', { org: 'contoso' })
+    await w.deactivate()
   })
 })

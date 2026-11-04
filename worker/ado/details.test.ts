@@ -411,3 +411,38 @@ test('linkPr surfaces a pull request that cannot be read or is malformed', async
     assert.equal(calls.length, 1)
   }
 })
+
+test('a failing link-title lookup shows ids, but throttling still fails the details', async () => {
+  for (const status of [500, 403, 404]) {
+    const { http } = adoServer(call => (call.url.includes('/comments') ? reply(200, { comments: [] }) : reply(status, { message: 'nope' })))
+    const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [itemLink(PARENT, 3), itemLink(CHILD, 11)]))
+    assert.deepEqual(details.links.map(link => link.title), ['#3', '#11'], String(status))
+    assert.equal(details.links[0].url, `${BASE}/Fabrikam%20Web/_workitems/edit/3`)
+  }
+
+  const throttled = adoServer(call =>
+    call.url.includes('/comments')
+      ? reply(200, { comments: [] })
+      : new Response(JSON.stringify({ message: 'slow down' }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60' } })
+  )
+  const error = await rejection(loadDetails(throttled.http, ORG, PROJECT, summary(), raw({}, [itemLink(PARENT, 3)])))
+  assert.equal(error.code, 'rate_limited')
+})
+
+test('linkPr returns the hydrated item rev when the pull request is already linked', async () => {
+  const existing = { rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${OTHER_PROJECT}%2F${REPO}%2F55`, attributes: { name: 'Pull Request' } }
+  const { http, calls } = prServer()
+  const rev = await linkPr(http, ORG, PROJECT, 42, 5, PR_URL, { ...raw({}, [existing]), rev: 9 })
+  assert.equal(rev, 9)
+  assert.deepEqual(calls.map(call => call.method), ['GET'])
+})
+
+test('linkPr refuses a pull request whose repository or project id is empty', async () => {
+  for (const ids of [{ repoId: '' }, { projectId: '' }]) {
+    const { http, calls } = prServer(ids)
+    const error = await rejection(linkPr(http, ORG, PROJECT, 42, 7, PR_URL, raw()))
+    assert.equal(error.code, 'server')
+    assert.equal(error.message, 'Azure DevOps returned an unexpected pull request response.')
+    assert.deepEqual(calls.map(call => call.method), ['GET'])
+  }
+})

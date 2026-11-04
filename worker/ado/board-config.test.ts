@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import type { BoardConfig } from '../../src/shared/work'
-import { boardConfigKey, createBoardConfigCache, listTeamBoards, loadBoardConfig } from './board-config'
+import { boardConfigKey, createBoardConfigCache, listTeamBoards, loadBoardConfig, loadTypeStates } from './board-config'
 import { AdoError, createAdoHttp } from './http'
 
 const ORG = 'contoso'
@@ -309,4 +309,17 @@ test('cache clear forgets everything', () => {
 test('boardConfigKey names org, project, team and board, with default when no board is chosen', () => {
   assert.equal(boardConfigKey(ARGS), `${ORG}/${PROJECT}/${TEAM}/default`)
   assert.equal(boardConfigKey({ ...ARGS, boardId: STORIES_BOARD }), `${ORG}/${PROJECT}/${TEAM}/${STORIES_BOARD}`)
+})
+
+test('loadTypeStates lists every state of a type with its category', async () => {
+  const { http, requested } = server()
+  assert.deepEqual(await loadTypeStates(http, { org: ORG, projectId: PROJECT }, 'Bug'), [
+    { name: 'New', category: 'Proposed' },
+    { name: 'Active', category: 'InProgress' },
+    { name: 'Resolved', category: 'Resolved' },
+    { name: 'Closed', category: 'Completed' }
+  ])
+  assert.deepEqual(requested, [`${statesRoute(PROJECT, 'Bug')}?api-version=7.1`])
+  const malformed = server({ [statesRoute(PROJECT, 'Bug')]: { value: [{ name: 'New' }] } })
+  assert.equal((await failure(loadTypeStates(malformed.http, { org: ORG, projectId: PROJECT }, 'Bug'))).message, 'Azure DevOps returned an unexpected board configuration.')
 })

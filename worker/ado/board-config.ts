@@ -37,7 +37,7 @@ interface TeamFieldValues {
   values: { value: string; includeChildren: boolean }[]
 }
 
-interface TypeState {
+export interface TypeState {
   name: string
   category: string
 }
@@ -109,13 +109,18 @@ async function teamGet<T>(http: AdoHttp, args: BoardArgs, resource: string): Pro
   return data
 }
 
-async function fetchDoneStates(http: AdoHttp, args: BoardArgs, type: string): Promise<string[]> {
+export async function loadTypeStates(http: AdoHttp, args: { org: string; projectId: string }, type: string): Promise<TypeState[]> {
   const { data } = await http.json<{ value: TypeState[] }>({
     org: args.org,
     project: args.projectId,
     path: `/_apis/wit/workitemtypes/${encodeURIComponent(type)}/states`
   })
-  return shape(() => data.value.filter(state => DONE_CATEGORIES.has(state.category)).map(state => expectText(state.name)))
+  return shape(() => data.value.map(state => ({ name: expectText(state.name), category: expectText(state.category) })))
+}
+
+async function fetchDoneStates(http: AdoHttp, args: BoardArgs, type: string): Promise<string[]> {
+  const states = await loadTypeStates(http, args, type)
+  return states.filter(state => DONE_CATEGORIES.has(state.category)).map(state => state.name)
 }
 
 function requirementTypeNames(board: RawBoard): string[] {

@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
-import { getConnectionData, listProjects, listTeams } from './core'
-import { createAdoHttp } from './http'
+import { getConnectionData, listProjects, listTeams, resolveBoards, resolveProjects } from './core'
+import { AdoError, createAdoHttp } from './http'
 
 const DATA = { authenticatedUser: { id: 'u1', providerDisplayName: 'Ada Lovelace' } }
 
@@ -111,4 +111,47 @@ test('listTeams stops after 20 pages and returns what it has', async () => {
   const { calls, http } = teamsHttp(500 * 30)
   assert.equal((await listTeams(http, 'contoso', 'p1')).length, 500 * 20)
   assert.equal(calls.length, 20)
+})
+
+function orgHttp(opts: { projectsStatus?: number } = {}) {
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(new Request(input, init).url)
+    const json = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+    if (pathname === '/contoso/_apis/projects') {
+      return json(opts.projectsStatus ?? 200, { value: [{ id: 'p-web', name: 'Web' }, { id: 'p-ops', name: 'Ops' }] })
+    }
+    if (pathname === '/contoso/_apis/projects/p-web/teams') return json(200, { value: [{ id: 't-web', name: 'Web Team' }] })
+    if (pathname === '/contoso/_apis/projects/p-ops/teams') return json(404, { message: 'gone' })
+    return json(500, { message: 'unexpected' })
+  }
+  return createAdoHttp({ fetch: fetch as typeof globalThis.fetch, authHeader: async () => 'Bearer t' })
+}
+
+test('resolveBoards names the project and team, or returns null when either is gone', async () => {
+  const http = orgHttp()
+  assert.deepEqual(await resolveBoards(http, 'contoso', 'p-web', 't-web'), {
+    projectId: 'p-web',
+    projectName: 'Web',
+    teamId: 't-web',
+    teamName: 'Web Team'
+  })
+  assert.equal(await resolveBoards(http, 'contoso', 'p-gone', 't-web'), null)
+  assert.equal(await resolveBoards(http, 'contoso', 'p-web', 't-gone'), null)
+  assert.equal(await resolveBoards(http, 'contoso', 'p-ops', 't-web'), null)
+  assert.equal(await resolveBoards(orgHttp({ projectsStatus: 404 }), 'contoso', 'p-web', 't-web'), null)
+  await assert.rejects(resolveBoards(orgHttp({ projectsStatus: 500 }), 'contoso', 'p-web', 't-web'), (error: unknown) => {
+    assert.ok(error instanceof AdoError)
+    assert.equal(error.code, 'server')
+    return true
+  })
+})
+
+test('resolveProjects keeps each known project once in first-seen order, or returns null for an unknown id', async () => {
+  const http = orgHttp()
+  assert.deepEqual(await resolveProjects(http, 'contoso', ['p-ops', 'p-web', 'p-ops']), [
+    { id: 'p-ops', name: 'Ops' },
+    { id: 'p-web', name: 'Web' }
+  ])
+  assert.equal(await resolveProjects(http, 'contoso', ['p-web', 'p-gone']), null)
 })
