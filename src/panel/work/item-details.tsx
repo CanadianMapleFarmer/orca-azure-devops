@@ -94,7 +94,7 @@ function postComment(org: string, id: number): Promise<void> {
     const comment = await plugin.request('work.comment', { org, id, text })
     if (!isOpen(org, id)) return
     update(loaded, state =>
-      state.status === 'ready' ? { ...state, details: { ...state.details, comments: [...state.details.comments, comment] } } : state
+      state.status === 'ready' ? { ...state, details: { ...state.details, comments: [comment, ...state.details.comments] } } : state
     )
     set(commentDraft, '')
   })

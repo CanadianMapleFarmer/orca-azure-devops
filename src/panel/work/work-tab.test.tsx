@@ -214,7 +214,7 @@ test('300 cards with four chips each and 25 nudges still render, with 10 nudges 
     shown,
     Array.from({ length: 10 }, (_, index) => `#${index + 1} — PR ${index * 4 + 1} merged into main`)
   )
-  assert.ok(panel.find({ type: 'Text', text: '15 more suggestions on the board.' })?.props.muted)
+  assert.ok(panel.find({ type: 'Text', text: '15 more suggestions not shown.' })?.props.muted)
 })
 
 test('the header shows the board name and a refresh that replaces the snapshot', async () => {
@@ -323,12 +323,32 @@ test('nudge Move and Dismiss call the right requests', async () => {
   assert.equal(calloutTitled('#101 — PR 55 merged into main'), undefined)
 })
 
+test('one nudge over ten says one more suggestion is not shown', async () => {
+  const mine = Array.from({ length: 11 }, (_, index) => item(index + 1))
+  const nudges = mine.map(entry => ({ itemId: entry.id, prId: entry.id, branch: 'main', toColumn: 'Done' }))
+  await open(snapshotOf({ mine, nudges }))
+  assert.equal(panel.findAll({ type: 'Callout' }).length, 10)
+  assert.ok(panel.find({ type: 'Text', text: '1 more suggestion not shown.' })?.props.muted)
+})
+
+test('a card names its parent after the type and id', async () => {
+  await open(
+    snapshotOf({
+      mine: [item(101, { parentId: 10, parentTitle: 'Checkout revamp' }), item(102, { parentId: 11 }), item(103)]
+    })
+  )
+  assert.deepEqual(
+    panel.findAll({ type: 'Card' }).map(card => card.props.description),
+    ['User Story #101 · ↑ Checkout revamp', 'User Story #102 · ↑ #11', 'User Story #103']
+  )
+})
+
 test('ten nudges are all shown without a note', async () => {
   const mine = Array.from({ length: 10 }, (_, index) => item(index + 1))
   const nudges = mine.map(entry => ({ itemId: entry.id, prId: entry.id, branch: 'main', toColumn: 'Done' }))
   await open(snapshotOf({ mine, nudges }))
   assert.equal(panel.findAll({ type: 'Callout' }).length, 10)
-  assert.equal(panel.find({ type: 'Text', text: /more suggestions/ }), null)
+  assert.equal(panel.find({ type: 'Text', text: /not shown/ }), null)
 })
 
 test('a failed nudge move shows the message', async () => {
@@ -376,7 +396,7 @@ test('details shows description, acceptance and comments, and Comment posts', as
   assert.deepEqual(inputsTo(host, 'work.comment'), [{ org: 'contoso', id: 101, text: 'Fixed in the next build.' }])
   assert.deepEqual(
     panel.findAll({ type: 'Markdown' }).map(markdown => markdown.props.content),
-    ['Users land on the **wrong page** after signing in.', '- Redirects to the original page', 'Reproduced on staging.', 'Fixed in the next build.']
+    ['Users land on the **wrong page** after signing in.', '- Redirects to the original page', 'Fixed in the next build.', 'Reproduced on staging.']
   )
   assert.deepEqual(
     panel.findAll({ type: 'Collapsible' }).map(group => group.props.title),

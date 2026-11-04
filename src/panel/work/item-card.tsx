@@ -4,6 +4,11 @@ import type { WorkItemSummary } from '../../shared/work'
 import { openDetails } from './item-details'
 import { move, moveResets } from './state'
 
+function describe(item: WorkItemSummary): string {
+  const id = `${item.type} #${item.id}`
+  return item.parentId === null ? id : `${id} · ↑ ${item.parentTitle ?? `#${item.parentId}`}`
+}
+
 export function ItemCard({ org, item }: { org: string; item: WorkItemSummary }): OrcaNode {
   const byColumn = item.targets.columns.length > 0
   const current = byColumn ? item.column : item.state
@@ -11,7 +16,7 @@ export function ItemCard({ org, item }: { org: string; item: WorkItemSummary }):
     .filter(value => value !== current)
     .map(value => ({ value, label: value }))
   return (
-    <Card title={item.title} description={`${item.type} #${item.id}`}>
+    <Card title={item.title} description={describe(item)}>
       {item.prs.length > 0 ? (
         <Row gap="xs" wrap>
           {item.prs.slice(0, MAX_CHIPS).map(pr => {

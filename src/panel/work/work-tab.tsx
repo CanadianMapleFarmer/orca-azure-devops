@@ -78,11 +78,15 @@ function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
       ))}
       {listed.length > MAX_NUDGES ? (
         <Text size="sm" muted>
-          {`${listed.length - MAX_NUDGES} more suggestions on the board.`}
+          {moreNudges(listed.length - MAX_NUDGES)}
         </Text>
       ) : null}
     </Stack>
   )
+}
+
+function moreNudges(count: number): string {
+  return count === 1 ? '1 more suggestion not shown.' : `${count} more suggestions not shown.`
 }
 
 function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
