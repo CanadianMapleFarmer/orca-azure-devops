@@ -1,5 +1,5 @@
 import { atom, Button, Callout, Heading, Input, plugin, RadioGroup, read, Row, set, Spinner, Stack, update, type OrcaNode } from 'orca'
-import type { ConnectionMethod, OrgStatus } from '../shared/types'
+import type { ConnectFailure, ConnectionMethod, OrgStatus } from '../shared/types'
 import { actionError, activeOrg, messageOf, orgs, view } from './state'
 
 const METHODS = [
@@ -39,6 +39,14 @@ function leaveSetup(): void {
   discardToken()
   set(setupError, null)
   set(view, 'hub')
+}
+
+export function showConnectFailure(failure: ConnectFailure): void {
+  discardToken()
+  set(orgInput, failure.url)
+  set(method, failure.method)
+  set(setupError, failure.message)
+  set(view, 'setup')
 }
 
 export function reconnect(org: OrgStatus): void {

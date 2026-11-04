@@ -18,3 +18,4 @@ export interface OrgStatus {
   tokenStore: { kind: 'orca-secrets' } | { kind: 'az-profile'; path: string }
   boards: BoardsTarget | null; codeProjects: OrgConfig['codeProjects']
 }
+export interface ConnectFailure { org: string; url: string; method: ConnectionMethod; message: string }

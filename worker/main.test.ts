@@ -152,6 +152,21 @@ test('orgs handlers connect, sign out and remove an org', async () => {
   })
 })
 
+test('a failed first connect posts orgs.connectFailed and leaves no org behind', async () => {
+  await withFakeFetch(async () => {
+    const w = await mountWorker(worker)
+    const status = await w.request('orgs.connect', { orgInput: 'contoso', method: 'pat', pat: 'pat-nobody-knows' })
+    assert.equal(status.state, 'error')
+    assert.deepEqual(await w.request('orgs.list', {}), [])
+    assert.deepEqual(orgsChanged(w.posts).at(-1), [])
+    assert.deepEqual(w.posts.filter(post => post.event === 'orgs.connectFailed').map(post => post.payload), [
+      { org: 'contoso', url: 'https://dev.azure.com/contoso', method: 'pat', message: 'Azure DevOps rejected the credentials.' }
+    ])
+    assert.deepEqual(w.host.data().storage.orgs, [])
+    assert.equal(w.refusals.length, 0)
+  })
+})
+
 test('orgs.cancel stops a running az login, wrapper and all, and keeps none of its profile', async () => {
   const sleep = `sleep 30.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`
   await withHome(async home => {

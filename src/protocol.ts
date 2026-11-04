@@ -1,4 +1,4 @@
-import type { ConnectionMethod, OrgStatus } from './shared/types'
+import type { ConnectFailure, ConnectionMethod, OrgStatus } from './shared/types'
 declare module 'orca' {
   interface PluginRequests {
     'plugin.ping': { input: {}; output: { version: string } }
@@ -12,5 +12,8 @@ declare module 'orca' {
     'orgs.setBoards': { input: { org: string; projectId: string; teamId: string }; output: OrgStatus }
     'orgs.setCodeProjects': { input: { org: string; projects: 'all' | string[] }; output: OrgStatus }
   }
-  interface PluginPanelEvents { 'orgs.changed': { orgs: OrgStatus[] } }
+  interface PluginPanelEvents {
+    'orgs.changed': { orgs: OrgStatus[] }
+    'orgs.connectFailed': ConnectFailure
+  }
 }

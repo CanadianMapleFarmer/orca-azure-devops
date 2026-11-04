@@ -34,6 +34,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       orca.panels.post('orgs.changed', { orgs })
       showStatus(orgs)
     },
+    connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
     now: Date.now
   })
   await connections.resetInterrupted()

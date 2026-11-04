@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import type { BoardsTarget, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
+import type { BoardsTarget, ConnectFailure, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
 import type { AzCliProvider } from './auth/azcli'
@@ -240,6 +240,7 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
   const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()
   const posts: OrgStatus[][] = []
+  const failures: ConnectFailure[] = []
   let azInstalled = true
   const stateIn = (orgs: OrgStatus[] | undefined, org: string) => orgs?.find(status => status.org === org)?.state
 
@@ -251,6 +252,9 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     fetch: ado.fetch,
     post: orgs => {
       posts.push(record(structuredClone(orgs)))
+    },
+    connectFailed: failure => {
+      failures.push(record(structuredClone(failure)))
     },
     now: () => clock.now
   })
@@ -266,7 +270,15 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     az,
     ado,
     posts,
+    failures,
     clock,
+    async unregistered(org = 'contoso') {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        if (failures.some(failure => failure.org === org)) return
+        await flush()
+      }
+      assert.fail(`${org} never reported a failed connect; last posted ${stateIn(posts.at(-1), org)}`)
+    },
     setAzInstalled(installed: boolean) {
       azInstalled = installed
     },
@@ -792,7 +804,7 @@ test('cancel refuses an unknown org', async () => {
   await assert.rejects(h.connections.cancel('contoso'), /not connected/)
 })
 
-test('a failed first az connect reports the reason and deletes the profile', async () => {
+test('a failed first az connect reports the reason, deletes the profile and unregisters the org', async () => {
   const cases: { name: string; arrange(h: ReturnType<typeof harness>): void; message: string }[] = [
     { name: 'login', arrange: h => (h.az.loginError = new Error('Azure CLI sign-in failed: ERROR: AADSTS50020')), message: 'Azure CLI sign-in failed: ERROR: AADSTS50020' },
     { name: 'getToken', arrange: h => (h.az.tokenError = new Error('Azure CLI returned an unreadable token response')), message: 'Azure CLI returned an unreadable token response' },
@@ -800,15 +812,56 @@ test('a failed first az connect reports the reason and deletes the profile', asy
     { name: 'anonymous', arrange: h => (h.az.tokens = [TOKEN_ANON]), message: "Azure DevOps didn't accept that sign-in." }
   ]
   for (const { name, arrange, message } of cases) {
-    const h = harness()
+    const h = harness({ orgs: [config({ org: 'fabrikam', method: 'pat', pinned: ADA })], secrets: { 'pat:fabrikam': PAT_ADA } })
     arrange(h)
     await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
-    await h.until('error')
-    assert.equal(h.last()?.message, message, name)
+    await h.unregistered()
+    assert.deepEqual(h.failures, [{ org: 'contoso', url: 'https://dev.azure.com/contoso', method: 'azure-cli', message }], name)
     assert.equal(h.az.calls.at(-1), 'signOut contoso', name)
-    assert.equal(h.stored()?.[0].pinned, null, name)
+    assert.equal(h.az.profiles.has('contoso'), false, name)
+    assert.deepEqual(h.stored()?.map(cfg => cfg.org), ['fabrikam'], name)
+    assert.deepEqual(h.posts.at(-1)?.map(status => status.org), ['fabrikam'], name)
     assert.deepEqual(h.storage.get('signing-in'), [], name)
+    assert.deepEqual((await h.connections.list()).map(status => status.org), ['fabrikam'], name)
   }
+})
+
+test('a failed reconnect keeps the org, whether it is pinned or was signed out with its settings', async () => {
+  for (const pinned of [ADA, null]) {
+    const h = harness({ orgs: [config({ pinned, boards: BOARDS })] })
+    h.az.loginError = new Error('Azure CLI sign-in failed: ERROR: AADSTS50020')
+    await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+    await h.until('error')
+    assert.equal(h.last()?.message, 'Azure CLI sign-in failed: ERROR: AADSTS50020')
+    assert.deepEqual(h.stored()?.[0].pinned, pinned)
+    assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+    assert.deepEqual(h.failures, [])
+  }
+})
+
+test('a first az connect that times out stays registered as signed out', async () => {
+  const h = harness()
+  h.az.loginError = new CommandTimeoutError('az timed out after 300000ms')
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('disconnected')
+  assert.equal(h.last()?.message, 'Sign-in timed out. Try again.')
+  assert.deepEqual(h.stored()?.map(cfg => cfg.org), ['contoso'])
+  assert.deepEqual(h.failures, [])
+})
+
+test('a failed first connect whose profile cannot be deleted stays registered and blocked', async () => {
+  const h = harness()
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  h.az.signOutError = new Error('EPERM: operation not permitted')
+  h.az.loginError = new Error('Azure CLI sign-in failed')
+  h.az.loginGate.resolve()
+  await h.until('error')
+  assert.equal(h.last()?.message, WIPE_FAILED)
+  assert.deepEqual(h.stored()?.map(cfg => cfg.org), ['contoso'])
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  assert.deepEqual(h.failures, [])
 })
 
 test('connect via azure-cli without az installed explains how to fix it', async () => {
@@ -864,13 +917,16 @@ test('a stored PAT that cannot be sent becomes an error', async () => {
   assert.equal(h.ado.requests.length, 0)
 })
 
-test('a rejected PAT on first connect is an error and is not saved', async () => {
+test('a rejected PAT on first connect is an error, saves nothing and unregisters the org', async () => {
   const h = harness()
   const status = await h.connect({ orgInput: 'contoso', method: 'pat', pat: 'pat-nobody-knows' })
   assert.equal(status.state, 'error')
   assert.equal(status.message, 'Azure DevOps rejected the credentials.')
-  assert.equal(h.stored()?.[0].pinned, null)
+  assert.equal(status.org, 'contoso')
+  assert.deepEqual(h.stored(), [])
+  assert.deepEqual(h.posts.at(-1), [])
   assert.equal(h.secretStore.size, 0)
+  assert.deepEqual(h.failures, [{ org: 'contoso', url: 'https://dev.azure.com/contoso', method: 'pat', message: 'Azure DevOps rejected the credentials.' }])
 })
 
 test('connect refuses a sign-in method it does not know without running az', async () => {

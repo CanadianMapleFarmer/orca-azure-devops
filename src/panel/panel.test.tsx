@@ -163,6 +163,37 @@ test('a connect that answers with an error status shows its message in setup', a
   assert.equal(panel.findAll({ type: 'Callout' }).length, 1)
 })
 
+test('a first connect the worker gave up on shows its reason in setup, ready to try again', async () => {
+  await open([org('contoso', { state: 'signing-in', account: null })])
+  await panel.post('orgs.changed', { orgs: [] })
+  await panel.post('orgs.connectFailed', {
+    org: 'contoso',
+    url: 'https://dev.azure.com/contoso',
+    method: 'azure-cli',
+    message: "Azure DevOps didn't accept that sign-in."
+  })
+  const callout = panel.find({ type: 'Callout' })
+  assert.equal(callout?.props?.tone, 'danger')
+  assert.equal(callout?.text, "Azure DevOps didn't accept that sign-in.")
+  assert.equal(panel.valueOf({ label: 'Organization' }), 'https://dev.azure.com/contoso')
+  assert.equal(panel.valueOf({ label: 'Sign in with' }), 'azure-cli')
+})
+
+test('a failed first connect shows setup even while other orgs remain', async () => {
+  await open([org('contoso'), org('fabrikam', { state: 'signing-in', account: null })], {}, { plugin: { activeOrg: 'fabrikam' } })
+  await panel.post('orgs.changed', { orgs: [org('contoso')] })
+  await panel.post('orgs.connectFailed', {
+    org: 'fabrikam',
+    url: 'https://dev.azure.com/fabrikam',
+    method: 'pat',
+    message: 'Azure DevOps rejected the credentials.'
+  })
+  assert.equal(panel.find({ type: 'Callout' })?.text, 'Azure DevOps rejected the credentials.')
+  assert.equal(panel.valueOf({ label: 'Organization' }), 'https://dev.azure.com/fabrikam')
+  assert.equal(panel.valueOf({ label: 'Sign in with' }), 'pat')
+  assert.ok(panel.find({ text: 'Back' }))
+})
+
 test('signing-in shows the browser hint and token location', async () => {
   await open([])
   await panel.post('orgs.changed', { orgs: [org('contoso', { state: 'signing-in', account: null })] })

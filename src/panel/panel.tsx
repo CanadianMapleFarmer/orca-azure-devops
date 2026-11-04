@@ -21,7 +21,7 @@ import {
 } from 'orca'
 import type { OrgState, OrgStatus } from '../shared/types'
 import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
-import { Setup, connecting, openSetup, reconnect } from './setup'
+import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
 
 type ProblemState = Exclude<OrgState, 'connected' | 'signing-in'>
@@ -69,7 +69,8 @@ export function setup(ctx: PanelContext): void {
       set(orgs, payload.orgs)
       set(listing, { status: 'ready' })
       syncSettings(payload.orgs)
-    })
+    }),
+    plugin.on('orgs.connectFailed', showConnectFailure)
   )
   void loadOrgs()
 }
