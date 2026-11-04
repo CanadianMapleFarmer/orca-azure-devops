@@ -1,14 +1,24 @@
-import { spawnSync } from 'node:child_process'
+import { type ChildProcess, spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { PassThrough } from 'node:stream'
 import { assert, test } from 'orca/testing'
-import { runCommand, stopAllCommands } from './run'
+import { createRunCommand, runCommand, stopAllCommands } from './run'
 
 const NO_ENV = { PATH: '/usr/bin:/bin' }
 
+function uniqueSuffix(): string {
+  return String(Math.floor(Math.random() * 1e6)).padStart(6, '0')
+}
+
 function uniqueSleep(): string {
-  return `sleep 30.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}`
+  return `sleep 30.${uniqueSuffix()}`
+}
+
+function holdPipesInNewSession(marker: string): string {
+  return `perl -MPOSIX -e 'setsid() or die; sleep 60' ${marker} &`
 }
 
 function running(pattern: string): boolean {
@@ -179,4 +189,72 @@ test('a group member that outlives the wrapper is still killed after the grace p
     assert.equal(running(survivor), true, 'it ignored SIGTERM and holds no output pipe')
     assert.ok(await until(() => !running(survivor), 5_000), 'SIGKILL reached it')
   })
+})
+
+test('a stopped command settles even when a process outside its group holds its pipes', async () => {
+  const holder = `run-test-pipe-holder-${uniqueSuffix()}`
+  const sleep = uniqueSleep()
+  await withWrapper([holdPipesInNewSession(holder), sleep], [holder, sleep], async az => {
+    const controller = new AbortController()
+    const pending = runCommand(az, [], { env: NO_ENV, signal: controller.signal })
+    assert.ok(await until(() => running(sleep) && running(holder)), 'the wrapper started the holder and its child')
+    controller.abort()
+    await assert.rejects(within(pending, 5_000), isAbort)
+    assert.equal(running(sleep), false, 'the group is gone')
+    assert.equal(running(holder), true, 'the holder is in its own session, still holding the pipes')
+  })
+})
+
+test('stopAllCommands settles a command whose pipes are held outside its group', async () => {
+  const holder = `run-test-pipe-holder-${uniqueSuffix()}`
+  const sleep = uniqueSleep()
+  await withWrapper([holdPipesInNewSession(holder), sleep], [holder, sleep], async az => {
+    const pending = runCommand(az, [], { env: NO_ENV })
+    pending.catch(() => {})
+    assert.ok(await until(() => running(sleep) && running(holder)), 'the wrapper started the holder and its child')
+    await stopAllCommands(SHUTDOWN)
+    await assert.rejects(within(pending, 5_000), /was terminated by SIGTERM/)
+    assert.equal(running(holder), true, 'the holder is in its own session, still holding the pipes')
+  })
+})
+
+const FAKE_PID = 0x7ffffff0
+
+test('the registry forgets a group after SIGKILL escalation', async () => {
+  const child = Object.assign(new EventEmitter(), { pid: FAKE_PID, stdout: new PassThrough(), stderr: new PassThrough() })
+  const sent: (string | number | undefined)[] = []
+  const kill = process.kill
+  process.kill = (pid, sig) => {
+    if (pid !== -FAKE_PID) return kill.call(process, pid, sig)
+    sent.push(sig)
+    return true
+  }
+  try {
+    const controller = new AbortController()
+    const pending = createRunCommand(() => child as unknown as ChildProcess)('az', [], { env: NO_ENV, signal: controller.signal })
+    pending.catch(() => {})
+    controller.abort()
+    assert.ok(await until(() => sent.includes('SIGKILL'), 5_000), 'the group outlived SIGTERM and was escalated')
+    child.emit('exit', null, 'SIGKILL')
+    child.emit('close', null, 'SIGKILL')
+    await assert.rejects(within(pending, 1_000), isAbort)
+    sent.length = 0
+    await stopAllCommands({ killAfterMs: 50, withinMs: 200 })
+    assert.deepEqual(sent, [], 'a later stopAllCommands never signals the closed group')
+  } finally {
+    process.kill = kill
+  }
+})
+
+test('a spawn that fails before stdio rejects instead of crashing', async () => {
+  const failure = Object.assign(new Error('spawn /usr/local/bin/az EMFILE'), { code: 'EMFILE', syscall: 'spawn /usr/local/bin/az' })
+  const run = createRunCommand(() => {
+    const child = Object.assign(new EventEmitter(), { pid: undefined, stdout: undefined, stderr: undefined })
+    process.nextTick(() => {
+      child.emit('error', failure)
+      child.emit('close', -24, null)
+    })
+    return child as unknown as ChildProcess
+  })
+  await assert.rejects(run('/usr/local/bin/az', [], { env: NO_ENV }), error => error === failure)
 })

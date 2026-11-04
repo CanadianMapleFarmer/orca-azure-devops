@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn, type SpawnOptions } from 'node:child_process'
 import * as path from 'node:path'
 import type { Readable } from 'node:stream'
 
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024
 const KILL_GRACE_MS = 3_000
+const GROUP_POLL_MS = 50
 
 export interface RunResult {
   code: number
@@ -20,6 +21,7 @@ export type RunCommand = (
 export class CommandTimeoutError extends Error {}
 
 type SignalGroup = (sig: NodeJS.Signals | 0) => boolean
+type Spawn = (file: string, args: string[], options: SpawnOptions) => ChildProcess
 
 const live = new Set<SignalGroup>()
 
@@ -35,74 +37,105 @@ export async function stopAllCommands(opts: { killAfterMs: number; withinMs: num
   clearTimeout(kill)
 }
 
-export const runCommand: RunCommand = (file, args, opts) =>
-  new Promise((resolve, reject) => {
-    const { signal, timeoutMs } = opts
-    if (signal?.aborted) return reject(abortError(signal))
-    const name = path.basename(file)
-    const child = spawn(file, args, { env: opts.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    let stopped: Error | null = null
-    let escalation: ReturnType<typeof setTimeout> | undefined
-    let closed = false
+export const runCommand: RunCommand = createRunCommand(spawn)
 
-    const signalGroup: SignalGroup = sig => {
-      if (child.pid === undefined) return false
-      try {
-        process.kill(-child.pid, sig)
-        return true
-      } catch {
-        return false
+export function createRunCommand(spawnFn: Spawn): RunCommand {
+  return (file, args, opts) =>
+    new Promise((resolve, reject) => {
+      const { signal, timeoutMs } = opts
+      if (signal?.aborted) return reject(abortError(signal))
+      const name = path.basename(file)
+      const child = spawnFn(file, args, { env: opts.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      let stopped: Error | null = null
+      let signalled = false
+      let exited = false
+      let escalated = false
+      let closed = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let escalation: ReturnType<typeof setTimeout> | undefined
+      let reaper: ReturnType<typeof setInterval> | undefined
+
+      const signalGroup: SignalGroup = sig => {
+        if (child.pid === undefined) return false
+        if (sig !== 0) {
+          signalled = true
+          watchGroup()
+        }
+        try {
+          process.kill(-child.pid, sig)
+          return true
+        } catch {
+          return false
+        }
       }
-    }
-    if (child.pid !== undefined) live.add(signalGroup)
 
-    const stop = (reason: Error): void => {
-      if (stopped) return
-      stopped = reason
-      signalGroup('SIGTERM')
-      escalation = setTimeout(() => {
-        signalGroup('SIGKILL')
-        if (closed) live.delete(signalGroup)
-      }, KILL_GRACE_MS)
-    }
+      const watchGroup = (): void => {
+        if (!signalled || !exited || closed || reaper) return
+        reaper = setInterval(() => {
+          if (signalGroup(0)) return
+          clearInterval(reaper)
+          child.stdout?.destroy()
+          child.stderr?.destroy()
+        }, GROUP_POLL_MS)
+      }
 
-    const collect = (stream: Readable, label: string): (() => string) => {
-      const chunks: Buffer[] = []
-      let size = 0
-      stream.on('data', (chunk: Buffer) => {
-        size += chunk.length
-        if (size > MAX_BUFFER_BYTES) return stop(maxBufferError(label))
-        chunks.push(chunk)
+      const stop = (reason: Error): void => {
+        if (stopped) return
+        stopped = reason
+        signalGroup('SIGTERM')
+        escalation = setTimeout(() => {
+          escalated = true
+          signalGroup('SIGKILL')
+          if (closed) live.delete(signalGroup)
+        }, KILL_GRACE_MS)
+      }
+      const onAbort = () => stop(abortError(signal!))
+
+      const finish = (): void => {
+        closed = true
+        clearTimeout(timer)
+        clearInterval(reaper)
+        signal?.removeEventListener('abort', onAbort)
+        if (escalation && !escalated && signalGroup(0)) return
+        clearTimeout(escalation)
+        live.delete(signalGroup)
+      }
+
+      child.once('error', error => {
+        finish()
+        reject(error)
       })
-      return () => Buffer.concat(chunks).toString('utf8')
-    }
+      if (!child.stdout || !child.stderr) return
 
-    const stdout = collect(child.stdout, 'stdout')
-    const stderr = collect(child.stderr, 'stderr')
-    const timer = timeoutMs === undefined ? undefined : setTimeout(() => stop(new CommandTimeoutError(`${name} timed out after ${timeoutMs}ms`)), timeoutMs)
-    const onAbort = () => stop(abortError(signal!))
-    signal?.addEventListener('abort', onAbort, { once: true })
+      const collect = (stream: Readable, label: string): (() => string) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        stream.on('data', (chunk: Buffer) => {
+          size += chunk.length
+          if (size > MAX_BUFFER_BYTES) return stop(maxBufferError(label))
+          chunks.push(chunk)
+        })
+        return () => Buffer.concat(chunks).toString('utf8')
+      }
 
-    const finish = (): void => {
-      closed = true
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      if (escalation && signalGroup(0)) return
-      clearTimeout(escalation)
-      live.delete(signalGroup)
-    }
+      const stdout = collect(child.stdout, 'stdout')
+      const stderr = collect(child.stderr, 'stderr')
+      if (child.pid !== undefined) live.add(signalGroup)
+      if (timeoutMs !== undefined) timer = setTimeout(() => stop(new CommandTimeoutError(`${name} timed out after ${timeoutMs}ms`)), timeoutMs)
+      signal?.addEventListener('abort', onAbort, { once: true })
 
-    child.once('error', error => {
-      finish()
-      reject(error)
+      child.once('exit', () => {
+        exited = true
+        watchGroup()
+      })
+      child.once('close', (code, sig) => {
+        finish()
+        if (stopped) return reject(stopped)
+        if (code !== null) return resolve({ code, stdout: stdout(), stderr: stderr() })
+        reject(new Error(`${name} was terminated by ${sig}`))
+      })
     })
-    child.once('close', (code, sig) => {
-      finish()
-      if (stopped) return reject(stopped)
-      if (code !== null) return resolve({ code, stdout: stdout(), stderr: stderr() })
-      reject(new Error(`${name} was terminated by ${sig}`))
-    })
-  })
+}
 
 function abortError(signal: AbortSignal): Error {
   return Object.assign(new Error('The operation was aborted', { cause: signal.reason }), { name: 'AbortError', code: 'ABORT_ERR' })
