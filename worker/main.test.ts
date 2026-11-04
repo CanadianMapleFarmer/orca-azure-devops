@@ -9,7 +9,7 @@ import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isWiql, json as reply, ORG_URL, PROJECT, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
-import { fakePrs, isMineActive, isReviewList, ME } from './prs/fake-prs'
+import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
 
 function running(pattern: string): boolean {
@@ -652,6 +652,24 @@ test('ui.visibility routes prs to the PRs service and work/board as before', asy
       assert.ok(await until(() => prsChanged(w.posts).length > 0), 'showing the PRs tab ran a full load')
       assert.deepEqual(prsChanged(w.posts)[0].sets.map(set => set.prs.map(pr => pr.prId)), [[4105], [4104], [4101, 4102, 4103]])
       assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('deactivate aborts a pull request load in flight, and nothing is posted or counted after it', async () => {
+  const ado = fakePrs()
+  const hung = ado.hang(isPrList)
+  await withFetch(signedIn(ado), async () => {
+    const host = prsHost()
+    await withWorker(worker, { host }, async w => {
+      const answer = w.request('prs.snapshot', { org: 'contoso' }).then(() => null, (error: unknown) => error)
+      assert.ok(await until(() => hung.length > 0), 'pull request lists are in flight')
+      await w.deactivate()
+      assert.ok(hung.every(call => call.signal?.aborted), 'every request is aborted')
+      assert.ok(adoErrorWith('unauthorized', 401, 'Connect this organization first.')(await answer))
+      assert.deepEqual(prsChanged(w.posts), [])
+      const shown = host.callsOf('statusBar.update').map(call => (call as { text?: string }).text)
+      assert.ok(shown.every(text => text === 'ADO'), JSON.stringify(shown))
     })
   })
 })

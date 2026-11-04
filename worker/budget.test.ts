@@ -1,9 +1,10 @@
 import { assert, test } from 'orca/testing'
-import { byteLength, newestThatFit } from './budget'
+import { byteLength, itemBytes, newestThatFit } from './budget'
 
-test('byteLength measures the UTF-8 bytes of the JSON text', () => {
+test('byteLength measures the UTF-8 bytes of the JSON text, and itemBytes adds the list separator', () => {
   assert.equal(byteLength({ a: 1 }), 7)
   assert.equal(byteLength('é'), 4)
+  assert.equal(itemBytes({ a: 1 }), 8)
 })
 
 test('newestThatFit keeps the newest items within the budget and the cap', () => {
@@ -13,7 +14,7 @@ test('newestThatFit keeps the newest items within the budget and the cap', () =>
     { id: 3, at: 20, text: 'c'.repeat(40) },
     { id: 4, at: 40, text: 'd'.repeat(40) }
   ]
-  const each = byteLength(items[0]) + 1
+  const each = itemBytes(items[0])
   const kept = (budget: number, maxItems?: number) => {
     const set = newestThatFit(items, budget, item => item.at, maxItems)
     return items.filter(item => set.has(item)).map(item => item.id)

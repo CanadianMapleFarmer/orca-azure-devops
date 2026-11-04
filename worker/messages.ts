@@ -27,6 +27,8 @@ export const FIND_PEOPLE_NEEDS_ACCESS = 'Finding people needs Graph (Read) and I
 export const PRS_TRIMMED = 'Showing the newest pull requests only.'
 export const PRS_NEED_CODE_READ = 'Pull requests need Code (Read) access.'
 export const PRS_LOAD_FAILED = "Couldn't load pull requests."
+export const PRS_WORK_ITEMS_NEED_ACCESS = 'Linked work items need more access, so sets are grouped by branch only.'
+export const PRS_CHECKS_NEED_ACCESS = 'Build and policy status need more access.'
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',

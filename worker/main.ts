@@ -57,7 +57,6 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const scheduler = createScheduler(realClock)
-  stopPolling = () => scheduler.dispose()
   const boards = createBoardsService({
     http: connections.http,
     orgs: () => connections.list(),
@@ -76,6 +75,10 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     counts: (org, count) => bar.setCount(org, 'toReview', count),
     now: Date.now
   })
+  stopPolling = () => {
+    scheduler.dispose()
+    prs.dispose()
+  }
   await connections.resetInterrupted()
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)

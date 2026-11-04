@@ -31,6 +31,8 @@ const NEED_CODE_READ = 'Pull requests need Code (Read) access.'
 const LOAD_FAILED = "Couldn't load pull requests."
 const NOT_CONNECTED = 'Connect this organization first.'
 const OUTAGE = 'TF246017: the database is unavailable.'
+const WORK_ITEMS_NEED_ACCESS = 'Linked work items need more access, so sets are grouped by branch only.'
+const CHECKS_NEED_ACCESS = 'Build and policy status need more access.'
 
 function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -51,7 +53,7 @@ function harness() {
   const clock = fakeClock(T0)
   const posts: PrSnapshot[] = []
   const counts: [string, number | null][] = []
-  const failing = { orgs: false }
+  const failing = { orgs: false, settings: false }
   let orgs = [status()]
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const scheduler = createScheduler(clock)
@@ -62,7 +64,10 @@ function harness() {
       return structuredClone(orgs)
     },
     scheduler,
-    autoComplete: () => AUTO,
+    autoComplete: () => {
+      if (failing.settings) throw new Error('the settings could not be read')
+      return AUTO
+    },
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: (org, count) => counts.push([org, count]),
     now: clock.now
@@ -74,6 +79,7 @@ function harness() {
     counts,
     failing,
     service,
+    scheduler,
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
@@ -91,7 +97,8 @@ function tally(ado: ReturnType<typeof fakePrs>) {
     completed: ado.count(isMineCompleted),
     review: ado.count(isReviewList),
     workItems: ado.count(isPrWorkItems),
-    evaluations: ado.count(isEvaluations)
+    evaluations: ado.count(isEvaluations),
+    all: ado.calls.length
   }
 }
 
@@ -134,7 +141,7 @@ test('a visible load fans out once per code project and caches the rest', async 
   h.show()
   await h.clock.tick(0)
 
-  assert.deepEqual(tally(h.ado), { repositories: 1, active: 2, completed: 2, review: 2, workItems: 7, evaluations: 5 })
+  assert.deepEqual(tally(h.ado), { repositories: 1, active: 2, completed: 2, review: 2, workItems: 7, evaluations: 5, all: 19 })
   assert.deepEqual(h.ado.calls.filter(isMineActive).map(projectOf), [PLATFORM, PROJECT])
   assert.deepEqual(h.ado.calls.filter(isMineCompleted).map(projectOf), [PLATFORM, PROJECT])
   assert.deepEqual(h.ado.calls.filter(isReviewList).map(projectOf), [PLATFORM, PROJECT])
@@ -156,7 +163,7 @@ test('a visible load fans out once per code project and caches the rest', async 
   assert.deepEqual(Object.fromEntries(review.query), { 'searchCriteria.reviewerId': ME, 'searchCriteria.status': 'active', $top: '100', 'api-version': '7.1' })
 
   await h.clock.tick(MINUTE)
-  assert.deepEqual(tally(h.ado), { repositories: 1, active: 4, completed: 2, review: 4, workItems: 7, evaluations: 5 })
+  assert.deepEqual(tally(h.ado), { repositories: 1, active: 4, completed: 2, review: 4, workItems: 7, evaluations: 5, all: 23 })
   assert.equal(h.posts.length, 2)
 })
 
@@ -165,15 +172,14 @@ test('a background run asks only for reviews and updates the count', async () =>
   h.setOrgs([status()])
   await h.clock.tick(0)
 
-  assert.deepEqual(tally(h.ado), { repositories: 1, active: 0, completed: 0, review: 2, workItems: 0, evaluations: 0 })
+  assert.deepEqual(tally(h.ado), { repositories: 1, active: 0, completed: 0, review: 2, workItems: 0, evaluations: 0, all: 3 })
   assert.deepEqual(h.counts, [[ORG, 1]])
   assert.deepEqual(h.posts, [], 'no snapshot is posted before its sets were loaded')
 
   await h.clock.tick(5 * MINUTE - 1)
-  assert.equal(h.ado.count(isReviewList), 2)
+  assert.equal(h.ado.calls.length, 3)
   await h.clock.tick(1)
-  assert.equal(h.ado.count(isReviewList), 4)
-  assert.equal(h.ado.count(isMineActive), 0)
+  assert.deepEqual(tally(h.ado), { repositories: 1, active: 0, completed: 0, review: 4, workItems: 0, evaluations: 0, all: 5 })
   assert.deepEqual(h.posts, [])
 
   const snapshot = await h.service.snapshot(ORG)
@@ -208,7 +214,7 @@ test('a code-project list limits the fan-out', async () => {
   h.show()
   await h.clock.tick(0)
 
-  assert.deepEqual(tally(h.ado), { repositories: 0, active: 1, completed: 1, review: 1, workItems: 7, evaluations: 5 })
+  assert.deepEqual(tally(h.ado), { repositories: 0, active: 1, completed: 1, review: 1, workItems: 7, evaluations: 5, all: 15 })
   assert.ok(h.ado.calls.filter(isPrList).every(call => projectOf(call) === PROJECT))
 })
 
@@ -277,9 +283,16 @@ test('a failed refresh keeps the last snapshot as stale', async () => {
   fresh.ado.on(isMineActive, () => json(500, { message: OUTAGE }))
   assert.equal((await rejection(fresh.service.refresh(ORG))).message, OUTAGE)
   assert.deepEqual(fresh.posts, [])
+
+  for (const flag of ['orgs', 'settings'] as const) {
+    const plain = harness()
+    plain.failing[flag] = true
+    assert.equal((await rejection(plain.service.snapshot(ORG))).message, LOAD_FAILED, `snapshot, ${flag}`)
+    assert.equal((await rejection(plain.service.refresh(ORG))).message, LOAD_FAILED, `refresh, ${flag}`)
+  }
 })
 
-test('a forbidden list pauses PR loads for 10 minutes with the scope message', async () => {
+test('a forbidden PR list pauses PR loads for 10 minutes with the scope message', async () => {
   const h = harness()
   h.setOrgs([status()])
   h.show()
@@ -308,6 +321,36 @@ test('a forbidden list pauses PR loads for 10 minutes with the scope message', a
   assert.equal(fresh.ado.calls.length, before)
 })
 
+test('a forbidden enrichment turns off only that enrichment for 10 minutes', async () => {
+  const checksOk = { build: 'succeeded', policies: 'approved' }
+  const cases = [
+    { refused: isPrWorkItems, message: WORK_ITEMS_NEED_ACCESS, search: { workItemIds: [], checks: checksOk } },
+    { refused: isEvaluations, message: CHECKS_NEED_ACCESS, search: { workItemIds: [1204, 1207], checks: null } }
+  ]
+  for (const { refused, message, search } of cases) {
+    const h = harness()
+    h.ado.on(refused, () => json(403, { message: 'TF401019: no access.' }))
+    h.setOrgs([status()])
+    h.show()
+    await h.clock.tick(0)
+
+    const snapshot = h.posts.at(-1)
+    assert.deepEqual(snapshot?.sets.map(set => set.prs.map(pr => pr.prId)), [[4105], [4104], [4101, 4102, 4103]], message)
+    const [pr] = snapshot?.sets[2].prs ?? []
+    assert.deepEqual({ workItemIds: pr.workItemIds, checks: pr.checks }, search)
+    assert.deepEqual([snapshot?.stale, snapshot?.message, snapshot?.toReviewCount], [false, message, 1])
+
+    const tried = h.ado.count(refused)
+    await h.clock.tick(9 * MINUTE)
+    assert.equal(h.ado.count(isMineActive), 20, 'the lists keep loading every minute')
+    assert.equal(h.ado.count(refused), tried, 'the refused enrichment is not asked for 10 minutes')
+    assert.equal(h.posts.at(-1)?.message, message)
+
+    await h.clock.tick(MINUTE)
+    assert.ok(h.ado.count(refused) > tried, 'and is asked again after 10 minutes')
+  }
+})
+
 test('jobs and counts follow org status', async () => {
   const h = harness()
   h.setOrgs([status()])
@@ -334,6 +377,49 @@ test('jobs and counts follow org status', async () => {
   await h.clock.tick(10 * MINUTE)
   assert.equal(h.ado.calls.length, idle, 'an org without a pinned account has no job')
   assert.equal((await rejection(h.service.refresh(ORG))).message, NOT_CONNECTED)
+})
+
+test('leaving or disposing aborts every PR load, whoever started it', async () => {
+  const leaves = {
+    'sign-out': (h: ReturnType<typeof harness>) => h.setOrgs([status({ state: 'disconnected', account: null })]),
+    deactivate: (h: ReturnType<typeof harness>) => {
+      h.scheduler.dispose()
+      h.service.dispose()
+    }
+  }
+  for (const [name, leave] of Object.entries(leaves)) {
+    const h = harness()
+    const hung = h.ado.hang(isPrList)
+    const answer = rejection(h.service.snapshot(ORG))
+    await drain()
+    h.setOrgs([status()])
+    h.show()
+    await drain()
+    assert.equal(hung.length, 4, `${name}: the job joined the load the snapshot started`)
+
+    leave(h)
+    await drain()
+    assert.ok(hung.every(call => call.signal?.aborted), `${name}: every request is aborted`)
+    assert.deepEqual(await answer, new AdoError('unauthorized', 401, NOT_CONNECTED))
+    assert.deepEqual(h.posts, [])
+    assert.ok(h.counts.every(([, count]) => count === null), `${name}: no count is set`)
+    assert.deepEqual(await rejection(h.service.snapshot(ORG)), new AdoError('unauthorized', 401, NOT_CONNECTED), `${name}: no new load starts`)
+    assert.deepEqual(h.posts, [])
+  }
+})
+
+test("a job's own abort ends only its wait, not the load it joined", async () => {
+  const h = harness()
+  const held = h.ado.hold(isMineActive)
+  const answer = h.service.snapshot(ORG)
+  await drain()
+  h.setOrgs([status()])
+  h.show()
+  await drain()
+  h.scheduler.dispose()
+  held.release()
+  assert.equal((await answer).sets.length, 3)
+  assert.equal(h.posts.length, 1)
 })
 
 test('a load finishing after sign-out posts nothing', async () => {
@@ -397,6 +483,21 @@ test('becoming visible runs a full load when the last one is stale', async () =>
   assert.equal(h.ado.count(isMineActive), 2, 'the full snapshot is 30 s old')
   await h.clock.tick(30_000)
   assert.equal(h.ado.count(isMineActive), 4, 'and the visible cadence picks up from the last run')
+})
+
+test('becoming visible during a background run still loads in full', async () => {
+  const h = harness()
+  const held = h.ado.hold(isReviewList)
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  h.show()
+  await drain()
+  assert.equal(h.ado.count(isMineActive), 0, 'the background run is still in flight')
+
+  held.release()
+  await drain()
+  assert.equal(h.ado.count(isMineActive), 2, 'a full load follows at once')
+  assert.equal(h.posts.length, 1)
 })
 
 test('a removed job aborts its in-flight PR requests', async () => {
