@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import type { BoardsTarget, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
+import type { BoardsTarget, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
 import type { AzCliProvider } from './auth/azcli'
@@ -672,6 +672,15 @@ test('a rejected PAT on first connect is an error and is not saved', async () =>
   assert.equal(status.message, 'Azure DevOps rejected the credentials.')
   assert.equal(h.stored()?.[0].pinned, null)
   assert.equal(h.secretStore.size, 0)
+})
+
+test('connect refuses a sign-in method it does not know without running az', async () => {
+  const h = harness()
+  const unknown = 'entra' as ConnectionMethod
+  await assert.rejects(h.connections.connect({ orgInput: 'contoso', method: unknown }), /^Error: Unknown sign-in method\.$/)
+  assert.deepEqual(h.az.calls, [])
+  assert.equal(h.stored(), undefined)
+  assert.equal(h.posts.length, 0)
 })
 
 test('connect refuses input that is not an org', async () => {

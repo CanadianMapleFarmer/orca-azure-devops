@@ -51,7 +51,8 @@ const MESSAGES = {
   signedOut: 'Signed out.',
   wipeFailed: "Couldn't delete this org's saved sign-in. Sign out to try again.",
   noAccess: "Your account can't access this in Azure DevOps.",
-  unknownOrg: 'That organization is not connected.'
+  unknownOrg: 'That organization is not connected.',
+  unknownMethod: 'Unknown sign-in method.'
 }
 
 type Transient = { state: Exclude<OrgState, 'connected'>; message?: string }
@@ -115,18 +116,33 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       state: current?.state ?? (cfg.pinned ? 'connected' : 'disconnected'),
       account: cfg.pinned,
       ...(current?.message ? { message: current.message } : {}),
-      tokenStore: cfg.method === 'pat'
-        ? { kind: 'orca-secrets' }
-        : { kind: 'az-profile', path: cfg.org ? deps.azProfiles.profileDir(cfg.org) : '' },
+      tokenStore: tokenStoreOf(cfg),
       boards: cfg.boards,
       codeProjects: cfg.codeProjects
     }
   }
 
+  function tokenStoreOf(cfg: OrgConfig): OrgStatus['tokenStore'] {
+    switch (cfg.method) {
+      case 'pat':
+        return { kind: 'orca-secrets' }
+      case 'azure-cli':
+        return { kind: 'az-profile', path: cfg.org ? deps.azProfiles.profileDir(cfg.org) : '' }
+      default:
+        return unknownMethod(cfg.method)
+    }
+  }
+
   async function credentialPresent(cfg: OrgConfig): Promise<boolean> {
     try {
-      if (cfg.method === 'pat') return (await deps.secrets.get(patKey(cfg.org))) !== null
-      return await deps.azProfiles.hasProfile(cfg.org)
+      switch (cfg.method) {
+        case 'pat':
+          return (await deps.secrets.get(patKey(cfg.org))) !== null
+        case 'azure-cli':
+          return await deps.azProfiles.hasProfile(cfg.org)
+        default:
+          return unknownMethod(cfg.method)
+      }
     } catch {
       return false
     }
@@ -200,7 +216,16 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   }
 
   function forgetCredentials(org: string, method: ConnectionMethod): Promise<void> {
-    return serial(org, () => (method === 'pat' ? pat.forget(org) : deps.azProfiles.signOut(org)))
+    return serial(org, () => {
+      switch (method) {
+        case 'pat':
+          return pat.forget(org)
+        case 'azure-cli':
+          return deps.azProfiles.signOut(org)
+        default:
+          return unknownMethod(method)
+      }
+    })
   }
 
   async function wipeCredentials(org: string, methods: ConnectionMethod[]): Promise<boolean> {
@@ -218,17 +243,29 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return wiped
   }
 
-  async function acquire(cfg: OrgConfig): Promise<Credential> {
-    if (cfg.method === 'pat') {
-      let header: string | null
-      try {
-        header = await pat.header(cfg.org)
-      } catch {
-        throw new Error(MESSAGES.unusablePat)
-      }
-      if (!header) throw new NoCredentialError()
-      return { header, expiresAt: Infinity }
+  function acquire(cfg: OrgConfig): Promise<Credential> {
+    switch (cfg.method) {
+      case 'pat':
+        return acquirePat(cfg)
+      case 'azure-cli':
+        return acquireAz(cfg)
+      default:
+        return unknownMethod(cfg.method)
     }
+  }
+
+  async function acquirePat(cfg: OrgConfig): Promise<Credential> {
+    let header: string | null
+    try {
+      header = await pat.header(cfg.org)
+    } catch {
+      throw new Error(MESSAGES.unusablePat)
+    }
+    if (!header) throw new NoCredentialError()
+    return { header, expiresAt: Infinity }
+  }
+
+  async function acquireAz(cfg: OrgConfig): Promise<Credential> {
     if (!(await deps.azProfiles.hasProfile(cfg.org))) throw new NoCredentialError()
     const az = await deps.az()
     if (!az) throw new Error(MESSAGES.azMissing)
@@ -382,7 +419,14 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   }
 
   function discardSignIn(cfg: OrgConfig): Promise<void> {
-    return cfg.method === 'azure-cli' ? serial(cfg.org, () => deps.azProfiles.signOut(cfg.org)) : Promise.resolve()
+    switch (cfg.method) {
+      case 'pat':
+        return Promise.resolve()
+      case 'azure-cli':
+        return serial(cfg.org, () => deps.azProfiles.signOut(cfg.org))
+      default:
+        return unknownMethod(cfg.method)
+    }
   }
 
   async function conclude(org: string, attempt: Attempt, next: Transient | null, clearMarker = true): Promise<void> {
@@ -463,6 +507,42 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return { cfg, attempt }
   }
 
+  async function connectPat(parsed: { org: string; url: string }, input: string | undefined): Promise<OrgStatus> {
+    const token = (input ?? '').trim()
+    if (!token) return draftError(parsed, 'pat', MESSAGES.emptyPat)
+    if (!PRINTABLE_ASCII.test(token)) return draftError(parsed, 'pat', MESSAGES.unusablePat)
+    const tenantId = await discoverTenant(parsed.org, deps.fetch)
+    const { cfg, attempt } = await begin(parsed, 'pat', tenantId)
+    if (!attempt) return statusFor(cfg)
+    const header = basicAuth(token)
+    await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity }), () => pat.save(cfg.org, token))
+    return statusFor(cfg)
+  }
+
+  async function connectAz(parsed: { org: string; url: string }): Promise<OrgStatus> {
+    const az = await deps.az()
+    if (!az) return draftError(parsed, 'azure-cli', MESSAGES.azMissing)
+    const tenantId = await discoverTenant(parsed.org, deps.fetch)
+    const { cfg, attempt } = await begin(parsed, 'azure-cli', tenantId)
+    if (!attempt) return statusFor(cfg)
+    const { org } = cfg
+    void signIn(cfg, attempt, async signal => {
+      await serial(org, async () => {
+        signal.throwIfAborted()
+        await deps.azProfiles.signOut(org).catch(() => {
+          throw new Error(MESSAGES.wipeFailed)
+        })
+        return az.login(org, cfg.tenantId, signal)
+      })
+      const { token, expiresAt } = await serial(org, () => {
+        signal.throwIfAborted()
+        return az.getToken(org, cfg.tenantId)
+      })
+      return { header: `Bearer ${token}`, expiresAt }
+    }).catch(() => {})
+    return statusFor(cfg)
+  }
+
   return {
     async list() {
       await load()
@@ -474,40 +554,14 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       const { method } = input
       const parsed = parseOrgInput(input.orgInput)
       if (!parsed) return draftError(null, method, MESSAGES.invalidOrg)
-
-      if (method === 'pat') {
-        const token = (input.pat ?? '').trim()
-        if (!token) return draftError(parsed, method, MESSAGES.emptyPat)
-        if (!PRINTABLE_ASCII.test(token)) return draftError(parsed, method, MESSAGES.unusablePat)
-        const tenantId = await discoverTenant(parsed.org, deps.fetch)
-        const { cfg, attempt } = await begin(parsed, method, tenantId)
-        if (!attempt) return statusFor(cfg)
-        const header = basicAuth(token)
-        await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity }), () => pat.save(cfg.org, token))
-        return statusFor(cfg)
+      switch (method) {
+        case 'pat':
+          return connectPat(parsed, input.pat)
+        case 'azure-cli':
+          return connectAz(parsed)
+        default:
+          return unknownMethod(method)
       }
-
-      const az = await deps.az()
-      if (!az) return draftError(parsed, method, MESSAGES.azMissing)
-      const tenantId = await discoverTenant(parsed.org, deps.fetch)
-      const { cfg, attempt } = await begin(parsed, method, tenantId)
-      if (!attempt) return statusFor(cfg)
-      const { org } = cfg
-      void signIn(cfg, attempt, async signal => {
-        await serial(org, async () => {
-          signal.throwIfAborted()
-          await deps.azProfiles.signOut(org).catch(() => {
-            throw new Error(MESSAGES.wipeFailed)
-          })
-          return az.login(org, cfg.tenantId, signal)
-        })
-        const { token, expiresAt } = await serial(org, () => {
-          signal.throwIfAborted()
-          return az.getToken(org, cfg.tenantId)
-        })
-        return { header: `Bearer ${token}`, expiresAt }
-      }).catch(() => {})
-      return statusFor(cfg)
     },
 
     async signOut(org) {
@@ -562,6 +616,10 @@ export function createConnections(deps: ConnectionsDeps): Connections {
 
 function unauthorized(message: string): AdoError {
   return new AdoError('unauthorized', 401, message)
+}
+
+function unknownMethod(method: never): never {
+  throw new Error(MESSAGES.unknownMethod)
 }
 
 function mismatchOf(account: PinnedAccount, pinned: PinnedAccount): Transient {
