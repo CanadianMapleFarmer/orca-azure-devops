@@ -176,7 +176,8 @@ function pullRequestLinks(org: string, relations: Relations, chips: PrChip[]): L
       const ref = parsePrRef(link.url)
       if (!ref) return { kind: 'pr', title: 'Pull request', url: link.url }
       const state = states.get(ref.prId)
-      return { kind: 'pr', title: `Pull request ${ref.prId}${state ? ` (${state})` : ''}`, url: pullRequestWebUrl(org, ref) }
+      const title = `Pull request ${ref.prId}${state ? ` (${state})` : ''}`
+      return { kind: 'pr', title, url: pullRequestWebUrl(org, ref.projectId, ref.repoId, ref.prId) }
     })
 }
 

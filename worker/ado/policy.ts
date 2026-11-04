@@ -75,6 +75,7 @@ function policyStateFor(status: string): PolicyState {
     case 'approved':
       return 'approved'
     case 'rejected':
+    case 'broken':
       return 'rejected'
     default:
       return 'none'

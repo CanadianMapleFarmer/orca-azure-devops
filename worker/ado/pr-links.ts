@@ -55,7 +55,7 @@ async function fetchChip(http: AdoHttp, org: string, ref: PrRef): Promise<PrChip
     target: branchName(expectText(pullRequest.targetRefName)),
     state,
     build: buildStateOf(evaluations),
-    url: pullRequestUrl(pullRequest, org, ref)
+    url: pullRequestUrl(org, pullRequest.repository?.webUrl, ref.projectId, ref.repoId, ref.prId)
   }))
 }
 
@@ -69,13 +69,20 @@ async function fetchPullRequest(http: AdoHttp, org: string, ref: PrRef): Promise
   }
 }
 
-function pullRequestUrl(pullRequest: RawPullRequest, org: string, ref: PrRef): string {
-  const webUrl = pullRequest.repository?.webUrl
-  return typeof webUrl === 'string' && webUrl !== '' ? `${webUrl}/pullrequest/${ref.prId}` : pullRequestWebUrl(org, ref)
+export function pullRequestUrl(
+  org: string,
+  webUrl: string | undefined,
+  projectIdOrName: string,
+  repoIdOrName: string,
+  prId: number
+): string {
+  return typeof webUrl === 'string' && webUrl !== ''
+    ? `${webUrl}/pullrequest/${prId}`
+    : pullRequestWebUrl(org, projectIdOrName, repoIdOrName, prId)
 }
 
-export function pullRequestWebUrl(org: string, ref: PrRef): string {
-  return `${orgWebUrl(org)}/${encodeURIComponent(ref.projectId)}/_git/${encodeURIComponent(ref.repoId)}/pullrequest/${ref.prId}`
+export function pullRequestWebUrl(org: string, projectIdOrName: string, repoIdOrName: string, prId: number): string {
+  return `${orgWebUrl(org)}/${encodeURIComponent(projectIdOrName)}/_git/${encodeURIComponent(repoIdOrName)}/pullrequest/${prId}`
 }
 
 export function branchName(ref: string): string {

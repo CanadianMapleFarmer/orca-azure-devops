@@ -3,7 +3,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import { MALFORMED } from '../messages'
 import { byName, listProjects, type NamedItem } from './core'
 import { AdoError, type AdoHttp } from './http'
-import { branchName, pullRequestWebUrl } from './pr-links'
+import { branchName, pullRequestUrl } from './pr-links'
 import { expectList, expectText, malformed, shaped } from './shape'
 import { textOr, timestamp } from './workitems'
 
@@ -125,7 +125,7 @@ export function toPrSummary(raw: RawPullRequest, org: string): PrSummary {
       repoName,
       prId,
       title: expectText(raw.title),
-      url: urlOf(repository.webUrl, org, projectName, repoName, prId),
+      url: pullRequestUrl(org, repository.webUrl, projectName, repoName, prId),
       source: branchName(expectText(raw.sourceRefName)),
       target: branchName(expectText(raw.targetRefName)),
       status: statusOf(expectText(raw.status)),
@@ -155,12 +155,6 @@ function workItemId(id: unknown): number[] {
 function expectPrId(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError('expected a pull request id')
   return value
-}
-
-function urlOf(webUrl: string | undefined, org: string, projectName: string, repoName: string, prId: number): string {
-  return typeof webUrl === 'string' && webUrl !== ''
-    ? `${webUrl}/pullrequest/${prId}`
-    : pullRequestWebUrl(org, { projectId: projectName, repoId: repoName, prId })
 }
 
 function statusOf(status: string): PrSummary['status'] {

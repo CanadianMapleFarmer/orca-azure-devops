@@ -65,6 +65,13 @@ test('policyStateOf: rejected wins, then pending, then approved; non-blocking, d
   assert.equal(policyStateOf([evaluation('notApplicable'), evaluation('rejected', { isBlocking: false })]), 'none')
 })
 
+test('policyStateOf counts a broken blocking policy as rejected and ignores a broken non-blocking one', () => {
+  assert.equal(policyStateOf([evaluation('broken')]), 'rejected')
+  assert.equal(policyStateOf([evaluation('approved'), evaluation('broken')]), 'rejected')
+  assert.equal(policyStateOf([evaluation('approved'), evaluation('broken', { isBlocking: false })]), 'approved')
+  assert.equal(policyStateOf([evaluation('approved'), evaluation('broken', { isEnabled: false })]), 'approved')
+})
+
 test('policyStateOf leaves build policies to buildStateOf', () => {
   assert.equal(policyStateOf([build('rejected')]), 'none')
   assert.equal(policyStateOf([build('rejected'), evaluation('approved')]), 'approved')
