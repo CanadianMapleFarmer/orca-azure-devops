@@ -1,0 +1,55 @@
+{
+  "id": "d1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80",
+  "name": "Features",
+  "revision": 3,
+  "columns": [
+    {
+      "id": "59daebfc-cccc-45d6-8ae2-b3c4d5e6f708",
+      "name": "New",
+      "itemLimit": 0,
+      "stateMappings": {
+        "Feature": "New"
+      },
+      "columnType": "incoming"
+    },
+    {
+      "id": "6aebfc0d-dddd-46e7-9bf3-c4d5e6f70819",
+      "name": "Active",
+      "itemLimit": 0,
+      "stateMappings": {
+        "Feature": "Active"
+      },
+      "isSplit": false,
+      "columnType": "inProgress"
+    },
+    {
+      "id": "7bfc0d1e-eeee-47f8-8c04-d5e6f708192a",
+      "name": "Closed",
+      "itemLimit": 0,
+      "stateMappings": {
+        "Feature": "Closed"
+      },
+      "columnType": "outgoing"
+    }
+  ],
+  "rows": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "name": null
+    }
+  ],
+  "isValid": true,
+  "canEdit": true,
+  "fields": {
+    "columnField": {
+      "referenceName": "WEF_8D2E3F4A5B6C4D7E9F0A1B2C3D4E5F60_Kanban.Column"
+    },
+    "rowField": {
+      "referenceName": "WEF_8D2E3F4A5B6C4D7E9F0A1B2C3D4E5F60_Kanban.Lane"
+    },
+    "doneField": {
+      "referenceName": "WEF_8D2E3F4A5B6C4D7E9F0A1B2C3D4E5F60_Kanban.Column.Done"
+    }
+  },
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/boards/d1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80"
+}

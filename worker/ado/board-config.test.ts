@@ -47,8 +47,16 @@ function server(routes: Record<string, unknown> = routesFor(PROJECT, TEAM)) {
   return { http, requested }
 }
 
-function withBacklog(change: Record<string, unknown>): Record<string, unknown> {
-  return { ...routesFor(PROJECT, TEAM), [`https://dev.azure.com/${ORG}/${PROJECT}/${TEAM}/_apis/work/backlogconfiguration`]: { ...fixture('backlog-configuration'), ...change } }
+const WORK = `https://dev.azure.com/${ORG}/${PROJECT}/${TEAM}/_apis/work`
+
+function withRoute(path: string, body: unknown): Record<string, unknown> {
+  return { ...routesFor(PROJECT, TEAM), [`${WORK}/${path}`]: body }
+}
+
+function storiesBoard(mappingFor: (index: number) => Record<string, string>): Record<string, unknown> {
+  const board = fixture('board-stories')
+  const columns = (board.columns as Record<string, unknown>[]).map((column, index) => ({ ...column, stateMappings: mappingFor(index) }))
+  return { ...board, columns }
 }
 
 const ARGS = { org: ORG, projectId: PROJECT, teamId: TEAM }
@@ -74,11 +82,24 @@ test('picks the requirement-level board by default', async () => {
   assert.equal(requested.filter(url => url.includes('/boards/')).length, 1)
 })
 
-test('loads the board named by boardId without listing boards', async () => {
+test('loads the board named by boardId without the backlog configuration or the board list', async () => {
   const { http, requested } = server()
   const config = await loadBoardConfig(http, { ...ARGS, boardId: STORIES_BOARD })
   assert.equal(config.boardId, STORIES_BOARD)
+  assert.equal(requested.some(url => url.includes('/backlogconfiguration')), false)
   assert.equal(requested.some(url => url.endsWith('/_apis/work/boards?api-version=7.1')), false)
+})
+
+test('matches the default board by name exactly before ignoring case', async () => {
+  const boards = { value: [{ id: 'lower', name: 'stories', url: '' }, { id: STORIES_BOARD, name: 'Stories', url: '' }] }
+  const config = await loadBoardConfig(server(withRoute('boards', boards)).http, ARGS)
+  assert.equal(config.boardId, STORIES_BOARD)
+})
+
+test('falls back to a case-insensitive name match for the default board', async () => {
+  const boards = { value: [{ id: 'other', name: 'Epics', url: '' }, { id: STORIES_BOARD, name: 'STORIES', url: '' }] }
+  const config = await loadBoardConfig(server(withRoute('boards', boards)).http, ARGS)
+  assert.equal(config.boardId, STORIES_BOARD)
 })
 
 test('maps columns, split flag, lanes and WEF field names', async () => {
@@ -111,45 +132,44 @@ test('reads the team area paths', async () => {
   ])
 })
 
-test('adds Bug to requirementTypes only when bugs are requirements', async () => {
-  const types = async (bugsBehavior: string) =>
-    (await loadBoardConfig(server(withBacklog({ bugsBehavior })).http, ARGS)).requirementTypes
-  assert.deepEqual(await types('asRequirements'), ['User Story', 'Bug'])
-  assert.deepEqual(await types('asTasks'), ['User Story'])
-  assert.deepEqual(await types('off'), ['User Story'])
-})
-
-test('does not fetch the states of a bug type when bugs are not requirements', async () => {
-  const { http, requested } = server(withBacklog({ bugsBehavior: 'asTasks' }))
-  const config = await loadBoardConfig(http, ARGS)
-  assert.deepEqual(Object.keys(config.doneStates), ['User Story'])
-  assert.equal(requested.some(url => url.includes('/states')), true)
-  assert.equal(requested.some(url => url.includes('/Bug/')), false)
-})
-
-test('uses the bug type the backlog declares', async () => {
-  const routes = withBacklog({
-    bugWorkItems: { name: 'Defects', workItemTypes: [{ name: 'Defect' }] },
-    workItemTypeMappedStates: []
-  })
+test('takes requirementTypes from the board state mappings in first-seen column order', async () => {
+  const mappings: Record<string, string>[] = [{ 'User Story': 'New' }, { Defect: 'Active', 'User Story': 'Active' }]
+  const board = storiesBoard(index => mappings[Math.min(index, 1)])
+  const routes = withRoute(`boards/${STORIES_BOARD}`, board)
   routes[statesRoute(PROJECT, 'Defect')] = fixture('states-bug')
   const config = await loadBoardConfig(server(routes).http, ARGS)
   assert.deepEqual(config.requirementTypes, ['User Story', 'Defect'])
   assert.deepEqual(Object.keys(config.doneStates), ['User Story', 'Defect'])
+  assert.deepEqual(config.doneStates.Defect, ['Closed'])
 })
 
-test('adds no bug type when the process maps none', async () => {
-  const routes = withBacklog({ workItemTypeMappedStates: [{ workItemTypeName: 'User Story', states: { New: 'Proposed' } }] })
-  const config = await loadBoardConfig(server(routes).http, ARGS)
+test('does not fetch the states of a type the board does not map', async () => {
+  const board = storiesBoard(() => ({ 'User Story': 'Active' }))
+  const { http, requested } = server(withRoute(`boards/${STORIES_BOARD}`, board))
+  const config = await loadBoardConfig(http, ARGS)
   assert.deepEqual(config.requirementTypes, ['User Story'])
+  assert.equal(requested.some(url => url.includes('/Bug/')), false)
 })
 
-test('fetches the states of each type once even when a type is listed twice', async () => {
-  const backlog = fixture('backlog-configuration')
-  const routes = withBacklog({
-    requirementBacklog: { ...(backlog.requirementBacklog as object), workItemTypes: [{ name: 'User Story' }, { name: 'Bug' }, { name: 'User Story' }] }
-  })
-  const { http, requested } = server(routes)
+test('a portfolio board chosen by id yields its own types', async () => {
+  const featuresId = 'd1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80'
+  const epics: Record<string, unknown> = { ...fixture('board-features'), id: 'epics', name: 'Epics' }
+  epics.columns = (epics.columns as Record<string, unknown>[]).map(column => ({ ...column, stateMappings: { Epic: 'Active' } }))
+  const routes = routesFor(PROJECT, TEAM)
+  routes[`${WORK}/boards/${featuresId}`] = fixture('board-features')
+  routes[`${WORK}/boards/epics`] = epics
+  routes[statesRoute(PROJECT, 'Feature')] = fixture('states-user-story')
+  routes[statesRoute(PROJECT, 'Epic')] = fixture('states-bug')
+  const features = await loadBoardConfig(server(routes).http, { ...ARGS, boardId: featuresId })
+  assert.equal(features.boardName, 'Features')
+  assert.deepEqual(features.requirementTypes, ['Feature'])
+  assert.deepEqual(features.doneStates, { Feature: ['Closed', 'Removed'] })
+  const epicConfig = await loadBoardConfig(server(routes).http, { ...ARGS, boardId: 'epics' })
+  assert.deepEqual(epicConfig.requirementTypes, ['Epic'])
+})
+
+test('fetches the states of each type once however many columns map it', async () => {
+  const { http, requested } = server()
   const config = await loadBoardConfig(http, ARGS)
   assert.deepEqual(config.requirementTypes, ['User Story', 'Bug'])
   assert.equal(requested.filter(url => url.includes('/User%20Story/states')).length, 1)
@@ -188,9 +208,8 @@ test('a board id that does not exist fails with not_found', async () => {
 })
 
 test('a team with no board for its requirement backlog fails with not_found', async () => {
-  const routes = routesFor(PROJECT, TEAM)
-  routes[`https://dev.azure.com/${ORG}/${PROJECT}/${TEAM}/_apis/work/boards`] = { value: [{ id: 'x', name: 'Epics', url: '' }] }
-  const error = await failure(loadBoardConfig(server(routes).http, ARGS))
+  const boards = { value: [{ id: 'x', name: 'Epics', url: '' }] }
+  const error = await failure(loadBoardConfig(server(withRoute('boards', boards)).http, ARGS))
   assert.equal(error.code, 'not_found')
 })
 
@@ -201,13 +220,35 @@ test('errors from ADO propagate as AdoError', async () => {
   assert.equal(error.code, 'not_found')
 })
 
+test('malformed or empty responses fail with a server error, not a TypeError', async () => {
+  const malformed = {
+    'an empty board': withRoute(`boards/${STORIES_BOARD}`, undefined),
+    'a board without columns': withRoute(`boards/${STORIES_BOARD}`, { ...fixture('board-stories'), columns: undefined }),
+    'a board without fields': withRoute(`boards/${STORIES_BOARD}`, { ...fixture('board-stories'), fields: undefined }),
+    'a board field without a reference name': withRoute(`boards/${STORIES_BOARD}`, { ...fixture('board-stories'), fields: { columnField: {}, rowField: {}, doneField: {} } }),
+    'an empty backlog configuration': withRoute('backlogconfiguration', undefined),
+    'a board list without values': withRoute('boards', {}),
+    'empty team field values': withRoute('teamsettings/teamfieldvalues', undefined),
+    'states without values': { ...routesFor(PROJECT, TEAM), [statesRoute(PROJECT, 'Bug')]: {} }
+  }
+  for (const [label, routes] of Object.entries(malformed)) {
+    const error = await failure(loadBoardConfig(server(routes).http, ARGS))
+    assert.deepEqual([error.code, error.status, error.message], ['server', 200, 'Azure DevOps returned an unexpected board configuration.'], label)
+  }
+})
+
 test('listTeamBoards returns the id and name of each board', async () => {
   const { http, requested } = server()
   const boards = await listTeamBoards(http, ARGS)
-  assert.deepEqual(boards.map(board => board.name), ['Epics', 'Features', 'Stories'])
-  assert.deepEqual(Object.keys(boards[2]).sort(), ['id', 'name'])
-  assert.equal(boards[2].id, STORIES_BOARD)
-  assert.deepEqual(requested, [`https://dev.azure.com/${ORG}/${PROJECT}/${TEAM}/_apis/work/boards?api-version=7.1`])
+  assert.deepEqual(boards.map(board => board.name), ['Epics', 'Stories', 'Features'])
+  assert.deepEqual(Object.keys(boards[1]).sort(), ['id', 'name'])
+  assert.equal(boards[1].id, STORIES_BOARD)
+  assert.deepEqual(requested, [`${WORK}/boards?api-version=7.1`])
+})
+
+test('listTeamBoards rejects an empty response with a server error', async () => {
+  const error = await failure(listTeamBoards(server(withRoute('boards', undefined)).http, ARGS))
+  assert.equal(error.code, 'server')
 })
 
 function config(boardId: string): BoardConfig {

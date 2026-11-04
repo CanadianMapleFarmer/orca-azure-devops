@@ -8,16 +8,8 @@ export interface BoardArgs {
   boardId?: string
 }
 
-interface BacklogLevel {
-  name: string
-  workItemTypes?: { name: string }[]
-}
-
 interface BacklogConfiguration {
-  requirementBacklog: BacklogLevel
-  bugsBehavior: 'asRequirements' | 'asTasks' | 'off'
-  bugWorkItems?: BacklogLevel
-  workItemTypeMappedStates?: { workItemTypeName: string }[]
+  requirementBacklog: { name: string }
 }
 
 interface RawColumn {
@@ -49,9 +41,9 @@ interface TypeState {
   category: string
 }
 
-const BUG_TYPE = 'Bug'
 const DONE_CATEGORIES = new Set(['Completed', 'Removed'])
 const DEFAULT_TTL_MS = 60 * 60 * 1000
+const MALFORMED_MESSAGE = 'Azure DevOps returned an unexpected board configuration.'
 
 export function boardConfigKey({ org, projectId, teamId, boardId }: BoardArgs): string {
   return `${org}/${projectId}/${teamId}/${boardId ?? 'default'}`
@@ -61,48 +53,44 @@ export async function listTeamBoards(
   http: AdoHttp,
   args: { org: string; projectId: string; teamId: string }
 ): Promise<{ id: string; name: string }[]> {
-  const { value } = await teamGet<{ value: { id: string; name: string }[] }>(http, args, 'boards')
-  return value.map(({ id, name }) => ({ id, name }))
+  const data = await teamGet<{ value: { id: string; name: string }[] }>(http, args, 'boards')
+  return shape(() => data.value.map(({ id, name }) => ({ id: text(id), name: text(name) })))
 }
 
 export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<BoardConfig> {
-  const backlogRequest = teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration')
-  const [backlog, areas, board] = await Promise.all([
-    backlogRequest,
-    teamGet<TeamFieldValues>(http, args, 'teamsettings/teamfieldvalues'),
-    args.boardId ? fetchBoard(http, args, args.boardId) : fetchRequirementBoard(http, args, backlogRequest)
+  const [board, areas] = await Promise.all([
+    args.boardId ? fetchBoard(http, args, args.boardId) : fetchRequirementBoard(http, args),
+    teamGet<TeamFieldValues>(http, args, 'teamsettings/teamfieldvalues')
   ])
-  const requirementTypes = requirementTypeNames(backlog)
-  const states = await Promise.all(requirementTypes.map(type => fetchTypeStates(http, args, type)))
-  return {
+  const requirementTypes = shape(() => requirementTypeNames(board))
+  const doneLists = await Promise.all(requirementTypes.map(type => fetchDoneStates(http, args, type)))
+  return shape(() => ({
     org: args.org,
     projectId: args.projectId,
     teamId: args.teamId,
-    boardId: board.id,
-    boardName: board.name,
+    boardId: text(board.id),
+    boardName: text(board.name),
     requirementTypes,
     columns: board.columns.map(toColumn),
-    lanes: board.rows.map(row => ({ id: row.id, name: row.name ?? '' })),
+    lanes: board.rows.map(row => ({ id: text(row.id), name: text(row.name ?? '') })),
     fields: {
-      column: board.fields.columnField.referenceName,
-      columnDone: board.fields.doneField.referenceName,
-      lane: board.fields.rowField.referenceName
+      column: text(board.fields.columnField.referenceName),
+      columnDone: text(board.fields.doneField.referenceName),
+      lane: text(board.fields.rowField.referenceName)
     },
-    areaPaths: areas.values.map(({ value, includeChildren }) => ({ value, includeChildren })),
-    doneStates: Object.fromEntries(
-      requirementTypes.map((type, index) => [type, states[index].filter(isDone).map(state => state.name)])
-    )
-  }
+    areaPaths: areas.values.map(({ value, includeChildren }) => ({ value: text(value), includeChildren: includeChildren === true })),
+    doneStates: Object.fromEntries(requirementTypes.map((type, index) => [type, doneLists[index]]))
+  }))
 }
 
-async function fetchRequirementBoard(
-  http: AdoHttp,
-  args: BoardArgs,
-  backlogRequest: Promise<BacklogConfiguration>
-): Promise<RawBoard> {
-  const [boards, backlog] = await Promise.all([listTeamBoards(http, args), backlogRequest])
-  const name = backlog.requirementBacklog.name
-  const match = boards.find(board => board.name === name)
+async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<RawBoard> {
+  const [backlog, boards] = await Promise.all([
+    teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration'),
+    listTeamBoards(http, args)
+  ])
+  const name = shape(() => text(backlog.requirementBacklog.name))
+  const lowerName = name.toLowerCase()
+  const match = boards.find(board => board.name === name) ?? boards.find(board => board.name.toLowerCase() === lowerName)
   if (!match) throw new AdoError('not_found', 404, `The team has no board named "${name}".`)
   return fetchBoard(http, args, match.id)
 }
@@ -120,40 +108,40 @@ async function teamGet<T>(http: AdoHttp, args: BoardArgs, resource: string): Pro
   return data
 }
 
-async function fetchTypeStates(http: AdoHttp, args: BoardArgs, type: string): Promise<TypeState[]> {
+async function fetchDoneStates(http: AdoHttp, args: BoardArgs, type: string): Promise<string[]> {
   const { data } = await http.json<{ value: TypeState[] }>({
     org: args.org,
     project: args.projectId,
     path: `/_apis/wit/workitemtypes/${encodeURIComponent(type)}/states`
   })
-  return data.value
+  return shape(() => data.value.filter(state => DONE_CATEGORIES.has(state.category)).map(state => text(state.name)))
 }
 
-function requirementTypeNames(backlog: BacklogConfiguration): string[] {
-  const names = (backlog.requirementBacklog.workItemTypes ?? []).map(type => type.name)
-  if (backlog.bugsBehavior === 'asRequirements') names.push(...bugTypeNames(backlog))
-  return [...new Set(names)]
-}
-
-function bugTypeNames(backlog: BacklogConfiguration): string[] {
-  const declared = (backlog.bugWorkItems?.workItemTypes ?? []).map(type => type.name)
-  if (declared.length > 0) return declared
-  const mapped = backlog.workItemTypeMappedStates
-  return !mapped || mapped.some(entry => entry.workItemTypeName === BUG_TYPE) ? [BUG_TYPE] : []
+function requirementTypeNames(board: RawBoard): string[] {
+  return [...new Set(board.columns.flatMap(column => Object.keys(column.stateMappings ?? {})))]
 }
 
 function toColumn(column: RawColumn): BoardColumn {
   return {
-    id: column.id,
-    name: column.name,
+    id: text(column.id),
+    name: text(column.name),
     isSplit: column.isSplit === true,
     columnType: column.columnType,
     stateMappings: column.stateMappings ?? {}
   }
 }
 
-function isDone(state: TypeState): boolean {
-  return DONE_CATEGORIES.has(state.category)
+function text(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('expected text')
+  return value
+}
+
+function shape<T>(build: () => T): T {
+  try {
+    return build()
+  } catch {
+    throw new AdoError('server', 200, MALFORMED_MESSAGE)
+  }
 }
 
 export interface BoardConfigCache {

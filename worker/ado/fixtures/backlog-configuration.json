@@ -41,11 +41,11 @@
   "isBugsBehaviorConfigured": true,
   "hiddenBacklogs": [],
   "workItemTypeMappedStates": [
-    { "workItemTypeName": "Bug", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
-    { "workItemTypeName": "Epic", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
-    { "workItemTypeName": "Feature", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
-    { "workItemTypeName": "Task", "states": { "New": "Proposed", "Active": "InProgress", "Closed": "Complete" } },
-    { "workItemTypeName": "User Story", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } }
+    { "workItemTypeName": "Bug", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Completed" } },
+    { "workItemTypeName": "Epic", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Completed" } },
+    { "workItemTypeName": "Feature", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Completed" } },
+    { "workItemTypeName": "Task", "states": { "New": "Proposed", "Active": "InProgress", "Closed": "Completed" } },
+    { "workItemTypeName": "User Story", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Completed" } }
   ],
   "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/backlogconfiguration"
 }
