@@ -9,7 +9,7 @@
 - **Sidebar panel** (`src/panel/panel.tsx`, `"ui": "components"`): talks to the worker only through `plugin.request` handlers and `orgs.changed` posts, declared once in `src/protocol.ts`.
 
 **Tech Stack:**
-- TypeScript, loaded build-less by Orca (`engines.orca >=1.4.247`).
+- TypeScript, loaded build-less by Orca (`engines.orca >=1.4.248`).
 - Orca components runtime and `orca/testing` (node:test), run with `orca plugin test`.
 - Azure CLI (`az`) as a subprocess.
 - Node 24 global `fetch`.
@@ -22,11 +22,12 @@
 **Manifest and versions**
 - `orca-plugin.json`:
   - `manifestVersion: 2`, `execution: "trusted-worker"`.
-  - `id: "azure-devops"`, `name: "Azure DevOps"`, `engines.orca: ">=1.4.247"`, `pluginApi: 1`.
+  - `id: "azure-devops"`, `name: "Azure DevOps"`, `engines.orca: ">=1.4.248"`, `pluginApi: 1`.
   - No `publisher` field.
-- Never use a field, capability or host method marked "Since 1.4.248" (hooks, statusBarItems, `workspace:write`, `agent:launch`, `terminal:read`, `customEditors[].frame`, `editor.open`). Feature-detect with `host.has` when unsure.
+- Orca 1.4.248 features are allowed. Anything newer is feature-detected with `host.has` / `ui.has`.
+- The status bar item keeps the worker running while the plugin is enabled, so the worker must stay idle-cheap: no busy loops, and timers only through the polling scheduler (later plans).
 
-**Capabilities in this plan:** `storage:own`, `secrets:own`, `settings:own` only. Later plans add what they use (`workspace:read`, `notifications:show`, `terminal:send`), and only capabilities that exist on 1.4.247. Each addition re-prompts the user's approval, which is intended.
+**Capabilities in this plan:** `storage:own`, `secrets:own`, `settings:own` only. Later plans add what they use (`workspace:read`, `notifications:show`, `terminal:send`), and only capabilities that exist on 1.4.248. Each addition re-prompts the user's approval, which is intended.
 
 **Safety rules**
 - Never approve the plugin on the user's behalf. When Orca exits `3` (`approval_required`), show the user `error.data` and the exact `--approve` command, and stop until they say so.
@@ -87,6 +88,7 @@
 | `worker/auth/pat.ts` | PAT provider |
 | `worker/sys/run.ts`, `worker/sys/find-executable.ts` | Subprocess runner and executable lookup |
 | `worker/connections.ts` | Org registry, sign-in orchestration, pinning, auth headers, status posts |
+| `worker/status-bar.ts` | Pure mapping from org statuses to the status bar item, plus the `status` command text |
 | `src/panel/panel.tsx`, `src/panel/state.ts`, `src/panel/setup.tsx`, `src/panel/org-settings.tsx`, `src/panel/panel.check.ts` | Sidebar hub |
 
 Tests sit beside their files as `*.test.ts(x)`.
@@ -155,6 +157,7 @@ declare module 'orca' {
   - `main: "worker/main.ts"`.
   - One panel `{ "id": "ado", "title": "Azure DevOps", "icon": "cloud", "entry": "src/panel/panel.tsx", "ui": "components" }`.
   - The three capabilities from Global Constraints.
+  - `contributes.statusBarItems: [{ "id": "status", "text": "ADO", "icon": "cloud", "tooltip": "Azure DevOps", "command": "status" }]` and `contributes.commands: [{ "id": "status", "title": "Azure DevOps: Connection status" }]`.
   - One setting `{ "key": "azPath", "title": "Azure CLI path", "description": "Leave empty to find az automatically.", "type": "string", "default": "", "placeholder": "/opt/homebrew/bin/az" }`.
   - `repository` set to `https://github.com/CanadianMapleFarmer/orca-azure-devops`, `license` set to `"MIT"`.
 - [ ] **Step 3: Write the failing smoke test.**
@@ -414,7 +417,6 @@ export function createConnections(deps: {
   2. Post, then return.
   3. In the background: `login` → `getToken` → `connectionData` → `accountFromConnectionData`.
   4. Pin the account, set `connected`, and post.
-  5. While waiting, post the unchanged list every 60 s so Orca doesn't reap the worker.
 - `connect` with `pat`: the same, but synchronous apart from network calls.
 - An invalid input or anonymous identity sets `error` with a plain message. Messages never include tokens.
 - Pin mismatch: when a later token's identity differs from `pinned` (by `adoId`), the state becomes `mismatch` with the message `Signed in as <new uniqueName>, but this org is pinned to <pinned uniqueName>.` The service stops issuing requests (`authHeader` throws `AdoError('unauthorized', …)`).
@@ -428,14 +430,21 @@ export function createConnections(deps: {
   - `activate resets orgs left signing-in` (**Review Focus 5**): a persisted transient `signing-in` → after `resetInterrupted()` the state is `disconnected` with the message `Sign-in was interrupted. Try again.`
   - `signOut forgets credentials but keeps settings`: the profile or PAT is removed, `pinned` becomes null, and `boards` and `codeProjects` are kept.
   - `no secrets in posts or logs`: across all tests, `JSON.stringify(posts)` never contains the fake PAT or token.
+  - `statusBarFor` (in `worker/status-bar.ts`, signature `statusBarFor(orgs: OrgStatus[]): { text: string; tone: 'neutral' | 'success' | 'warning' | 'danger'; tooltip: string }`):
+    - `[]` → `{ text: 'ADO', tone: 'neutral', tooltip: 'Azure DevOps: not connected' }`.
+    - All connected → tone `success`, tooltip `Azure DevOps: contoso (ada@contoso.com)`.
+    - Any `expired` → `warning`; any `mismatch` or `error` → `danger`, with the tooltip naming the org and its message.
+  - `statusText(orgs)` returns one line per org (`contoso — connected as ada@contoso.com`), or `Not connected. Open the Azure DevOps panel to connect.`
 - [ ] **Step 2: Run.** Expected: FAIL.
-- [ ] **Step 3: Implement `createConnections`.**
+- [ ] **Step 3: Implement `createConnections`, `statusBarFor` and `statusText`.**
 - [ ] **Step 4: Wire it in `worker/main.ts`.**
   - Ports:
     - `orca.storage` / `orca.secrets`.
     - `fetch: globalThis.fetch`.
     - `az`: `findExecutable('az', { override: await orca.settings.get('azPath'), pathEnv: process.env.PATH })`, or null.
-    - `post: (orgs) => orca.panels.post('orgs.changed', { orgs })`.
+    - `post: (orgs) => { orca.panels.post('orgs.changed', { orgs }); void orca.host.call('statusBar.update', { id: 'status', ...statusBarFor(orgs) }) }`.
+  - Register the `status` command with `orca.commands.register('status', async () => statusText(await connections.list()))`.
+  - Push the initial status bar state during activate.
   - Call `resetInterrupted()` during activate.
   - Register `orgs.list`, `orgs.connect`, `orgs.signOut` and `orgs.remove`.
   - When `az` is null and the method is `azure-cli`, `connect` returns `error` with "Azure CLI not found. Install it, or set its path in Settings → Azure DevOps."
@@ -523,19 +532,26 @@ export function listTeams(http: AdoHttp, org: string, projectId: string): Promis
   - `npx tsc -p .` → exit 0.
 - [ ] **Step 6: Commit** "Add the sidebar hub with setup and org settings".
 
-### Task 10: Live verification with the user
+### Task 10: Verification with mocks, then a live load with the user
 
-No new code unless a check fails. Each failure goes back to the owning task as a failing test first.
+The user's ADO test project doesn't exist yet. Everything here runs against mocks, except Step 4, which needs the user present.
 
-- [ ] **Step 1: Load the plugin.** `orca plugin validate . --json` (exit 0). Then run `orca plugin inspect . --json` and show the user what the plugin asks for.
-- [ ] **Step 2: Start the dev watch.** In a background terminal: `orca plugin dev watch . --check --shot .orca/shots --json`. On exit `3`, show the user the approval list and command, and wait for them to approve or tell you to.
-- [ ] **Step 3: Sandbox org via Azure CLI.** With the user, connect their **sandbox** org. Confirm:
-  - (a) The browser shows Microsoft's account picker.
-  - (b) Afterwards, `ls -ld ~/.orca-azure-devops/az/<org>` shows `drwx------`.
-  - (c) The terminal's own `az account show` is unchanged.
-  - (d) The panel shows "signed in as <account>".
+- [ ] **Step 1: Run the full offline suite.**
+  - `orca plugin validate . --json` → exit 0.
+  - `npx tsc -p .` → exit 0.
+  - `orca plugin test . --json` → `ok: true`.
+  - `orca plugin check . --json` → exit 0.
+- [ ] **Step 2: Check the scenario shots.** For each `panel.check.ts` scenario (`empty`, `signing-in`, `connected`, `mismatch`), save a PNG in both themes at width 360 with `orca plugin shot . --scenario <name> --theme <t> --width 360 --json`. This needs Orca's window hidden or minimised; if it isn't, record that and skip. Read the PNGs and fix layout issues as failing tests first.
+- [ ] **Step 3: Write the README "Development" section.** Cover the test, check and dev-watch commands, and how to connect an org.
+- [ ] **Step 4: Live load (user present).**
+  1. Run `orca plugin dev load . --json`. On exit 3, show the user `error.data` and the `--approve` command, and wait.
+  2. Once approved, confirm the status bar shows "ADO".
+  3. Connect the **client org via Azure CLI, read-only**, and confirm:
+     - (a) The browser shows Microsoft's account picker.
+     - (b) `ls -ld ~/.orca-azure-devops/az/<org>` shows `drwx------`.
+     - (c) The terminal's own `az account show` is unchanged.
+     - (d) The panel shows "signed in as …".
+     - (e) The boards project and team pickers list real projects.
 
-  If (a) fails, note it and decide with the user before continuing; the spec requires a forced picker.
-- [ ] **Step 4: Client org, read-only.** Connect the client org via Azure CLI and only open org settings (read-only calls). Confirm the boards project and team pickers list real projects.
-- [ ] **Step 5: Check the shots.** Read the PNG shots of the hub in both themes at `--width 360`, and fix layout issues.
-- [ ] **Step 6: Commit any fixes.** Then summarise for the user: what works, which spikes were settled (`az` on PATH, account picker, tenant header), and anything that changes Plan 2.
+  If (a) fails, stop and decide with the user.
+- [ ] **Step 5: Commit any fixes and report.** Report the spikes settled (`az` on PATH, account picker, tenant header) and anything that changes Plan 2.

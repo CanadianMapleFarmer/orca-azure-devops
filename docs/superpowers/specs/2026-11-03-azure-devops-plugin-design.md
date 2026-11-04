@@ -59,20 +59,23 @@ The author's day, which v1 must make smooth (names are examples, not constants):
 
 All of these are verified in the research notes unless marked otherwise.
 
-### 4.1 Orca platform (installed and latest: 1.4.247)
-- **Version gate.** Orca refuses to load a plugin whose `engines.orca` is above its own version. These need **≥1.4.248**: hooks (incl. agent prompt/launch hooks and keep-warm), status bar items, `workspace:write` (`editor.open`, `workspace.open`, `commands.run`), `agent.launch`, `terminal.read`, `customEditors[].frame`. v1 targets `>=1.4.247` and feature-detects (`host.has`, `ui.has`) so the same build lights up later features.
+### 4.1 Orca platform (installed and latest: 1.4.248, released 2026-11-04)
+- **Version floor.** The plugin targets `engines.orca >=1.4.248`. That unlocks hooks, status bar items, `workspace:write` (`editor.open`, `workspace.open`, `commands.run`), `agent:launch`, `terminal:read` and `customEditors[].frame`. Feature-detect anything newer with `host.has` / `ui.has`.
+- **Always-on worker.** A plugin with `main` and `contributes.statusBarItems` has its worker started when it is enabled and kept running while it stays enabled. Background polling and notifications therefore work whenever Orca is open.
+- **Still impossible on 1.4.248:**
+  - **Creating a workspace.** No host API creates a worktree or workspace, so it stays one visible step: Orca's own new-workspace flow (named through the `workspace.create.before` hook) or a command the user can see in an Orca terminal.
+  - **Virtual tabs.** Full tabs still need a backing file inside a workspace (`editor.open({ workspaceId, path })`).
 - **Plugin shape.** A `trusted-worker` plugin. The `main` is a Node 24 child process with no sandbox and no network allowlist. Panels and custom editors are sandboxed frames with **no network**, so every ADO, Microsoft or webhook call goes through the worker.
 - **Messaging limits.**
   - Panel→worker `plugin.request`: answers ≤1 MiB, timeout 30 s default (120 s max).
   - Worker→panels `panels.post`: ≤256 KiB, 200 per 10 s.
   - Frame→host messages: ≤64 KiB, 120 per 10 s. Chunk large saves.
 - **Worker lifetime.**
-  - Started lazily, and `activate` must be ready within 10 s.
-  - Reaped after 5 min without host activity.
+  - Started at enable time and kept running, because the plugin declares a status bar item; otherwise it would start lazily.
+  - `activate` must be ready within 10 s.
   - Commands time out after 30 s.
   - Up to 3 crash restarts.
   - Long work such as sign-in must start, return immediately, and report back via `panels.post`.
-  - Background polling is guaranteed only while the worker is alive.
 - **Storage.**
   - `orca.secrets`: Electron safeStorage with a Keychain-backed key. Strings ≤64 KiB each, 1,024 keys.
   - `orca.storage`: JSON, ≤256 KiB per value. A file over 5 MiB silently reads back as `{}`, so it is not a cache.
@@ -80,7 +83,7 @@ All of these are verified in the research notes unless marked otherwise.
 - **Worker environment.** The environment is a whitelist. `HTTPS_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS` are stripped, so proxies and custom CAs must be handled in code.
 - **UI surfaces.**
   - Sidebar panels live only in the right sidebar, 220 px to nearly the full window wide.
-  - A full editor tab is only possible as a custom editor bound to a file with the plugin's suffix. On 1.4.247 that means an untitled file from `contributes.newFiles` or a real file. There are no virtual documents.
+  - A full editor tab is only possible as a custom editor bound to a real file with the plugin's suffix, opened with `editor.open` or from `contributes.newFiles`. There are no virtual documents.
   - No API focuses a plugin panel.
 - **Components panels.**
   - Available: lists, tables, trees, tabs, cards, badges, Markdown, CodeView (incl. `diff`/`log` grammars), forms and RelativeTime.
@@ -124,8 +127,9 @@ All of these are verified in the research notes unless marked otherwise.
 
 ### 5.1 Overall shape
 - **One plugin** with a **sidebar panel** (native components) of four tabs: **Work · Pipelines · PRs · Wiki**. It is the hub for lists, status and quick actions.
-- **Full-width tabs** for the three rich views: the **team board**, the **live pipeline run** and **wiki editing**. On 1.4.247 these are custom editors, opened via `contributes.newFiles` entries or plugin-managed files. When 1.4.248 ships they open directly with `editor.open`.
-- **v1 on 1.4.247 now.** A follow-up enriches it once 1.4.248 ships: status-bar badges for build and PR state, a keep-warm hook, work-item context fed to agents, and clean tab opening.
+- **Full-width tabs** for the three rich views: the **team board**, the **live pipeline run** and **wiki editing**. They are custom editors (isolated frames) opened in one click with `editor.open`, backed by small plugin-managed files whose location is the Boards plan's first spike.
+- **Status bar item** (always-on worker). It shows the connection state and the counts that need the user: failed runs, approvals waiting, PRs to review. Its tone follows the worst of those.
+- **Everything in v1 targets Orca 1.4.248.** There is no separate enrichment release.
 
 ### 5.2 Boards
 - **Sidebar "My work" list** (default: assigned to me, current sprint/iteration where the team uses one):
@@ -156,7 +160,8 @@ All of these are verified in the research notes unless marked otherwise.
 - **Prod approvals:** show the waiting environment check, who can approve and how long it has waited.
   - **Share for approval** offers message an approver in Teams, post to the team channel, email the approvers, or copy the link.
   - If the user *is* an approver, **Approve/Reject** with an optional comment.
-- **Desktop notifications** (`notifications.show`): when a run the user cares about fails, finishes, or starts waiting for approval.
+- **Desktop notifications** (`notifications.show`): when a run the user cares about fails, finishes, or starts waiting for approval. They fire whenever Orca is open, thanks to the always-on worker.
+- **Open the failing file.** When an error points at a file in a workspace's repo, "Open in Orca" opens it with `editor.open`. There is no line argument; the line is shown alongside.
 
 ### 5.4 PRs and sharing
 - **"Release set" grouping in the PRs tab.** The user's PRs that belong together are shown as one group, one row per target branch. Each row shows the PR number, build/policy status, reviewer votes and auto-complete state.
@@ -211,9 +216,14 @@ All of these are verified in the research notes unless marked otherwise.
 
 ### 5.7 Connecting to Orca's workspaces
 - **Stay inside Orca's permission model (decided by the user).** The plugin never runs the `orca` CLI in the background. That route is undocumented and bypasses Orca's approval prompts, and a public plugin has to be trustworthy.
+- **Start an agent on this work item.** Launches the chosen agent (`agent.launch`) in the item's workspace with a prompt built from the item: title, description, acceptance criteria and link.
+- **Work-item context for agents (opt-in setting, off by default).** The `agent.prompt.before` hook prefixes prompts that Orca submits to agents in a workspace linked to a work item with a short context line: id, title, link.
+- **Branch naming through hooks.** When the user creates a workspace for an item, `workspace.create.before` sets the branch from the template and `workspace.create.after` records the item↔workspace link.
 - **Start a workspace from this work item.** Creates an Orca worktree on a branch named from the item, using a template with sensible default (e.g. `feature/<id>-<slug>`). It records the item↔workspace link in plugin storage. "Check out PR in Orca" works the same way for a PR's source branch.
 - **PR URLs are attached to workspaces as Orca references,** which Orca accepts natively.
-- **How these actions run on 1.4.247.** The plugin hands the user a **visible command**: text sent to an Orca terminal in the focused workspace via `terminal:send`, which the user can see and confirm. Where that isn't possible, it shows **one manual step** to copy or follow. Opening full-width tabs on 1.4.247 is likewise a visible step (the "+" new-file entry). With 1.4.248, all of these become one-click through the official APIs (`workspace:write`, `editor.open`, `agent.launch`).
+- **How these actions run.**
+  - **Opening workspaces, files and tabs, and launching agents:** one click through the official APIs (`workspace:write`, `editor.open`, `agent.launch`).
+  - **Creating a workspace or worktree:** no official API exists, so the plugin hands the user one **visible step**. Either Orca's own new-workspace flow, with the branch named by the hook, or a command sent to an Orca terminal (`terminal.create` / `terminal.sendText` without Enter) that the user confirms. `terminal:read` lets the plugin check the result.
 - **Branch→PR mapping for the focused workspace.** Match `workspace.list` to the read context, run local `git remote get-url`, then query ADO by `sourceRefName`. This drives context-aware views ("this workspace's item and PRs").
 
 ### 5.8 Settings (in Orca's Settings, via `contributes.settings`, plus in-panel setup)
@@ -246,12 +256,12 @@ All of these are verified in the research notes unless marked otherwise.
 - **Release-set grouping:** PRs with the same source branch, or sharing a linked work item, form one set.
 - **Polling cadence:** fast (a few seconds) for what is visible and running, slower for the rest, paused when no panel or tab is visible. The exception is runs the user explicitly *watches*, which keep polling until they finish. Always within ADO's rate-limit headers.
 - **Which board.** "My work" and the full board use a team's **Kanban board for one backlog level**: by default the requirement level (Stories / PBIs / Requirements, whatever the process calls it), for the default team chosen per org. Assigned items that aren't on that board (e.g. Tasks) appear in an "Other" group by State and are moved by State. The sprint **Taskboard is out of v1**. Other teams' boards can be picked in the full-tab board.
-- **Notifications on 1.4.247** fire while the worker is alive: while a plugin panel or tab is open, and for runs the user explicitly *watches* until they finish. The watch's polling keeps the worker active through normal host calls, with no other keep-alive tricks. Always-on background notifications come with the 1.4.248 keep-warm hook.
+- **Notifications and polling are always on** while the plugin is enabled. The status bar item keeps the worker running. Background polling is slow (minutes) and only fast for what is visible or *watched*.
 - **PR chips on work-item cards:** an open PR shows its validation build and policy status; a merged PR shows ✓. Post-merge pipeline and deploy status, including "waiting for approval", is shown on demand in the work item's detail view, not on every card. This keeps the sidebar cheap.
 - **Notification set:** failure, completion of a watched run, approval waiting, review requested, new comment on my PR.
 - **Default branch template** `feature/<id>-<slug>`.
 - **PR code review** uses Orca's native diff on a checked-out worktree for depth; the in-panel diff is read-only.
-- **Wiki editing on 1.4.247** happens in the plugin's own full-tab editor (Markdown source and preview, Publish), not on a file in the user's repo. Publish and conflict handling run in the worker. If the untitled-tab spike shows save prompts or lost tabs, fall back to a dedicated Orca folder project that holds wiki working copies. Once 1.4.248 ships, revisit editing in Orca's native Markdown editor.
+- **Wiki editing** happens in the plugin's own full-tab editor (Markdown source and preview, Publish), not on a file in the user's repo. Publish and conflict handling run in the worker. The backing-file location follows the Boards plan's spike.
 - **Horizontal swimlanes start collapsed** on the full board.
 - **The plugin id** must not start with `orca-`. Something like `azure-devops`, with display name "Azure DevOps", is the builder's choice.
 
