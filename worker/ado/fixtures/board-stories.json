@@ -1,0 +1,62 @@
+{
+  "id": "e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091",
+  "name": "Stories",
+  "revision": 7,
+  "columns": [
+    {
+      "id": "f3d4e5f6-6666-4f70-8a8c-5d6e7f8091a2",
+      "name": "New",
+      "itemLimit": 0,
+      "stateMappings": { "User Story": "New", "Bug": "New" },
+      "columnType": "incoming"
+    },
+    {
+      "id": "04e5f6a7-7777-4081-9b9d-6e7f8091a2b3",
+      "name": "Active",
+      "itemLimit": 5,
+      "stateMappings": { "User Story": "Active", "Bug": "Active" },
+      "isSplit": false,
+      "columnType": "inProgress"
+    },
+    {
+      "id": "15f6a7b8-8888-4192-8cae-7f8091a2b3c4",
+      "name": "In Review",
+      "itemLimit": 3,
+      "stateMappings": { "User Story": "Active", "Bug": "Active" },
+      "isSplit": true,
+      "columnType": "inProgress"
+    },
+    {
+      "id": "26a7b8c9-9999-42a3-9dbf-8091a2b3c4d5",
+      "name": "Resolved",
+      "itemLimit": 0,
+      "stateMappings": { "User Story": "Resolved", "Bug": "Resolved" },
+      "isSplit": false,
+      "columnType": "inProgress"
+    },
+    {
+      "id": "37b8c9da-aaaa-43b4-8ec0-91a2b3c4d5e6",
+      "name": "Closed",
+      "itemLimit": 0,
+      "stateMappings": { "User Story": "Closed", "Bug": "Closed" },
+      "columnType": "outgoing"
+    }
+  ],
+  "rows": [
+    { "id": "00000000-0000-0000-0000-000000000000", "name": null },
+    { "id": "48c9daeb-bbbb-44c5-9fd1-a2b3c4d5e6f7", "name": "Expedite" }
+  ],
+  "isValid": true,
+  "allowedMappings": {
+    "Incoming": { "User Story": ["New"], "Bug": ["New"] },
+    "InProgress": { "User Story": ["Active", "Resolved"], "Bug": ["Active", "Resolved"] },
+    "Outgoing": { "User Story": ["Closed"], "Bug": ["Closed"] }
+  },
+  "canEdit": true,
+  "fields": {
+    "columnField": { "referenceName": "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column", "url": "https://dev.azure.com/contoso/_apis/wit/fields/WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column" },
+    "rowField": { "referenceName": "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Lane", "url": "https://dev.azure.com/contoso/_apis/wit/fields/WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Lane" },
+    "doneField": { "referenceName": "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column.Done", "url": "https://dev.azure.com/contoso/_apis/wit/fields/WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column.Done" }
+  },
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/boards/e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091"
+}

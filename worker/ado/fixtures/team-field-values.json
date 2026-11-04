@@ -1,0 +1,12 @@
+{
+  "field": {
+    "referenceName": "System.AreaPath",
+    "url": "https://dev.azure.com/contoso/_apis/wit/fields/System.AreaPath"
+  },
+  "defaultValue": "Fabrikam Web\\Platform",
+  "values": [
+    { "value": "Fabrikam Web\\Platform", "includeChildren": true },
+    { "value": "Fabrikam Web\\Shared", "includeChildren": false }
+  ],
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/teamsettings/teamfieldvalues"
+}

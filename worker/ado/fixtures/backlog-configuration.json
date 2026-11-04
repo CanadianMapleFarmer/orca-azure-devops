@@ -1,0 +1,51 @@
+{
+  "taskBacklog": {
+    "id": "Microsoft.TaskCategory",
+    "name": "Tasks",
+    "rank": 1,
+    "workItemCountLimit": 1000,
+    "type": "task",
+    "isHidden": false,
+    "workItemTypes": [{ "name": "Task", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/Task" }],
+    "defaultWorkItemType": { "name": "Task", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/Task" }
+  },
+  "requirementBacklog": {
+    "id": "Microsoft.RequirementCategory",
+    "name": "Stories",
+    "rank": 2,
+    "workItemCountLimit": 1000,
+    "type": "requirement",
+    "isHidden": false,
+    "workItemTypes": [{ "name": "User Story", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/User%20Story" }],
+    "defaultWorkItemType": { "name": "User Story", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/User%20Story" }
+  },
+  "portfolioBacklogs": [
+    {
+      "id": "Microsoft.FeatureCategory",
+      "name": "Features",
+      "rank": 3,
+      "type": "portfolio",
+      "isHidden": false,
+      "workItemTypes": [{ "name": "Feature", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/Feature" }]
+    },
+    {
+      "id": "Microsoft.EpicCategory",
+      "name": "Epics",
+      "rank": 4,
+      "type": "portfolio",
+      "isHidden": false,
+      "workItemTypes": [{ "name": "Epic", "url": "https://dev.azure.com/contoso/_apis/wit/workItemTypes/Epic" }]
+    }
+  ],
+  "bugsBehavior": "asRequirements",
+  "isBugsBehaviorConfigured": true,
+  "hiddenBacklogs": [],
+  "workItemTypeMappedStates": [
+    { "workItemTypeName": "Bug", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
+    { "workItemTypeName": "Epic", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
+    { "workItemTypeName": "Feature", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } },
+    { "workItemTypeName": "Task", "states": { "New": "Proposed", "Active": "InProgress", "Closed": "Complete" } },
+    { "workItemTypeName": "User Story", "states": { "New": "Proposed", "Active": "InProgress", "Resolved": "Resolved", "Closed": "Complete" } }
+  ],
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/backlogconfiguration"
+}

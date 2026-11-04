@@ -1,0 +1,20 @@
+{
+  "count": 3,
+  "value": [
+    {
+      "id": "c0a1b2c3-3333-4c4d-9e5f-2a3b4c5d6e7f",
+      "name": "Epics",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/boards/c0a1b2c3-3333-4c4d-9e5f-2a3b4c5d6e7f"
+    },
+    {
+      "id": "d1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80",
+      "name": "Features",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/boards/d1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80"
+    },
+    {
+      "id": "e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091",
+      "name": "Stories",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e/_apis/work/boards/e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091"
+    }
+  ]
+}
