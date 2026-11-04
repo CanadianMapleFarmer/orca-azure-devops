@@ -596,6 +596,43 @@ test('a forbidden PR-chip load disables chips for 10 minutes with the scope mess
   assert.equal(item(back, 1204)?.prs[0].prId, 321)
 })
 
+function linkPullRequests(h: ReturnType<typeof harness>, id: number, prs: Record<number, { status: string; target: string }>): void {
+  const raw = h.ado.items.get(id)!
+  const links = Object.keys(prs).map(prId => ({ rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${PROJECT}%2F${REPO}%2F${prId}`, attributes: { name: 'Pull Request' } }))
+  raw.relations = [...(raw.relations ?? []), ...links]
+  h.ado.on(
+    call => isPullRequest(call) && Number(call.path.split('/').at(-1)) in prs,
+    call => {
+      const prId = Number(call.path.split('/').at(-1))
+      return json(200, { ...fixture<object>('pull-request-active'), pullRequestId: prId, status: prs[prId].status, targetRefName: `refs/heads/${prs[prId].target}` })
+    }
+  )
+}
+
+test('an item shows one chip per target branch, and its details give every linked PR its state', async () => {
+  const h = harness()
+  linkPullRequests(h, 1204, {
+    401: { status: 'abandoned', target: 'dev' },
+    402: { status: 'active', target: 'dev' },
+    403: { status: 'completed', target: 'staging' },
+    404: { status: 'active', target: 'master' }
+  })
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(item(snapshot, 1204)?.prs.map(chip => [chip.target, chip.prId, chip.state]), [
+    ['release/2026.11', 321, 'merged'],
+    ['dev', 402, 'open'],
+    ['staging', 403, 'merged'],
+    ['master', 404, 'open']
+  ])
+
+  const details = await h.service.details(ORG, 1204)
+  assert.deepEqual(details.item.prs, item(snapshot, 1204)?.prs)
+  assert.deepEqual(
+    details.links.filter(link => link.kind === 'pr').map(link => link.title),
+    ['Pull request 321 (merged)', 'Pull request 401 (abandoned)', 'Pull request 402 (open)', 'Pull request 403 (merged)', 'Pull request 404 (open)']
+  )
+})
+
 test('a snapshot keeps the newest items that fit in one post', async () => {
   const h = harness()
   const ids = Array.from({ length: 600 }, (_, index) => 7000 + index)

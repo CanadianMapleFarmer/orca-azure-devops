@@ -232,6 +232,13 @@ test('no linked work items means no batch call', async () => {
   assert.deepEqual(details.links, [{ kind: 'pr', title: 'Pull request 8', url: `${BASE}/${PROJECT}/_git/${REPO}/pullrequest/8` }])
 })
 
+test('a pull request link shows the state of the pull request when it is known', async () => {
+  const { http } = detailsServer()
+  const merged = { prId: 8, repoId: REPO, projectId: PROJECT, target: 'main', state: 'merged' as const, build: 'none' as const, url: '' }
+  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [prLink(PROJECT, REPO, 8), prLink(PROJECT, REPO, 9)]), [merged])
+  assert.deepEqual(details.links.map(link => link.title), ['Pull request 8 (merged)', 'Pull request 9'])
+})
+
 test('titles are requested for at most 50 linked items and the rest show their ids', async () => {
   const relations = Array.from({ length: 60 }, (_, index) => itemLink(CHILD, 100 + index))
   const titles = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [100 + index, { title: `Task ${index}` }]))

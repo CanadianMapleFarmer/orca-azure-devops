@@ -48,9 +48,9 @@ The identity check that pins your account hasn't been confirmed against a minima
 Open the Azure DevOps panel and choose **Work**. It needs a boards project and team for the organisation (see its settings).
 
 - **My work** lists the items assigned to you, grouped by board column. Finished items are left out. Items of a type the board doesn't show are grouped under **Other** and move by state.
-- Each card shows chips for its linked pull requests: the target branch with `✓` when merged, `● build` while a build runs, `✗ build` when it failed, and `abandoned`.
+- Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `● build` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
 - **Move to** on a card moves the item to another column. Moving into a split column puts the item in Doing. A move is refused when someone else changed the item first: the item is refreshed and you try again.
-- **Details** shows the description, acceptance criteria, comments, parent and links. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
+- **Details** shows the description, acceptance criteria, comments, parent and links, with each linked pull request's state. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
 - **Open board** (the icon in the header) opens the full-tab board.
 
 ### Suggest moves

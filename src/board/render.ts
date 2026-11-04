@@ -1,4 +1,4 @@
-import { chipOf, MAX_CHIPS } from '../shared/chips'
+import { chipOf } from '../shared/chips'
 import type { WorkItemSummary } from '../shared/work'
 import { cardLabel, initials, type Lane, type ParentOption } from './layout'
 
@@ -33,11 +33,10 @@ function cardElement(item: WorkItemSummary, column: string): HTMLElement {
   if (item.parentTitle) card.append(el('div', 'parent', `↑ ${item.parentTitle}`))
   if (item.prs.length > 0) {
     const chips = el('div', 'chips')
-    for (const pr of item.prs.slice(0, MAX_CHIPS)) {
+    for (const pr of item.prs) {
       const chip = chipOf(pr)
       chips.append(el('span', `chip ${chip.tone}`, chip.text))
     }
-    if (item.prs.length > MAX_CHIPS) chips.append(el('span', 'chip neutral', `+${item.prs.length - MAX_CHIPS}`))
     card.append(chips)
   }
   return card

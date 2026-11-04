@@ -2,7 +2,7 @@ import type { PrChip } from './work'
 
 export type ChipTone = 'success' | 'warning' | 'danger' | 'neutral'
 
-export const MAX_CHIPS = 2
+export const MAX_CHIPS = 4
 
 export function chipOf(pr: PrChip): { tone: ChipTone; text: string } {
   if (pr.state === 'merged') return { tone: 'success', text: `${pr.target} ✓` }

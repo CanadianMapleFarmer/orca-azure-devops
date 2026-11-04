@@ -169,7 +169,7 @@ test('chips show merge and build state', async () => {
   ])
 })
 
-test('a card shows at most two chips and counts the rest', async () => {
+test('a card shows at most four chips and counts the rest', async () => {
   await open(
     snapshotOf({
       mine: [
@@ -178,30 +178,37 @@ test('a card shows at most two chips and counts the rest', async () => {
             pr(1, { target: 'main', state: 'merged' }),
             pr(2, { target: 'release', state: 'open', build: 'running' }),
             pr(3, { target: 'dev', state: 'open', build: 'failed' }),
-            pr(4, { target: 'next', state: 'open', build: 'none' })
+            pr(4, { target: 'next', state: 'open', build: 'none' }),
+            pr(5, { target: 'staging', state: 'merged' }),
+            pr(6, { target: 'uat', state: 'abandoned' })
           ]
         }),
-        item(102, { prs: [pr(5, { target: 'main', state: 'merged' }), pr(6, { target: 'dev', state: 'merged' })] })
+        item(102, { prs: [pr(7, { target: 'dev', state: 'merged' }), pr(8, { target: 'staging', state: 'merged' }), pr(9, { target: 'master', state: 'open' })] })
       ]
     })
   )
   assert.deepEqual(chips(/./).filter(chip => chip.text !== 'Stories' && chip.text !== 'Connected'), [
     { text: 'main ✓', tone: 'success' },
     { text: 'release ● build', tone: 'warning' },
+    { text: 'dev ✗ build', tone: 'danger' },
+    { text: 'next ·', tone: 'neutral' },
     { text: '+2', tone: 'neutral' },
-    { text: 'main ✓', tone: 'success' },
-    { text: 'dev ✓', tone: 'success' }
+    { text: 'dev ✓', tone: 'success' },
+    { text: 'staging ✓', tone: 'success' },
+    { text: 'master ·', tone: 'neutral' }
   ])
 })
 
 test('300 cards with four chips each and 25 nudges still render, with 10 nudges shown', async () => {
+  const targets = ['dev', 'staging', 'master', 'main']
   const mine = Array.from({ length: 300 }, (_, index) =>
-    item(index + 1, { prs: [1, 2, 3, 4].map(number => pr(index * 4 + number, { state: 'merged' })) })
+    item(index + 1, { prs: targets.map((target, number) => pr(index * 4 + number + 1, { target, state: 'merged' })) })
   )
   const nudges = Array.from({ length: 25 }, (_, index) => ({ itemId: index + 1, prId: index * 4 + 1, branch: 'main', toColumn: 'Done' }))
   await open(snapshotOf({ mine, nudges }))
   assert.equal(panel.findAll({ type: 'Card' }).length, 300)
-  assert.equal(panel.findAll({ type: 'Badge', text: '+2' }).length, 300)
+  for (const target of targets) assert.equal(panel.findAll({ type: 'Badge', text: `${target} ✓` }).length, 300, target)
+  assert.equal(panel.findAll({ type: 'Badge', text: /^\+/ }).length, 0)
   const shown = panel.findAll({ type: 'Callout' }).map(callout => callout.props.title)
   assert.deepEqual(
     shown,
@@ -376,6 +383,13 @@ test('details shows description, acceptance and comments, and Comment posts', as
     ['Acceptance criteria', 'Comments (2)']
   )
   assert.equal(panel.valueOf({ label: 'Add a comment' }), '')
+})
+
+test('details show a chip for every target branch of the item', async () => {
+  const prs = ['dev', 'staging', 'master', 'main', 'uat'].map((target, index) => pr(index + 1, { target, state: 'merged' }))
+  await open(snapshotOf({ mine: [item(101)] }), { 'work.details': detailsOf({ item: item(101, { prs }) }) })
+  await panel.press({ type: 'Button', text: 'Details' })
+  assert.deepEqual(chips(/✓/), ['dev ✓', 'staging ✓', 'master ✓', 'main ✓', 'uat ✓'].map(text => ({ text, tone: 'success' })))
 })
 
 test('a comment that fails shows the message and keeps the typed text', async () => {

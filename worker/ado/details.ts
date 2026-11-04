@@ -1,4 +1,4 @@
-import type { WorkComment, WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
+import type { PrChip, WorkComment, WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
 import { htmlToMarkdown } from './html'
 import { AdoError, type AdoHttp } from './http'
 import { patchWorkItem } from './patch'
@@ -48,7 +48,8 @@ export async function loadDetails(
   org: string,
   projectId: string,
   summary: WorkItemSummary,
-  raw: RawWorkItem
+  raw: RawWorkItem,
+  chips: PrChip[] = []
 ): Promise<WorkItemDetails> {
   const relations = raw.relations ?? []
   const linked = linkedWorkItems(relations)
@@ -73,7 +74,7 @@ export async function loadDetails(
           url: workItemUrl(orgUrl(org), textOr(found?.fields['System.TeamProject'], '') || home, id)
         }
       }),
-      ...pullRequestLinks(org, relations)
+      ...pullRequestLinks(org, relations, chips)
     ]
   }
 }
@@ -175,14 +176,15 @@ function linkedWorkItems(relations: Relations): { kind: Link['kind']; id: number
   )
 }
 
-function pullRequestLinks(org: string, relations: Relations): Link[] {
+function pullRequestLinks(org: string, relations: Relations, chips: PrChip[]): Link[] {
+  const states = new Map(chips.map(chip => [chip.prId, chip.state]))
   return relations
     .filter(link => link.rel === 'ArtifactLink' && link.url.startsWith(PR_ARTIFACT_PREFIX))
     .map(link => {
       const ref = parsePrRef(link.url)
-      return ref
-        ? { kind: 'pr', title: `Pull request ${ref.prId}`, url: pullRequestWebUrl(org, ref) }
-        : { kind: 'pr', title: 'Pull request', url: link.url }
+      if (!ref) return { kind: 'pr', title: 'Pull request', url: link.url }
+      const state = states.get(ref.prId)
+      return { kind: 'pr', title: `Pull request ${ref.prId}${state ? ` (${state})` : ''}`, url: pullRequestWebUrl(org, ref) }
     })
 }
 

@@ -1,5 +1,6 @@
 import {
   atom,
+  Badge,
   Button,
   Callout,
   Collapsible,
@@ -23,6 +24,7 @@ import {
   update,
   type OrcaNode
 } from 'orca'
+import { chipOf } from '../../shared/chips'
 import type { WorkItemDetails } from '../../shared/work'
 import { messageOf } from '../state'
 import { openItem } from './state'
@@ -193,6 +195,18 @@ function Body({ org, details }: { org: string; details: WorkItemDetails }): Orca
           { label: 'Parent', value: item.parentId === null ? null : `#${item.parentId}${item.parentTitle ? ` ${item.parentTitle}` : ''}` }
         ]}
       />
+      {item.prs.length > 0 ? (
+        <Row gap="xs" wrap>
+          {item.prs.map(pr => {
+            const chip = chipOf(pr)
+            return (
+              <Badge key={pr.prId} tone={chip.tone}>
+                {chip.text}
+              </Badge>
+            )
+          })}
+        </Row>
+      ) : null}
       {details.descriptionMd ? <Markdown content={details.descriptionMd} /> : null}
       {details.acceptanceMd ? (
         <Collapsible title="Acceptance criteria" defaultOpen>

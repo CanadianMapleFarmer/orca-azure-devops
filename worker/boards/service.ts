@@ -305,8 +305,8 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     async details(org, id) {
       const status = await statusOf(org)
       const { cfg } = await target(status, id)
-      const { raw, item } = await reload(status, cfg, id)
-      return loadDetails(http, org, cfg.projectId, item, raw)
+      const { raw, item, chips } = await reload(status, cfg, id)
+      return loadDetails(http, org, cfg.projectId, item, raw, chips)
     },
 
     cachedItem(org, id) {

@@ -24,7 +24,7 @@ export interface ItemSource {
   states(projectId: string, type: string): Promise<TypeState[]>
 }
 
-export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean }
+export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean; chips: PrChip[] }
 
 export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number): ItemSource {
   const chipCache: PrChipCache = new Map()
@@ -68,12 +68,12 @@ export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, every
   return summarize(source, cfg, await hydrateBases(source, cfg, ids), new Map())
 }
 
-export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number): Promise<{ raw: RawWorkItem; item: WorkItemSummary } | null> {
+export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number): Promise<{ raw: RawWorkItem; item: WorkItemSummary; chips: PrChip[] } | null> {
   const [raw] = await hydrate(source.http, source.org, cfg.projectId, [id])
   if (!raw) return null
   const base = toSummary(raw, cfg, source.orgUrl)
-  const { items } = await summarize(source, cfg, [base], await offBoardStates(source, cfg, [base]))
-  return { raw, item: items[0] }
+  const { items, chips } = await summarize(source, cfg, [base], await offBoardStates(source, cfg, [base]))
+  return { raw, item: items[0], chips }
 }
 
 export async function restate(source: ItemSource, cfg: BoardConfig, raw: RawWorkItem, like: WorkItemSummary): Promise<WorkItemSummary> {
@@ -105,6 +105,21 @@ export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
   }
 }
 
+export function foldChips(chips: PrChip[]): PrChip[] {
+  const byTarget = new Map<string, PrChip>()
+  for (const chip of chips) {
+    const kept = byTarget.get(chip.target)
+    if (!kept || chipRank(chip) < chipRank(kept) || (chipRank(chip) === chipRank(kept) && chip.prId > kept.prId)) byTarget.set(chip.target, chip)
+  }
+  return [...byTarget.values()]
+}
+
+function chipRank(chip: PrChip): number {
+  if (chip.state === 'merged') return 0
+  if (chip.state === 'abandoned') return 4
+  return chip.build === 'failed' ? 1 : chip.build === 'running' ? 2 : 3
+}
+
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {
   return messages.filter(Boolean).join(' ') || undefined
 }
@@ -130,10 +145,10 @@ async function summarize(source: ItemSource, cfg: BoardConfig, bases: Base[], st
   const byPr = new Map((chips ?? []).map(chip => [chip.prId, chip]))
   const items = bases.map(base => {
     const parentTitle = base.parentId === null ? null : titles.get(base.parentId) || null
-    const prs = [...new Set(base.prRefs.map(ref => ref.prId))].flatMap(prId => byPr.get(prId) ?? [])
+    const prs = foldChips([...new Set(base.prRefs.map(ref => ref.prId))].flatMap(prId => byPr.get(prId) ?? []))
     return itemOf(base, parentTitle, prs, cfg, states)
   })
-  return { items, chipsOff: chips === null }
+  return { items, chipsOff: chips === null, chips: chips ?? [] }
 }
 
 function itemOf({ prRefs: _, ...base }: Base, parentTitle: string | null, prs: PrChip[], cfg: BoardConfig, states: StatesByType): WorkItemSummary {
