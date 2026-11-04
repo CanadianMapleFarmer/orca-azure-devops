@@ -246,6 +246,9 @@ export function OrgSettings({ org }: { org: OrgStatus }): OrcaNode {
         </Button>
         <Heading level={3}>{`${org.org} settings`}</Heading>
       </Row>
+      <Text muted size="sm">
+        {org.tokenStore.kind === 'az-profile' ? `Tokens: ${org.tokenStore.path}` : "Tokens: Orca's encrypted secrets"}
+      </Text>
       {error ? <Callout tone="danger">{error}</Callout> : null}
       {org.state === 'connected' ? <Targets org={org.org} /> : null}
       <Separator />

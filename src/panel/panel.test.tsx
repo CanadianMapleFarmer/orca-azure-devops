@@ -29,11 +29,14 @@ function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
 }
 
 let panel: TestPanel
-afterEach(async () => {
+
+async function closeCleanly(): Promise<void> {
   const issues = { errors: panel.errors, warnings: panel.warnings, refusals: panel.refusals }
   await panel.unmount()
   assert.deepEqual(issues, { errors: [], warnings: [], refusals: [] })
-})
+}
+
+afterEach(closeCleanly)
 
 async function open(list: OrgStatus[], requests: MockRequests = {}, persisted?: { plugin?: Record<string, unknown> }) {
   const host = mockHost({ requests: { 'orgs.list': list, ...requests } })
@@ -320,6 +323,33 @@ test('connected shows who is signed in, a success badge and the four tabs', asyn
     ['Work', 'Pipelines', 'PRs', 'Wiki']
   )
   assert.equal(tabs?.props?.value, 'work')
+})
+
+test('the hub names the pinned account when the org is expired, mismatched or signed out', async () => {
+  const states: Partial<OrgStatus>[] = [
+    { state: 'expired', message: 'Your sign-in expired. Reconnect to continue.' },
+    { state: 'mismatch', message: 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.' },
+    { state: 'disconnected', message: 'Signed out.' }
+  ]
+  for (const over of states) {
+    await open([org('contoso', over)])
+    assert.ok(panel.find({ text: 'pinned to ada@contoso.com' }), over.state)
+    assert.equal(panel.find({ text: /^signed in as/ }), null, over.state)
+    await closeCleanly()
+  }
+  await open([org('contoso', { state: 'disconnected', account: null })])
+  assert.equal(panel.find({ text: /^pinned to/ }), null, 'nothing pinned, nothing named')
+})
+
+test('org settings show where the tokens live', async () => {
+  await open([org('contoso')], settingsRequests)
+  await panel.press(SETTINGS)
+  assert.ok(panel.find({ text: 'Tokens: /Users/ada/.orca-azure-devops/az/contoso' }))
+  await closeCleanly()
+
+  await open([org('contoso', { method: 'pat', tokenStore: { kind: 'orca-secrets' } })], settingsRequests)
+  await panel.press(SETTINGS)
+  assert.ok(panel.find({ text: "Tokens: Orca's encrypted secrets" }))
 })
 
 test('the chosen tab persists per workspace', async () => {

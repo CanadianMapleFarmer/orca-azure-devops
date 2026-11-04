@@ -171,9 +171,9 @@ function Header({ org, all }: { org: OrgStatus; all: readonly OrgStatus[] }): Or
         </Row>
       </Row>
       <Row gap="sm" align="center" wrap>
-        {org.state === 'connected' && org.account ? (
+        {org.account ? (
           <Text muted size="sm" truncate>
-            {`signed in as ${org.account.uniqueName}`}
+            {org.state === 'connected' ? `signed in as ${org.account.uniqueName}` : `pinned to ${org.account.uniqueName}`}
           </Text>
         ) : null}
         <Badge tone={STATE_TONE[org.state]}>{STATE_LABEL[org.state]}</Badge>
