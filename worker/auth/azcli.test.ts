@@ -195,12 +195,28 @@ test('getToken checks the profile dir before running az', async () => {
   assert.deepEqual(events, ['stat', 'run'])
 })
 
-test('createAzProfiles finds and deletes a profile without an az binary', async () => {
+test('createAzProfiles finds, checks and deletes a profile without an az binary', async () => {
   const removed: unknown[][] = []
-  const profiles = createAzProfiles({ home: HOME, fs: { rm: async (...args: unknown[]) => { removed.push(args) } } as Pick<FsPort, 'rm'> })
+  let kind: 'directory' | 'file' | 'missing' = 'directory'
+  const fs = {
+    rm: async (...args: unknown[]) => {
+      removed.push(args)
+    },
+    stat: async () => {
+      if (kind === 'missing') throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
+      return { isDirectory: () => kind === 'directory' }
+    }
+  } as unknown as Pick<FsPort, 'rm' | 'stat'>
+  const profiles = createAzProfiles({ home: HOME, fs })
   const dir = path.join(HOME, '.orca-azure-devops', 'az', 'contoso')
   assert.equal(profiles.profileDir('contoso'), dir)
   assert.equal(profiles.profileDir('contoso'), harness().provider.profileDir('contoso'))
+  assert.equal(await profiles.hasProfile('contoso'), true)
+  for (const absent of ['file', 'missing'] as const) {
+    kind = absent
+    assert.equal(await profiles.hasProfile('contoso'), false, absent)
+  }
+  assert.equal(await profiles.hasProfile('../x'), false)
   await profiles.signOut('contoso')
   assert.deepEqual(removed, [[dir, { recursive: true, force: true }]])
   await failure(profiles.signOut('../x'))

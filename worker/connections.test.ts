@@ -87,13 +87,14 @@ function fakeAdo() {
   const ado = {
     requests: [] as { path: string; who: string }[],
     reject: 0,
+    rejectAll: false,
     fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
       if (url.hostname === 'vssps.dev.azure.com') return new Response(null, { headers: { 'x-vss-resourcetenant': TENANT } })
       const identity = IDENTITIES.get(request.headers.get('authorization') ?? '')
       ado.requests.push({ path: url.pathname, who: identity?.who ?? 'unknown' })
-      if (!identity) return new Response('', { status: 401 })
+      if (!identity || ado.rejectAll) return new Response('', { status: 401 })
       if (url.pathname.endsWith('/_apis/connectionData')) return json(identity.data)
       if (ado.reject > 0) {
         ado.reject -= 1
@@ -113,10 +114,11 @@ interface FakeAz {
   loginError: Error | null
   tokenError: Error | null
   loginAborted: boolean
+  profiles: Set<string>
   provider: AzCliProvider
 }
 
-function fakeAz(clock: { now: number }): FakeAz {
+function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
   const az: FakeAz = {
     calls: [],
     tokens: [TOKEN_ADA],
@@ -125,10 +127,15 @@ function fakeAz(clock: { now: number }): FakeAz {
     loginError: null,
     tokenError: null,
     loginAborted: false,
+    profiles: new Set(profiles),
     provider: {
       profileDir: (org: string) => `${HOME}/.orca-azure-devops/az/${org}`,
+      async hasProfile(org: string) {
+        return az.profiles.has(org)
+      },
       async login(org: string, tenantId: string | null, signal?: AbortSignal) {
         az.calls.push(`login ${org} ${tenantId}`)
+        az.profiles.add(org)
         const gate = az.loginGate
         if (gate) {
           await new Promise<void>((resolve, reject) => {
@@ -143,6 +150,7 @@ function fakeAz(clock: { now: number }): FakeAz {
       },
       async getToken(org: string) {
         az.calls.push(`getToken ${org}`)
+        if (!az.profiles.has(org)) throw new Error('Not signed in.')
         if (az.tokenGate) await az.tokenGate.promise
         if (az.tokenError) throw az.tokenError
         const token = az.tokens.length > 1 ? az.tokens.shift()! : az.tokens[0]
@@ -150,13 +158,14 @@ function fakeAz(clock: { now: number }): FakeAz {
       },
       async signOut(org: string) {
         az.calls.push(`signOut ${org}`)
+        az.profiles.delete(org)
       }
     }
   }
   return az
 }
 
-function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Record<string, string> } = {}) {
+function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Record<string, string>; profiles?: string[] } = {}) {
   const clock = { now: T0 }
   const storage = new Map<string, unknown>()
   if (seed.orgs) storage.set('orgs', seed.orgs)
@@ -183,14 +192,15 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
       secretStore.delete(key)
     }
   }
-  const az = fakeAz(clock)
+  const pinnedAzOrgs = (seed.orgs ?? []).filter(cfg => cfg.method === 'azure-cli' && cfg.pinned).map(cfg => cfg.org)
+  const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()
   const posts: OrgStatus[][] = []
   const waiters: { org: string; state: OrgState; resolve(): void }[] = []
   let azInstalled = true
   const stateIn = (orgs: OrgStatus[] | undefined, org: string) => orgs?.find(status => status.org === org)?.state
 
-  const connections: Connections = createConnections({
+  const start = (): Connections => createConnections({
     store,
     secrets,
     az: async () => (azInstalled ? az.provider : null),
@@ -207,8 +217,11 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     now: () => clock.now
   })
 
-  return {
-    connections,
+  const h = {
+    connections: start(),
+    restart() {
+      h.connections = start()
+    },
     storage,
     secretStore,
     secretReads,
@@ -222,7 +235,7 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     stored: () => storage.get('orgs') as OrgConfig[] | undefined,
     last: (org = 'contoso') => posts.at(-1)?.find(status => status.org === org),
     async connect(input: Parameters<Connections['connect']>[0]) {
-      return record(await connections.connect(input))
+      return record(await h.connections.connect(input))
     },
     until(state: OrgState, org = 'contoso') {
       if (stateIn(posts.at(-1), org) === state) return Promise.resolve()
@@ -238,6 +251,7 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
       return assert.fail('expected the request to fail')
     }
   }
+  return h
 }
 
 test('connect via PAT pins the identity', async () => {
@@ -318,12 +332,16 @@ test('connect refuses a PAT for a different account and keeps the pinned one', a
 
 test('401 triggers one refresh then marks the org expired', async () => {
   const h = harness({ orgs: [config({ pinned: ADA })] })
-  h.ado.reject = 2
+  h.ado.rejectAll = true
   const error = await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(error.code, 'unauthorized')
   assert.equal(error.message, EXPIRED)
   assert.deepEqual(h.az.calls, ['getToken contoso', 'getToken contoso'])
-  assert.equal(h.ado.requests.length, 2)
+  assert.deepEqual(h.ado.requests.map(request => request.path), [
+    '/contoso/_apis/projects',
+    '/contoso/_apis/projects',
+    '/contoso/_apis/connectionData'
+  ])
   assert.equal(h.last()?.state, 'expired')
   assert.equal(h.last()?.message, EXPIRED)
   assert.equal((await h.connections.list())[0].state, 'expired')
@@ -331,7 +349,53 @@ test('401 triggers one refresh then marks the org expired', async () => {
   const again = await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(again.message, EXPIRED)
   assert.equal(h.az.calls.length, 2, 'an expired org does not ask az again')
-  assert.equal(h.ado.requests.length, 2, 'an expired org sends nothing')
+  assert.equal(h.ado.requests.length, 3, 'an expired org sends nothing')
+})
+
+test('a 401 the pinned identity still passes is missing access, not an expiry', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.ado.reject = 2
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.code, 'forbidden')
+  assert.equal(error.status, 403)
+  assert.equal(error.message, "Your account can't access this in Azure DevOps.")
+  assert.deepEqual(h.az.calls, ['getToken contoso', 'getToken contoso'])
+  assert.deepEqual(h.ado.requests.map(request => `${request.path} ${request.who}`), [
+    '/contoso/_apis/projects ada',
+    '/contoso/_apis/projects ada',
+    '/contoso/_apis/connectionData ada'
+  ])
+  assert.equal(h.posts.length, 0)
+  assert.equal((await h.connections.list())[0].state, 'connected')
+
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.az.calls.length, 2, 'the refreshed token is kept')
+})
+
+test('a PAT missing one scope does not lock the org', async () => {
+  const h = harness({ orgs: [config({ method: 'pat', pinned: ADA })], secrets: { 'pat:contoso': PAT_ADA } })
+  h.ado.reject = 2
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.code, 'forbidden')
+  assert.equal((await h.connections.list())[0].state, 'connected')
+  await h.connections.http.json(PROJECTS)
+})
+
+test('a refreshed token for a different account is refused as a mismatch', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokens = [TOKEN_ADA, TOKEN_GRACE]
+  h.ado.reject = 2
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.code, 'unauthorized')
+  assert.equal(error.message, 'This org is signed in as a different account.')
+  assert.equal(h.last()?.state, 'mismatch')
+  assert.equal(h.last()?.message, 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA)
+  assert.deepEqual(h.az.calls, ['getToken contoso', 'getToken contoso', 'signOut contoso'])
+
+  const sent = h.ado.requests.length
+  await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(h.ado.requests.length, sent)
 })
 
 test('a 401 that a refreshed token fixes keeps the org connected', async () => {
@@ -345,10 +409,10 @@ test('a 401 that a refreshed token fixes keeps the org connected', async () => {
 
 test('a rejected PAT is re-read once before the org expires', async () => {
   const h = harness({ orgs: [config({ method: 'pat', pinned: ADA })], secrets: { 'pat:contoso': PAT_ADA } })
-  h.ado.reject = 2
+  h.ado.rejectAll = true
   const error = await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(error.message, EXPIRED)
-  assert.deepEqual(h.secretReads, ['pat:contoso', 'pat:contoso'])
+  assert.equal(h.secretReads.length, 3, 'read for the request, re-read for the refresh, then read once for the posted status')
   assert.equal(h.last()?.state, 'expired')
 })
 
@@ -595,14 +659,75 @@ test('connect refuses input that is not an org', async () => {
 
 test('reconnecting an expired org with the pinned account connects it again', async () => {
   const h = harness({ orgs: [config({ pinned: ADA, codeProjects: CODE_PROJECTS })] })
-  h.ado.reject = 2
+  h.ado.rejectAll = true
   await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(h.last()?.state, 'expired')
 
+  h.ado.rejectAll = false
   await h.connect({ orgInput: 'https://dev.azure.com/contoso/', method: 'azure-cli' })
   await h.until('connected')
   assert.deepEqual(h.stored()?.[0].codeProjects, CODE_PROJECTS)
   await h.connections.http.json(PROJECTS)
+})
+
+test('a pinned org without credentials reports signed out and keeps its pin', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA }), config({ org: 'fabrikam', method: 'pat', pinned: ADA })], profiles: [] })
+  const orgs = record(await h.connections.list())
+  for (const status of orgs) {
+    assert.equal(status.state, 'disconnected', status.org)
+    assert.equal(status.message, 'Signed out.', status.org)
+    assert.equal(status.account?.uniqueName, 'ada@contoso.com', status.org)
+  }
+  for (const org of ['contoso', 'fabrikam']) {
+    const error = await h.failure(h.connections.http.json({ org, path: '/_apis/projects' }))
+    assert.equal(error.message, 'Connect this organization first.', org)
+  }
+  assert.deepEqual(h.az.calls, [])
+  assert.equal(h.ado.requests.length, 0)
+
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('connected')
+  const refused = await h.connect({ orgInput: 'fabrikam', method: 'pat', pat: PAT_GRACE })
+  assert.equal(refused.state, 'mismatch', 'the kept pin still refuses another account')
+  const accepted = await h.connect({ orgInput: 'fabrikam', method: 'pat', pat: PAT_ADA })
+  assert.equal(accepted.state, 'connected')
+})
+
+test('an az org whose profile was deleted reports signed out after a restart', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA, boards: BOARDS })] })
+  h.az.tokens = [TOKEN_GRACE]
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('mismatch')
+  assert.equal(h.az.profiles.has('contoso'), false)
+
+  h.restart()
+  const [status] = record(await h.connections.list())
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, 'Signed out.')
+  assert.deepEqual(status.account, ADA)
+  assert.deepEqual(status.boards, BOARDS)
+
+  h.az.tokens = [TOKEN_ADA]
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await h.until('connected')
+  h.restart()
+  assert.equal((await h.connections.list())[0].state, 'connected')
+})
+
+test('a PAT org whose secret is gone reports signed out, live and after a restart', async () => {
+  const h = harness({ orgs: [config({ method: 'pat', pinned: ADA })], secrets: { 'pat:contoso': PAT_ADA } })
+  assert.equal((await h.connections.list())[0].state, 'connected')
+  h.secretStore.delete('pat:contoso')
+  assert.equal((await h.connections.list())[0].message, 'Signed out.')
+
+  h.restart()
+  const [status] = record(await h.connections.list())
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, 'Signed out.')
+  assert.deepEqual(status.account, ADA)
+  await h.connections.update('contoso', { boards: BOARDS })
+  assert.equal(h.last()?.state, 'disconnected', 'posts derive it too')
+  assert.equal(h.last()?.message, 'Signed out.')
 })
 
 test('switching an org to another method forgets the old credential', async () => {

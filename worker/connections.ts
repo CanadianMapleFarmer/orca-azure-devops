@@ -4,7 +4,7 @@ import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest } from './ado/ht
 import { discoverTenant, parseOrgInput } from './ado/org'
 import type { AzCliProvider, AzProfiles } from './auth/azcli'
 import { accountFromConnectionData, samePinnedAccount } from './auth/identity'
-import { basicAuth, createPatProvider, type SecretsPort } from './auth/pat'
+import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
 
 export interface StorePort {
   get<T>(key: string): Promise<T | null>
@@ -48,6 +48,8 @@ const MESSAGES = {
   expired: 'Your sign-in expired. Reconnect to continue.',
   otherAccount: 'This org is signed in as a different account.',
   notConnected: 'Connect this organization first.',
+  signedOut: 'Signed out.',
+  noAccess: "Your account can't access this in Azure DevOps.",
   unknownOrg: 'That organization is not connected.'
 }
 
@@ -55,12 +57,16 @@ type Transient = { state: Exclude<OrgState, 'connected'>; message?: string }
 type Credential = { header: string; expiresAt: number }
 type Attempt = { controller: AbortController }
 
+class NoCredentialError extends Error {}
+
 export function createConnections(deps: ConnectionsDeps): Connections {
   const pat = createPatProvider(deps.secrets)
   let orgs: OrgConfig[] = []
   let signingIn = new Set<string>()
   let loading: Promise<void> | null = null
   let writes: Promise<void> = Promise.resolve()
+  let posting: Promise<void> = Promise.resolve()
+  let lastPosted = ''
   const transient = new Map<string, Transient>()
   const credentials = new Map<string, Credential>()
   const pendingCredentials = new Map<string, Promise<Credential>>()
@@ -97,8 +103,9 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return transient.get(cfg.org)?.state ?? (cfg.pinned ? 'connected' : 'disconnected')
   }
 
-  function statusOf(cfg: OrgConfig, override?: Transient): OrgStatus {
-    const current = override ?? transient.get(cfg.org)
+  function statusOf(cfg: OrgConfig, hasCredential: boolean, override?: Transient): OrgStatus {
+    const signedOut: Transient | undefined = cfg.pinned && !hasCredential ? { state: 'disconnected', message: MESSAGES.signedOut } : undefined
+    const current = override ?? transient.get(cfg.org) ?? signedOut
     return {
       org: cfg.org,
       url: cfg.url,
@@ -114,8 +121,33 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     }
   }
 
-  function publish(): void {
-    deps.post(orgs.map(cfg => statusOf(cfg)))
+  async function credentialPresent(cfg: OrgConfig): Promise<boolean> {
+    try {
+      if (cfg.method === 'pat') return (await deps.secrets.get(patKey(cfg.org))) !== null
+      return await deps.azProfiles.hasProfile(cfg.org)
+    } catch {
+      return false
+    }
+  }
+
+  async function statusFor(cfg: OrgConfig): Promise<OrgStatus> {
+    return statusOf(cfg, cfg.pinned ? await credentialPresent(cfg) : false)
+  }
+
+  function currentStatuses(): Promise<OrgStatus[]> {
+    return Promise.all(orgs.map(statusFor))
+  }
+
+  function publish(): Promise<void> {
+    const next = posting.then(async () => {
+      const statuses = await currentStatuses()
+      const text = JSON.stringify(statuses)
+      if (text === lastPosted) return
+      lastPosted = text
+      deps.post(statuses)
+    })
+    posting = next.catch(() => {})
+    return next
   }
 
   function setTransient(org: string, next: Transient | null): boolean {
@@ -171,10 +203,16 @@ export function createConnections(deps: ConnectionsDeps): Connections {
 
   async function acquire(cfg: OrgConfig): Promise<Credential> {
     if (cfg.method === 'pat') {
-      const header = await pat.header(cfg.org).catch(() => null)
-      if (!header) throw new Error(MESSAGES.unusablePat)
+      let header: string | null
+      try {
+        header = await pat.header(cfg.org)
+      } catch {
+        throw new Error(MESSAGES.unusablePat)
+      }
+      if (!header) throw new NoCredentialError()
       return { header, expiresAt: Infinity }
     }
+    if (!(await deps.azProfiles.hasProfile(cfg.org))) throw new NoCredentialError()
     const az = await deps.az()
     if (!az) throw new Error(MESSAGES.azMissing)
     const { token, expiresAt } = await serial(cfg.org, () => az.getToken(cfg.org, cfg.tenantId))
@@ -226,12 +264,17 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       credential = await credentialFor(cfg)
     } catch (error) {
       if (epochOf(org) !== epoch) throw unauthorized(blockedMessage(find(org)) ?? MESSAGES.notConnected)
+      if (error instanceof NoCredentialError) {
+        if (stateOf(cfg) === 'error') setTransient(org, null)
+        await publish()
+        throw unauthorized(MESSAGES.notConnected)
+      }
       const message = messageOf(error)
-      if (setTransient(org, { state: 'error', message })) publish()
+      if (setTransient(org, { state: 'error', message })) await publish()
       throw unauthorized(message)
     }
     if (epochOf(org) !== epoch) throw unauthorized(blockedMessage(find(org)) ?? MESSAGES.notConnected)
-    if (stateOf(cfg) === 'error' && setTransient(org, null)) publish()
+    if (stateOf(cfg) === 'error' && setTransient(org, null)) await publish()
     return credential.header
   }
 
@@ -243,13 +286,15 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     try {
       await credentialFor(cfg)
       return epochOf(org) === epoch
-    } catch {
-      if (epochOf(org) === epoch) expire(org)
+    } catch (error) {
+      if (epochOf(org) !== epoch) return false
+      if (error instanceof NoCredentialError) await publish()
+      else await expire(org)
       return false
     }
   }
 
-  function expire(org: string): boolean {
+  async function expire(org: string): Promise<boolean> {
     const cfg = find(org)
     if (!cfg) return false
     const state = stateOf(cfg)
@@ -257,35 +302,64 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     if (!cfg.pinned || (state !== 'connected' && state !== 'error')) return false
     invalidate(org)
     setTransient(org, { state: 'expired', message: MESSAGES.expired })
-    publish()
+    await publish()
     return true
+  }
+
+  async function diagnose(org: string, rejection: AdoError): Promise<AdoError> {
+    const cfg = find(org)
+    const credential = credentials.get(org)
+    if (!cfg?.pinned || !credential || blockedMessage(cfg) !== null) return rejection
+    const pinned = cfg.pinned
+    const epoch = epochOf(org)
+    let account: PinnedAccount | null
+    try {
+      account = await identify(org, credential.header, cfg.tenantId)
+    } catch (error) {
+      if (!(error instanceof AdoError && error.code === 'unauthorized')) return rejection
+      account = null
+    }
+    if (epochOf(org) !== epoch) return rejection
+    if (!account) return (await expire(org)) ? unauthorized(MESSAGES.expired) : rejection
+    if (samePinnedAccount(pinned, account)) return new AdoError('forbidden', 403, MESSAGES.noAccess)
+    invalidate(org)
+    setTransient(org, mismatchOf(account, pinned))
+    await forgetCredentials(org, cfg.method).catch(() => {})
+    await publish()
+    return unauthorized(MESSAGES.otherAccount)
   }
 
   const http: AdoHttp = {
     async json<T>(req: AdoRequest) {
       let rejected = false
+      let refreshed = false
       const client = createAdoHttp({
         fetch: deps.fetch,
         authHeader,
-        onUnauthorized: org => {
+        onUnauthorized: async org => {
           rejected = true
-          return refresh(org)
+          refreshed = await refresh(org)
+          return refreshed
         }
       })
       try {
         return await client.json<T>(req)
       } catch (error) {
-        if (rejected && error instanceof AdoError && error.code === 'unauthorized' && expire(req.org)) {
-          throw unauthorized(MESSAGES.expired)
-        }
-        throw error
+        if (!rejected || !(error instanceof AdoError) || error.code !== 'unauthorized') throw error
+        if (refreshed) throw await diagnose(req.org, error)
+        const cfg = find(req.org)
+        throw cfg && stateOf(cfg) === 'expired' ? unauthorized(MESSAGES.expired) : error
       }
     }
   }
 
-  async function verifiedAccount(org: string, header: string, tenantId: string | null): Promise<PinnedAccount> {
+  async function identify(org: string, header: string, tenantId: string | null): Promise<PinnedAccount | null> {
     const client = createAdoHttp({ fetch: deps.fetch, authHeader: async () => header })
-    const account = accountFromConnectionData(await getConnectionData(client, org), tenantId)
+    return accountFromConnectionData(await getConnectionData(client, org), tenantId)
+  }
+
+  async function verifiedAccount(org: string, header: string, tenantId: string | null): Promise<PinnedAccount> {
+    const account = await identify(org, header, tenantId)
     if (!account) throw new Error(MESSAGES.anonymous)
     return account
   }
@@ -300,7 +374,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     setTransient(org, next)
     signingIn.delete(org)
     await saveAll()
-    publish()
+    await publish()
   }
 
   async function signIn(
@@ -316,10 +390,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       const account = await verifiedAccount(org, credential.header, cfg.tenantId)
       if (!isCurrent(org, attempt)) return
       if (cfg.pinned && !samePinnedAccount(cfg.pinned, account)) {
-        const mismatch: Transient = {
-          state: 'mismatch',
-          message: `Signed in as ${account.uniqueName}, but this org is pinned to ${cfg.pinned.uniqueName}.`
-        }
+        const mismatch = mismatchOf(account, cfg.pinned)
         transient.set(org, mismatch)
         try {
           await discardSignIn(cfg)
@@ -349,7 +420,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   function draftError(parsed: { org: string; url: string } | null, method: ConnectionMethod, message: string): OrgStatus {
     const existing = parsed ? find(parsed.org) : undefined
     const cfg: OrgConfig = existing ?? { org: parsed?.org ?? '', url: parsed?.url ?? '', tenantId: null, method, pinned: null, boards: null, codeProjects: 'all' }
-    return statusOf({ ...cfg, method }, { state: 'error', message })
+    return statusOf({ ...cfg, method }, true, { state: 'error', message })
   }
 
   async function begin(parsed: { org: string; url: string }, method: ConnectionMethod, tenantId: string | null) {
@@ -369,14 +440,14 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     signingIn.add(cfg.org)
     if (previousMethod && previousMethod !== method) await forgetCredentials(cfg.org, previousMethod)
     await saveAll()
-    publish()
+    await publish()
     return { cfg, attempt }
   }
 
   return {
     async list() {
       await load()
-      return orgs.map(cfg => statusOf(cfg))
+      return currentStatuses()
     },
 
     async connect(input) {
@@ -393,7 +464,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         const { cfg, attempt } = await begin(parsed, method, tenantId)
         const header = basicAuth(token)
         await signIn(cfg, attempt, async () => ({ header, expiresAt: Infinity }), () => pat.save(cfg.org, token))
-        return statusOf(cfg)
+        return statusFor(cfg)
       }
 
       const az = await deps.az()
@@ -412,7 +483,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         })
         return { header: `Bearer ${token}`, expiresAt }
       }).catch(() => {})
-      return statusOf(cfg)
+      return statusFor(cfg)
     },
 
     async signOut(org) {
@@ -427,8 +498,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       setTransient(org, cancelled ? { state: 'disconnected', message: MESSAGES.cancelled } : null)
       signingIn.delete(org)
       await saveAll()
-      publish()
-      return statusOf(cfg)
+      await publish()
+      return statusFor(cfg)
     },
 
     async remove(org) {
@@ -443,7 +514,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       transient.delete(org)
       signingIn.delete(org)
       await saveAll()
-      publish()
+      await publish()
     },
 
     async update(org, patch) {
@@ -453,8 +524,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       if (patch.boards !== undefined) cfg.boards = patch.boards
       if (patch.codeProjects !== undefined) cfg.codeProjects = patch.codeProjects
       await saveAll()
-      publish()
-      return statusOf(cfg)
+      await publish()
+      return statusFor(cfg)
     },
 
     http,
@@ -471,13 +542,17 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         if (!attempts.has(org)) setTransient(org, { state: 'disconnected', message: MESSAGES.interrupted })
       }
       await saveAll()
-      publish()
+      await publish()
     }
   }
 }
 
 function unauthorized(message: string): AdoError {
   return new AdoError('unauthorized', 401, message)
+}
+
+function mismatchOf(account: PinnedAccount, pinned: PinnedAccount): Transient {
+  return { state: 'mismatch', message: `Signed in as ${account.uniqueName}, but this org is pinned to ${pinned.uniqueName}.` }
 }
 
 function messageOf(error: unknown): string {

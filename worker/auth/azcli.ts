@@ -11,6 +11,7 @@ const JWT_LIKE = /eyJ[\w-]*(?:\.[\w-]*)*/g
 
 export interface AzProfiles {
   profileDir(org: string): string
+  hasProfile(org: string): Promise<boolean>
   signOut(org: string): Promise<void>
 }
 
@@ -19,7 +20,7 @@ export interface AzCliProvider extends AzProfiles {
   getToken(org: string, tenantId: string | null): Promise<{ token: string; expiresAt: number }>
 }
 
-export function createAzProfiles(deps: { home: string; fs: Pick<typeof import('node:fs/promises'), 'rm'> }): AzProfiles {
+export function createAzProfiles(deps: { home: string; fs: Pick<typeof import('node:fs/promises'), 'rm' | 'stat'> }): AzProfiles {
   function profileDir(org: string): string {
     if (!isValidOrgName(org)) throw new Error('Invalid organisation name')
     return path.join(deps.home, ...PROFILE_ROOT, org)
@@ -27,6 +28,14 @@ export function createAzProfiles(deps: { home: string; fs: Pick<typeof import('n
 
   return {
     profileDir,
+
+    async hasProfile(org) {
+      try {
+        return (await deps.fs.stat(profileDir(org))).isDirectory()
+      } catch {
+        return false
+      }
+    },
 
     async signOut(org) {
       await deps.fs.rm(profileDir(org), { recursive: true, force: true })
@@ -41,15 +50,7 @@ export function createAzCliProvider(deps: {
   fs: Pick<typeof import('node:fs/promises'), 'mkdir' | 'rm' | 'chmod' | 'stat'>
 }): AzCliProvider {
   const { azPath, run, home, fs } = deps
-  const { profileDir, signOut } = createAzProfiles({ home, fs })
-
-  async function isDirectory(dir: string): Promise<boolean> {
-    try {
-      return (await fs.stat(dir)).isDirectory()
-    } catch {
-      return false
-    }
-  }
+  const { profileDir, hasProfile, signOut } = createAzProfiles({ home, fs })
 
   function azEnv(dir: string): Record<string, string> {
     const env: Record<string, string> = {}
@@ -66,6 +67,7 @@ export function createAzCliProvider(deps: {
 
   return {
     profileDir,
+    hasProfile,
 
     async login(org, tenantId, signal) {
       const dir = profileDir(org)
@@ -78,7 +80,7 @@ export function createAzCliProvider(deps: {
 
     async getToken(org, tenantId) {
       const dir = profileDir(org)
-      if (!(await isDirectory(dir))) throw new Error('Not signed in.')
+      if (!(await hasProfile(org))) throw new Error('Not signed in.')
       const args = ['account', 'get-access-token', '--resource', ADO_RESOURCE, ...tenantArgs(tenantId), '--output', 'json']
       const result = await run(azPath, args, { env: azEnv(dir), timeoutMs: TOKEN_TIMEOUT_MS })
       if (result.code !== 0) throw failure('Azure CLI could not get an access token', result.stderr)
