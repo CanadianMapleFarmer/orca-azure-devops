@@ -1,8 +1,9 @@
-const SUFFIX = '\n\n… open in Azure DevOps for the rest'
+import { capMarkdown, cellText, tableRow } from './html-blocks'
+
 const DROPPED = new Set(['script', 'style', 'head'])
 const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', nbsp: ' ' }
 const MAX_TAG = 2048
-const MAX_INDENT = 8
+const MAX_INDENT = 24
 const TAG = /<(?:(\/?)([a-z][a-z0-9]*)|[!?])/iy
 const HREF = /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i
 
@@ -45,23 +46,16 @@ function linkTarget(attrs: string): string | null {
   return href.replace(/[\s()<>]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)))
 }
 
-function cap(markdown: string, maxChars: number): string {
-  if (markdown.length <= maxChars) return markdown
-  let cut = markdown.lastIndexOf('\n', maxChars - 1)
-  if (cut <= 0) {
-    cut = maxChars
-    const before = markdown.charCodeAt(cut - 1)
-    if (before >= 0xd800 && before <= 0xdbff) cut--
-  }
-  return markdown.slice(0, cut).trimEnd() + SUFFIX
-}
-
 export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars: number; itemUrl: string }): string {
   if (typeof html !== 'string' || !html) return ''
   const source = html.replace(/\r\n?/g, '\n')
   const parts: string[] = []
   const spans: Span[] = []
-  const lists: { ordered: boolean; n: number }[] = []
+  const lists: { ordered: boolean; n: number; indent: number; width: number }[] = []
+  let row: { cells: string[]; header: boolean } | null = null
+  let cell: { start: number; spans: number; lists: number; last: string; newlines: number; marker: boolean } | null = null
+  let tableDepth = 0
+  let tableRows = 0
   let flushed = 0
   let last = ''
   let trailingNewlines = 2
@@ -109,12 +103,31 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     spans.length = Math.min(spans.length, index)
     flushed = Math.min(flushed, index)
   }
+  const endCell = () => {
+    if (!cell || !row) return
+    closeSpansTo(cell.spans)
+    const raw = parts.splice(cell.start).join('')
+    lists.length = cell.lists
+    ;({ last, newlines: trailingNewlines, marker: atMarker } = cell)
+    row.cells.push(cellText(raw))
+    cell = null
+  }
+  const endRow = () => {
+    endCell()
+    if (row?.cells.length) {
+      breakTo(1)
+      push(tableRow(row.cells, tableRows === 0 && row.header))
+      tableRows++
+    }
+    row = null
+  }
   const endPre = () => {
     const code = (pre ?? '').replace(/^\n+/, '').trimEnd()
     pre = null
     if (!code) return
-    let fence = '```'
-    while (code.includes(fence)) fence += '`'
+    let longest = 2
+    for (const run of code.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+    const fence = '`'.repeat(longest + 1)
     breakTo(2)
     push(`${fence}\n${code}\n${fence}`)
     breakTo(2)
@@ -136,13 +149,29 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
       spans.push({ tag: name, open: href ? '[' : '', close: href ? `](${href})` : '', block: false })
     } else if (name === 'ul' || name === 'ol') {
       breakTo(gap)
-      lists.push({ ordered: name === 'ol', n: 0 })
+      const parent = lists[lists.length - 1]
+      const indent = parent ? Math.min(parent.indent + parent.width, MAX_INDENT) : 0
+      lists.push({ ordered: name === 'ol', n: 0, indent, width: 2 })
     } else if (name === 'li') {
       breakTo(1)
-      const list = lists[lists.length - 1]
-      const bullet = list?.ordered ? `${++list.n}.` : '-'
-      push(`${'  '.repeat(Math.min(Math.max(lists.length - 1, 0), MAX_INDENT))}${bullet} `)
+      const list = lists[lists.length - 1] ?? { ordered: false, n: 0, indent: 0, width: 2 }
+      const marker = list.ordered ? `${++list.n}.` : '-'
+      list.width = marker.length + 1
+      push(`${' '.repeat(list.indent)}${marker} `)
       atMarker = true
+    } else if (name === 'table') {
+      if (tableDepth++ === 0) tableRows = 0
+      breakTo(2)
+    } else if (tableDepth === 1 && name === 'tr') {
+      endRow()
+      row = { cells: [], header: false }
+    } else if (tableDepth === 1 && (name === 'td' || name === 'th')) {
+      endCell()
+      row ??= { cells: [], header: false }
+      row.header ||= name === 'th'
+      cell = { start: parts.length, spans: spans.length, lists: lists.length, last, newlines: trailingNewlines, marker: atMarker }
+      trailingNewlines = 2
+      atMarker = false
     } else if (name === 'pre') pre = ''
     else if (name === 'img') {
       openSpans()
@@ -159,6 +188,11 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
       lists.pop()
       breakTo(lists.length > 0 ? 1 : 2)
     } else if (name === 'li') breakTo(1)
+    else if (name === 'table') {
+      if (tableDepth > 0 && --tableDepth === 0) endRow()
+      breakTo(2)
+    } else if (tableDepth === 1 && name === 'tr') endRow()
+    else if (tableDepth === 1 && (name === 'td' || name === 'th')) endCell()
     else {
       for (let k = spans.length - 1; k >= 0; k--) {
         if (spans[k].tag !== name) continue
@@ -198,8 +232,9 @@ export function htmlToMarkdown(html: string | null | undefined, opts: { maxChars
     else openTag(name, source.slice(tag.index + tag[0].length, end))
   }
   if (pre !== null) endPre()
+  endRow()
   closeSpansTo(0)
 
   const markdown = parts.join('').split('\n').map((line) => line.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
-  return cap(markdown, opts.maxChars)
+  return capMarkdown(markdown, opts.maxChars)
 }
