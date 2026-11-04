@@ -1,5 +1,6 @@
 import type { AutoCompleteOptions, PrKey, PrSnapshot, PrSummary, ReleaseSet } from '../../src/shared/prs'
 import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
+import { linkedAbort } from '../abort'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import {
@@ -147,7 +148,15 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   }
 
   async function attempt(org: string, entry: OrgPrs, kind: Kind): Promise<PrSnapshot> {
-    const { signal } = entry.controller
+    const link = linkedAbort(entry.controller.signal)
+    try {
+      return await attemptWith(org, entry, kind, link.signal)
+    } finally {
+      link.release()
+    }
+  }
+
+  async function attemptWith(org: string, entry: OrgPrs, kind: Kind, signal: AbortSignal): Promise<PrSnapshot> {
     if (signal.aborted) throw notConnected()
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
