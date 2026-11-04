@@ -1,0 +1,77 @@
+{
+  "count": 3,
+  "value": [
+    {
+      "id": 1204,
+      "rev": 9,
+      "fields": {
+        "System.TeamProject": "Fabrikam Web",
+        "System.WorkItemType": "User Story",
+        "System.Title": "Add vehicle search filters",
+        "System.State": "Active",
+        "System.AreaPath": "Fabrikam Web\\Platform",
+        "System.ChangedDate": "2026-11-03T14:20:11.5Z",
+        "System.AssignedTo": {
+          "displayName": "Alex Contoso",
+          "uniqueName": "alex@contoso.example",
+          "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+        },
+        "System.Parent": 1100,
+        "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column": "In Review",
+        "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column.Done": true,
+        "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Lane": "Expedite"
+      },
+      "relations": [
+        {
+          "rel": "ArtifactLink",
+          "url": "vstfs:///Git/PullRequestId/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d%2F7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f%2F321",
+          "attributes": { "name": "Pull Request" }
+        },
+        {
+          "rel": "ArtifactLink",
+          "url": "vstfs:///Git/Commit/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d%2F7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f%2F0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",
+          "attributes": { "name": "Fixed in Commit" }
+        },
+        {
+          "rel": "Hyperlink",
+          "url": "vstfs:///Git/PullRequestId/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d%2F7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f%2F999",
+          "attributes": { "comment": "not an artifact link" }
+        },
+        {
+          "rel": "System.LinkTypes.Hierarchy-Reverse",
+          "url": "https://dev.azure.com/contoso/_apis/wit/workItems/1100",
+          "attributes": { "name": "Parent" }
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1204"
+    },
+    {
+      "id": 1205,
+      "rev": 3,
+      "fields": {
+        "System.TeamProject": "Fabrikam Web",
+        "System.WorkItemType": "Bug",
+        "System.Title": "Fix pagination offset",
+        "System.State": "New",
+        "System.AreaPath": "Fabrikam Web\\Shared",
+        "System.ChangedDate": "2026-11-01T09:00:00Z"
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1205"
+    },
+    {
+      "id": 1206,
+      "rev": 12,
+      "fields": {
+        "System.TeamProject": "Fabrikam Web",
+        "System.WorkItemType": "User Story",
+        "System.Title": "Retire the legacy dealer export",
+        "System.State": "Closed",
+        "System.AreaPath": "Fabrikam Web\\Platform",
+        "System.ChangedDate": "2026-11-04T07:45:00Z",
+        "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column": "Closed",
+        "WEF_5C1A2B3D4E5F4A6B8C7D9E0F1A2B3C4D_Kanban.Column.Done": false
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1206"
+    }
+  ]
+}

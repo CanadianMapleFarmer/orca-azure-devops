@@ -1,0 +1,27 @@
+{
+  "count": 2,
+  "value": [
+    {
+      "evaluationId": "b1c2d3e4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+      "status": "approved",
+      "configuration": {
+        "id": 14,
+        "type": { "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd", "displayName": "Minimum number of reviewers" },
+        "isEnabled": true,
+        "isBlocking": true,
+        "settings": { "minimumApproverCount": 1 }
+      }
+    },
+    {
+      "evaluationId": "c2d3e4f5-6666-4b7c-9d8e-0f1a2b3c4d5e",
+      "status": "approved",
+      "configuration": {
+        "id": 15,
+        "type": { "id": "0609b952-1397-4640-95ec-e00a01b2c241", "displayName": "Build" },
+        "isEnabled": true,
+        "isBlocking": true,
+        "settings": { "buildDefinitionId": 42, "displayName": "Web validation", "queueOnSourceUpdateOnly": true }
+      }
+    }
+  ]
+}

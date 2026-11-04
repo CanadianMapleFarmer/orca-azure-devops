@@ -1,0 +1,20 @@
+{
+  "pullRequestId": 322,
+  "codeReviewId": 322,
+  "status": "active",
+  "title": "Fix pagination offset",
+  "sourceRefName": "refs/heads/bugfix/1205-pagination-offset",
+  "targetRefName": "refs/heads/main",
+  "mergeStatus": "queued",
+  "repository": {
+    "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+    "name": "web-app",
+    "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+    "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+    "project": {
+      "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+      "name": "Fabrikam Web"
+    }
+  },
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/322"
+}
