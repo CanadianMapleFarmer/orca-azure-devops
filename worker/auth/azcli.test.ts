@@ -116,7 +116,7 @@ test('login does not start az for an invalid org', async () => {
   assert.deepEqual(events, [])
 })
 
-test('login failure reports the last stderr line with tokens redacted', async () => {
+test('login failure reports the AADSTS or ERROR line with tokens redacted', async () => {
   const { provider } = harness({
     code: 1,
     stdout: 'SECRET-STDOUT',
@@ -124,6 +124,44 @@ test('login failure reports the last stderr line with tokens redacted', async ()
   })
   const error = await failure(provider.login('contoso', 't1'))
   assert.equal(error.message, 'Azure CLI sign-in failed: ERROR: AADSTS50076 for [redacted]')
+})
+
+test('a failure reports the first AADSTS or ERROR line, never the az command az suggests', async () => {
+  const { provider } = harness({
+    code: 1,
+    stderr: [
+      'WARNING: noise',
+      'AADSTS70043: The refresh token has expired due to sign-in frequency checks by conditional access.',
+      'ERROR: second error line',
+      'Interactive authentication is needed. Please run:',
+      'az login --tenant t1 --scope 499b84ac-1321-427f-aa17-267ca6975798/.default',
+      ''
+    ].join('\n')
+  })
+  const error = await failure(provider.getToken('contoso', 't1'))
+  assert.equal(
+    error.message,
+    'Azure CLI could not get an access token: AADSTS70043: The refresh token has expired due to sign-in frequency checks by conditional access.'
+  )
+})
+
+test('a failure skips ERROR lines that tell the user to run az login', async () => {
+  const stderrs = [
+    "ERROR: Please run 'az login' to setup account.",
+    'ERROR: az login --use-device-code',
+    'az account get-access-token ERROR: refused'
+  ]
+  for (const stderr of stderrs) {
+    const { provider } = harness({ code: 1, stderr })
+    const error = await failure(provider.getToken('contoso', 't1'))
+    assert.equal(error.message, 'Azure CLI could not get an access token', stderr)
+  }
+})
+
+test('a failure with no AADSTS or ERROR line is only the fixed sentence', async () => {
+  const { provider } = harness({ code: 1, stderr: 'Traceback (most recent call last):\n  File "x.py", line 1\nKeyError: home\n' })
+  const error = await failure(provider.login('contoso', 't1'))
+  assert.equal(error.message, 'Azure CLI sign-in failed')
 })
 
 test('getToken parses expires_on', async () => {
@@ -151,12 +189,20 @@ test('getToken failure never leaks stdout', async () => {
   const { provider } = harness({
     code: 1,
     stdout: `{"accessToken":"${JWT}"}`,
-    stderr: `WARNING: noise\nERROR: Please run 'az login' (was ${JWT} expired)\n\n`
+    stderr: `WARNING: noise\nERROR: AADSTS50173 grant revoked (was ${JWT} expired)\n\n`
   })
   const error = await failure(provider.getToken('contoso', 't1'))
-  assert.equal(error.message, "Azure CLI could not get an access token: ERROR: Please run 'az login' (was [redacted] expired)")
+  assert.equal(error.message, 'Azure CLI could not get an access token: ERROR: AADSTS50173 grant revoked (was [redacted] expired)')
   assert.ok(!error.message.includes('eyJ'))
   assert.ok(!error.message.includes('WARNING'))
+})
+
+test('getToken reports az failing to run or timing out as only the fixed sentence', async () => {
+  for (const reply of [new Error('az timed out after 60000ms'), Object.assign(new Error('spawn /opt/homebrew/bin/az EACCES'), { code: 'EACCES' })]) {
+    const { provider } = harness(reply)
+    const error = await failure(provider.getToken('contoso', 't1'))
+    assert.equal(error.message, 'Azure CLI could not get an access token', reply.message)
+  }
 })
 
 test('getToken failure without stderr is only the fixed sentence', async () => {

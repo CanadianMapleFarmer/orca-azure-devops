@@ -26,6 +26,7 @@ const WIPE_FAILED = "Couldn't delete this org's saved sign-in. Sign out to try a
 const INTERRUPTED = 'Sign-in was interrupted. Try again.'
 const NOT_CONNECTED = 'Connect this organization first.'
 const BAD_PAT = "That token can't be used. Paste it again."
+const TOKEN_FAILED = 'Azure CLI could not get an access token'
 
 const ADA: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT }
 const GRACE: PinnedAccount = { adoId: 'u2', uniqueName: 'grace@contoso.com', displayName: 'Grace Hopper', tenantId: TENANT }
@@ -443,23 +444,51 @@ test('a rejected PAT is re-read once before the org expires', async () => {
   assert.equal(h.last()?.state, 'expired')
 })
 
-test('a refresh that fails marks the org expired', async () => {
+test('an az token that needs a new sign-in marks the org expired and stops asking az', async () => {
+  const reasons = [
+    `${TOKEN_FAILED}: ERROR: AADSTS70043: The refresh token has expired due to sign-in frequency checks by conditional access.`,
+    `${TOKEN_FAILED}: ERROR: invalid_grant`,
+    `${TOKEN_FAILED}: ERROR: interaction_required`,
+    'Not signed in.'
+  ]
+  for (const reason of reasons) {
+    const h = harness({ orgs: [config({ pinned: ADA })] })
+    await h.connections.http.json(PROJECTS)
+    h.az.tokenError = new Error(reason)
+    h.clock.now += HOUR
+    const error = await h.failure(h.connections.http.json(PROJECTS))
+    assert.equal(error.message, EXPIRED, reason)
+    assert.equal(h.last()?.state, 'expired', reason)
+    assert.equal(h.last()?.message, EXPIRED, reason)
+    await h.refusedWithoutCalls(EXPIRED)
+  }
+})
+
+test('any other az token failure is an error that waits a minute before asking az again', async () => {
   const h = harness({ orgs: [config({ pinned: ADA })] })
-  h.ado.reject = 1
-  await h.connections.http.json({ org: 'contoso', path: '/_apis/teams' }).catch(() => {})
-  h.ado.reject = 0
-  h.az.tokenError = new Error('Azure CLI could not get an access token')
+  await h.connections.http.json(PROJECTS)
+  h.az.tokenError = new Error(TOKEN_FAILED)
   h.clock.now += HOUR
   const error = await h.failure(h.connections.http.json(PROJECTS))
-  assert.equal(error.message, 'Azure CLI could not get an access token')
+  assert.equal(error.message, TOKEN_FAILED)
   assert.equal(h.last()?.state, 'error')
+  assert.equal(h.last()?.message, TOKEN_FAILED)
 
   h.az.tokenError = null
+  h.clock.now += 60_000 - 1
+  await h.refusedWithoutCalls(TOKEN_FAILED)
+
+  h.clock.now += 1
   await h.connections.http.json(PROJECTS)
   assert.equal(h.last()?.state, 'connected', 'a token error clears once az works again')
+  assert.equal(h.last()?.message, undefined)
+})
 
+test('a refresh after a 401 that fails marks the org expired', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  await h.connections.http.json(PROJECTS)
   h.ado.reject = 1
-  h.az.tokenError = new Error('Azure CLI could not get an access token')
+  h.az.tokenError = new Error(TOKEN_FAILED)
   const expired = await h.failure(h.connections.http.json(PROJECTS))
   assert.equal(expired.message, EXPIRED)
   assert.equal(h.last()?.state, 'expired')

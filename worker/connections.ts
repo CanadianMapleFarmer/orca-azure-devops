@@ -2,7 +2,7 @@ import type { ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } 
 import { getConnectionData } from './ado/core'
 import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest } from './ado/http'
 import { discoverTenant, parseOrgInput } from './ado/org'
-import type { AzCliProvider, AzProfiles } from './auth/azcli'
+import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
 import { accountFromConnectionData, samePinnedAccount } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
 
@@ -34,7 +34,9 @@ export interface ConnectionsDeps {
 const ORGS_KEY = 'orgs'
 const SIGNING_IN_KEY = 'signing-in'
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60_000
+const TOKEN_COOL_DOWN_MS = 60_000
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/
+const NEEDS_SIGN_IN = /AADSTS\d+|invalid_grant|interaction_required/
 
 const MESSAGES = {
   invalidOrg: 'Enter an organization name or URL, like https://dev.azure.com/your-org.',
@@ -60,6 +62,8 @@ type Credential = { header: string; expiresAt: number }
 type Attempt = { controller: AbortController }
 
 class NoCredentialError extends Error {}
+class SignInNeeded extends Error {}
+class TokenUnavailable extends Error {}
 
 export function createConnections(deps: ConnectionsDeps): Connections {
   const pat = createPatProvider(deps.secrets)
@@ -75,6 +79,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   const epochs = new Map<string, number>()
   const attempts = new Map<string, Attempt>()
   const chains = new Map<string, Promise<void>>()
+  const coolDowns = new Map<string, number>()
 
   function load(): Promise<void> {
     loading ??= (async () => {
@@ -194,6 +199,11 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     epochs.set(org, epochOf(org) + 1)
     credentials.delete(org)
     pendingCredentials.delete(org)
+    coolDowns.delete(org)
+  }
+
+  function coolingDown(org: string): boolean {
+    return (coolDowns.get(org) ?? -Infinity) > deps.now()
   }
 
   function startAttempt(org: string): Attempt {
@@ -269,8 +279,13 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     if (!(await deps.azProfiles.hasProfile(cfg.org))) throw new NoCredentialError()
     const az = await deps.az()
     if (!az) throw new Error(MESSAGES.azMissing)
-    const { token, expiresAt } = await serial(cfg.org, () => az.getToken(cfg.org, cfg.tenantId))
-    return { header: `Bearer ${token}`, expiresAt }
+    let issued: { token: string; expiresAt: number }
+    try {
+      issued = await serial(cfg.org, () => az.getToken(cfg.org, cfg.tenantId))
+    } catch (error) {
+      throw needsSignIn(error) ? new SignInNeeded() : new TokenUnavailable(messageOf(error))
+    }
+    return { header: `Bearer ${issued.token}`, expiresAt: issued.expiresAt }
   }
 
   function credentialFor(cfg: OrgConfig): Promise<Credential> {
@@ -298,7 +313,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       case 'connected':
         return null
       case 'error':
-        return signingIn.has(cfg.org) ? (transient.get(cfg.org)?.message ?? MESSAGES.notConnected) : null
+        return signingIn.has(cfg.org) || coolingDown(cfg.org) ? (transient.get(cfg.org)?.message ?? MESSAGES.notConnected) : null
       case 'mismatch':
         return MESSAGES.otherAccount
       case 'expired':
@@ -324,11 +339,17 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         await publish()
         throw unauthorized(MESSAGES.notConnected)
       }
+      if (error instanceof SignInNeeded) {
+        await expire(org)
+        throw unauthorized(blockedMessage(find(org)) ?? MESSAGES.notConnected)
+      }
       const message = messageOf(error)
+      if (error instanceof TokenUnavailable) coolDowns.set(org, deps.now() + TOKEN_COOL_DOWN_MS)
       if (setTransient(org, { state: 'error', message })) await publish()
       throw unauthorized(message)
     }
     if (epochOf(org) !== epoch) throw unauthorized(blockedMessage(find(org)) ?? MESSAGES.notConnected)
+    coolDowns.delete(org)
     if (stateOf(cfg) === 'error' && setTransient(org, null)) await publish()
     return credential.header
   }
@@ -628,4 +649,8 @@ function mismatchOf(account: PinnedAccount, pinned: PinnedAccount): Transient {
 
 function messageOf(error: unknown): string {
   return error instanceof Error && error.message ? error.message : MESSAGES.signInFailed
+}
+
+function needsSignIn(error: unknown): boolean {
+  return error instanceof Error && (NEEDS_SIGN_IN.test(error.message) || error.message === NOT_SIGNED_IN)
 }
