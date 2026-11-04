@@ -1,6 +1,6 @@
 # Azure DevOps for Orca
 
-An Azure DevOps hub inside [Orca](https://github.com/stablyai/orca), so you can stop switching to the browser for boards, pull requests, pipelines and wikis.
+Azure DevOps boards, pull requests, pipelines and wikis inside [Orca](https://github.com/stablyai/orca) (see Status).
 
 **Status: under construction.**
 
@@ -21,24 +21,23 @@ An Azure DevOps hub inside [Orca](https://github.com/stablyai/orca), so you can 
 
 Open the Azure DevOps panel in the Orca sidebar, enter the organisation URL (`https://dev.azure.com/your-org`) and pick a method:
 
-- **Azure CLI (no setup).** The plugin runs `az login` in your browser. You pick the account in Microsoft's account picker.
+- **Azure CLI (no setup).** On macOS and Linux the plugin runs `az login` in your browser, where you pick the account. On Windows, `az` may use the system broker instead.
 - **Personal access token.** Paste a PAT.
 
 Each organisation is pinned to the account you sign in with. The panel shows `signed in as <account>`, and a token for a different account is refused.
 
 ### Where credentials live
 
-- **Azure CLI:** the plugin uses its own private `az` profile in `~/.orca-azure-devops/az/<org>`, readable by you only. It never touches your terminal's `az` or `~/.azure`. Azure CLI keeps its tokens, refresh tokens included, in a plain file there on macOS and Linux (it encrypts them on Windows). Sign out deletes the folder.
-- **PAT:** stored in Orca's encrypted secrets for this plugin. Sign out deletes it.
+- **Azure CLI:** the plugin uses its own private `az` profile in `~/.orca-azure-devops/az/<org>`, owner-only (mode 0700) on macOS and Linux. It never touches your terminal's `az` or `~/.azure`. Azure CLI keeps its tokens, refresh tokens included, in a plain file there on macOS and Linux (it encrypts them on Windows). Sign out deletes the folder.
+- **PAT:** stored in Orca's encrypted secrets for this plugin. Sign out deletes it. This needs an OS keyring for Orca's encrypted secrets, which may be unavailable on some Linux setups.
 
 ### PAT scopes
 
-What exists so far needs:
+What exists so far is expected to work with:
 
 - **Project and team: Read** (`vso.project`) for the project and team lists.
-- **User profile: Read** (`vso.profile`) for the identity call that pins the account.
 
-More scopes will be listed here as features land.
+The identity check that pins your account hasn't been confirmed against a minimal PAT yet, so this list may change. More scopes will be listed here as features land.
 
 ## Settings
 
