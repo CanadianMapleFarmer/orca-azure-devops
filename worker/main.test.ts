@@ -3,12 +3,14 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, mockHost, test, type TestWorker } from 'orca/testing'
+import type { RunsSnapshot } from '../src/shared/pipelines'
 import type { PrSnapshot } from '../src/shared/prs'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
+import { fakePipelines, isMineRuns, isRunningRuns, type FakePipelines } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
 
@@ -845,6 +847,114 @@ test('a stored webhook URL that is not https is never posted', async () => {
       const seen = exposed(w, answers)
       for (const secret of [insecure, SIG]) assert.ok(!seen.includes(secret), 'the stored URL leaked')
       assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+const FIXTURE_NOW = Date.parse('2026-11-05T10:00:00Z')
+
+function pipelinesAt(now: number): FakePipelines {
+  const ado = fakePipelines()
+  const shift = (text: string | undefined) => (text === undefined ? undefined : new Date(Date.parse(text) + now - FIXTURE_NOW).toISOString())
+  for (const raw of ado.runs.builds.values()) Object.assign(raw, { queueTime: shift(raw.queueTime), startTime: shift(raw.startTime), finishTime: shift(raw.finishTime) })
+  for (const raw of ado.runs.approvals.values()) raw.createdOn = shift(raw.createdOn)
+  return ado
+}
+
+function pipelinesHost() {
+  return mockHost({
+    capabilities: [...CAPABILITIES, 'notifications:show'],
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards: BOARDS }] },
+    secrets: { 'pat:contoso': PAT },
+    results: { 'notifications.show': { delivered: true } }
+  })
+}
+
+function runsChanged(posts: readonly { event: string; payload?: unknown }[]): RunsSnapshot[] {
+  return posts.filter(post => post.event === 'runs.changed').map(post => post.payload as RunsSnapshot)
+}
+
+function statusShown(host: ReturnType<typeof mockHost>): string | undefined {
+  return (host.callsOf('statusBar.update').at(-1) as { text?: string } | undefined)?.text
+}
+
+test('runs.snapshot answers through the handler', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      const snapshot = await w.request('runs.snapshot', { org: 'contoso' })
+      assert.deepEqual(snapshot.runs.map(run => run.buildId), [4531, 4520, 4512, 4505, 4498, 4490])
+      assert.deepEqual([snapshot.me, snapshot.counts, snapshot.stale], [ME, { failedRuns: 1, approvals: 2 }, false])
+      assert.deepEqual(runsChanged(w.posts).at(-1), snapshot)
+
+      const watched = await w.request('runs.watch', { org: 'contoso', projectId: PROJECT, buildId: 4531, watched: true })
+      assert.equal(watched.runs.find(run => run.buildId === 4531)?.watched, true)
+      assert.deepEqual(w.host.data().storage['pipelines:watched:contoso'], [{ projectId: PROJECT, buildId: 4531 }])
+      const refreshed = await w.request('runs.refresh', { org: 'contoso' })
+      assert.deepEqual(refreshed.runs.map(run => [run.buildId, run.watched]).slice(0, 2), [[4531, true], [4520, false]])
+
+      await assert.rejects(w.request('runs.snapshot', { org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      await assert.rejects(
+        w.request('runs.watch', { org: 'contoso', projectId: PROJECT, buildId: 4512, watched: true }),
+        adoErrorWith('bad_request', 400, 'This run has already finished.')
+      )
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('the status command reports failed runs and approvals', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    const host = pipelinesHost()
+    await withWorker(worker, { host }, async w => {
+      assert.ok(await until(() => statusShown(host) === 'ADO · 1 failed · 2 approvals'), 'the background run counted failed runs and approvals')
+      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 failed pipeline run: contoso 1\n2 approvals waiting: contoso 2')
+      assert.deepEqual(runsChanged(w.posts), [], 'a background run posts no snapshot')
+      assert.equal(ado.count(isRunningRuns), 0)
+
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.equal(statusShown(host), 'ADO')
+      assert.ok(!String(await w.command('status')).includes('pipeline'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('ui.visibility routes pipelines to the pipelines service and the rest as before', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      assert.ok(await until(() => ado.count(isMineRuns) > 0), 'the runs job runs in the background')
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true }), { ok: true })
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'board', org: 'contoso', visible: false }), { ok: true })
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'prs', org: 'contoso', visible: true }), { ok: true })
+      assert.equal(await until(() => ado.count(isRunningRuns) > 0, 200), false, 'other surfaces leave the runs job alone')
+      assert.ok(await until(() => workChanged(w.posts).length > 0), 'work visibility still reaches the boards service')
+
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'pipelines', org: 'contoso', visible: true }), { ok: true })
+      assert.ok(await until(() => runsChanged(w.posts).length > 0), 'showing the Pipelines tab ran a full load')
+      assert.deepEqual(runsChanged(w.posts)[0].runs.map(run => run.buildId), [4531, 4520, 4512, 4505, 4498, 4490])
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('a failed run after activation shows a desktop notification with no refusals', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    const host = pipelinesHost()
+    await withWorker(worker, { host }, async w => {
+      assert.ok(await until(() => statusShown(host) === 'ADO · 1 failed · 2 approvals'), 'the first load ran')
+      assert.deepEqual(host.callsOf('notifications.show'), [], 'nothing that happened before activation notifies')
+
+      Object.assign(ado.runs.builds.get(4520) ?? assert.fail('no build 4520'), { status: 'completed', result: 'failed', finishTime: new Date().toISOString() })
+      await w.request('runs.refresh', { org: 'contoso' })
+      assert.deepEqual(host.callsOf('notifications.show'), [{ title: 'web-app-cd failed', body: 'contoso · 20261105.3 on main' }])
+      await w.request('runs.refresh', { org: 'contoso' })
+      assert.equal(host.callsOf('notifications.show').length, 1, 'each finish notifies once')
+      assert.equal(w.refusals.length, 0)
+      assert.ok(!w.logs.includes("Couldn't show a desktop notification."))
     })
   })
 })

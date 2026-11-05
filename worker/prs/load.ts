@@ -1,10 +1,9 @@
 import type { PrChecks, PrKey, PrSummary } from '../../src/shared/prs'
-import type { OrgStatus } from '../../src/shared/types'
 import type { NamedItem } from '../ado/core'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { buildStateOf, loadEvaluations, policyStateOf } from '../ado/policy'
-import { codeProjects, listPullRequests, pullRequestWorkItems, toPrSummary, type PrCriteria } from '../ado/pullrequests'
+import { listPullRequests, pullRequestWorkItems, toPrSummary, type PrCriteria } from '../ado/pullrequests'
 import { COMPLETED_WINDOW_MS } from './release-sets'
 
 const MINUTE = 60_000
@@ -12,7 +11,6 @@ const IN_FLIGHT = 4
 const MINE_TOP = 100
 const COMPLETED_TOP = 50
 const REVIEW_TOP = 100
-const PROJECTS_TTL_MS = 60 * MINUTE
 const COMPLETED_TTL_MS = 5 * MINUTE
 const WORK_ITEMS_TTL_MS = 10 * MINUTE
 const COMPLETED_WORK_ITEMS_TTL_MS = 60 * MINUTE
@@ -31,8 +29,6 @@ export interface PrSource {
   full(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<FullLoad>
   reviews(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
 }
-
-export type CodeProjects = (setting: OrgStatus['codeProjects'], signal?: AbortSignal) => Promise<NamedItem[]>
 
 type Cache<T> = Map<string, { at: number; ttl: number; value: T }>
 
@@ -107,17 +103,6 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number): P
       const scoped = withSignal(http, signal)
       return (await mapLimit(projects, IN_FLIGHT, project => list(scoped, project.id, reviewerOf(me)))).flat()
     }
-  }
-}
-
-export function cachedCodeProjects(http: AdoHttp, org: string, now: () => number): CodeProjects {
-  let cached: { key: string; at: number; projects: NamedItem[] } | null = null
-  return async (setting, signal) => {
-    const key = JSON.stringify(setting)
-    if (cached?.key === key && now() - cached.at < PROJECTS_TTL_MS) return cached.projects
-    const projects = await codeProjects(withSignal(http, signal), org, setting)
-    cached = { key, at: now(), projects }
-    return projects
   }
 }
 

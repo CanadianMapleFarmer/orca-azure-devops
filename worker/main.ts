@@ -8,6 +8,13 @@ import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { registerOrgHandlers } from './org-handlers'
+import { registerPipelineHandlers } from './pipelines/handlers'
+import { createNotifier } from './pipelines/notify'
+import { createPressure } from './pipelines/pressure'
+import { createPipelinesService } from './pipelines/service'
+import { watchPipelineSettings } from './pipelines/settings'
+import { createRunSignals } from './pipelines/signals'
+import { createWatchList } from './pipelines/watched'
 import { createScheduler, realClock } from './poll/scheduler'
 import { createPrActions } from './prs/actions'
 import { registerPrHandlers } from './prs/handlers'
@@ -36,10 +43,12 @@ export function deactivate(): Promise<void> {
 }
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
+  const activatedAt = Date.now()
   const home = os.homedir()
   const bar = createStatusBar(state => void orca.host.call('statusBar.update', { id: 'status', ...state }).catch(() => {}))
   const log = (message: string) => orca.log(message)
   const prSettings = await watchPrSettings(orca.settings, log)
+  const pipelineSettings = await watchPipelineSettings(orca.settings, log)
 
   const store: StorePort = {
     get: async <T,>(key: string) => (await orca.storage.get(key)) as T | null,
@@ -61,6 +70,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       bar.setOrgs(orgs)
       boards.onOrgs(orgs)
       prs.onOrgs(orgs)
+      pipelines.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
     now: Date.now
@@ -82,6 +92,22 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     autoComplete: () => prSettings.autoComplete(),
     post: snapshot => orca.panels.post('prs.changed', snapshot),
     counts: (org, count) => bar.setCount(org, 'toReview', count),
+    now: Date.now
+  })
+  const notifier = createNotifier({
+    show: n => orca.host.call('notifications.show', n),
+    prefs: () => pipelineSettings.notify(),
+    since: activatedAt,
+    log
+  })
+  const pipelines = createPipelinesService({
+    http: connections.http,
+    orgs: () => connections.list(),
+    scheduler,
+    watchList: createWatchList(store),
+    pressure: createPressure(Date.now),
+    signals: createRunSignals({ bar, notifier, now: Date.now }),
+    post: snapshot => orca.panels.post('runs.changed', snapshot),
     now: Date.now
   })
   const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
@@ -110,6 +136,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   stopPolling = () => {
     scheduler.dispose()
     prs.dispose()
+    pipelines.dispose()
   }
   await connections.resetInterrupted()
 
@@ -119,11 +146,13 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
+  registerPipelineHandlers(orca, { pipelines })
   registerShareHandlers(orca, share)
-  registerVisibilityHandler(orca, { boards, prs })
+  registerVisibilityHandler(orca, { boards, prs, pipelines })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
   prs.onOrgs(orgs)
+  pipelines.onOrgs(orgs)
   bar.setOrgs(orgs)
 }

@@ -1,0 +1,617 @@
+import { assert, test } from 'orca/testing'
+import type { RunSummary, RunsSnapshot } from '../../src/shared/pipelines'
+import { runsFor } from '../../src/shared/runs'
+import type { OrgStatus } from '../../src/shared/types'
+import type { RawBuild } from '../ado/builds'
+import { AdoError, createAdoHttp } from '../ado/http'
+import type { RawTimeline } from '../ado/timeline'
+import { json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
+import { byteLength } from '../budget'
+import { createScheduler } from '../poll/scheduler'
+import { isRepositories, PLATFORM } from '../prs/fake-prs'
+import { drain, fakeClock, memoryStore } from '../test-support'
+import {
+  APPROVAL_4520,
+  buildIdOf,
+  fakePipelines,
+  GRACE,
+  isApprovals,
+  isBuildsByIds,
+  isCheckSuite,
+  isMineRuns,
+  isOneBuild,
+  isRunningRuns,
+  isTimeline,
+  ME,
+  type FakePipelines
+} from './fake-pipelines'
+import { createPressure } from './pressure'
+import { createPipelinesService } from './service'
+import { createWatchList } from './watched'
+
+const T0 = Date.parse('2026-11-05T10:00:00Z')
+const MINUTE = 60_000
+const WATCHED = `pipelines:watched:${ORG}`
+const NOT_CONNECTED = 'Connect this organization first.'
+const TRIMMED = 'Showing the newest runs only.'
+const NEED_BUILD_READ = 'Pipelines need Build (Read) access.'
+const LOAD_FAILED = "Couldn't load pipeline runs."
+const APPROVALS_NEED_ACCESS = 'Pending approvals need more access, so Needs me may be incomplete.'
+const TOO_MANY_WATCHED = 'You can watch up to 20 runs.'
+const ALREADY_FINISHED = 'This run has already finished.'
+const RUN_GONE = "That run no longer exists, or you can't see it."
+const OUTAGE = 'TF246017: the database is unavailable.'
+const ACTIVE = [4520, 4531]
+const FINISHED = [4490, 4498, 4505, 4512]
+
+function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
+  return {
+    org: ORG,
+    url: ORG_URL,
+    method: 'pat',
+    state: 'connected',
+    account: { adoId: ME, uniqueName: 'alex@contoso.com', displayName: 'Alex Contoso', tenantId: null, objectId: null },
+    tokenStore: { kind: 'orca-secrets' },
+    boards: null,
+    codeProjects: 'all',
+    ...overrides
+  }
+}
+
+function harness(options: { store?: ReturnType<typeof memoryStore> } = {}) {
+  const ado = fakePipelines()
+  const clock = fakeClock(T0)
+  const posts: RunsSnapshot[] = []
+  const updates: [string, RunSummary[] | null][] = []
+  const failing = { orgs: false }
+  const memory = options.store ?? memoryStore()
+  let orgs = [status()]
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const scheduler = createScheduler(clock)
+  const service = createPipelinesService({
+    http,
+    orgs: async () => {
+      if (failing.orgs) throw new Error('the org list could not be read')
+      return structuredClone(orgs)
+    },
+    scheduler,
+    watchList: createWatchList(memory.store),
+    pressure: createPressure(clock.now),
+    signals: { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
+    post: snapshot => posts.push(structuredClone(snapshot)),
+    now: clock.now
+  })
+  return {
+    ado,
+    clock,
+    posts,
+    updates,
+    failing,
+    service,
+    scheduler,
+    data: memory.data,
+    setOrgs(next: OrgStatus[]) {
+      orgs = next
+      service.onOrgs(structuredClone(next))
+    },
+    show(visible = true) {
+      return service.visibility({ org: ORG, visible })
+    }
+  }
+}
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString()
+}
+
+function ids(runs: readonly RunSummary[] | null | undefined): number[] {
+  return (runs ?? []).map(run => run.buildId)
+}
+
+function runOf(snapshot: RunsSnapshot | undefined, buildId: number): RunSummary {
+  return snapshot?.runs.find(run => run.buildId === buildId) ?? assert.fail(`no run ${buildId}`)
+}
+
+function timelines(calls: readonly AdoCall[]): number[] {
+  return calls.filter(isTimeline).map(buildIdOf).sort()
+}
+
+function tally(calls: readonly AdoCall[]) {
+  return {
+    repositories: calls.filter(isRepositories).length,
+    mine: calls.filter(isMineRuns).length,
+    running: calls.filter(isRunningRuns).length,
+    approvals: calls.filter(isApprovals).length,
+    batches: calls.filter(isBuildsByIds).length,
+    timelines: calls.filter(isTimeline).length,
+    checkSuites: calls.filter(isCheckSuite).length,
+    all: calls.length
+  }
+}
+
+function addBuild(ado: FakePipelines, id: number, over: Partial<RawBuild>): RawBuild {
+  const base = structuredClone(ado.runs.builds.get(4505) ?? assert.fail('no build 4505'))
+  const raw: RawBuild = { ...base, id, buildNumber: `20261105.${id}`, _links: undefined, ...over }
+  ado.runs.builds.set(id, raw)
+  return raw
+}
+
+function finish(ado: FakePipelines, id: number, at: number, result = 'succeeded'): void {
+  Object.assign(ado.runs.builds.get(id) ?? assert.fail(`no build ${id}`), { status: 'completed', result, finishTime: iso(at) })
+}
+
+async function rejection(promise: Promise<unknown>): Promise<AdoError> {
+  try {
+    await promise
+  } catch (error) {
+    assert(error instanceof AdoError, `expected an AdoError, got ${String(error)}`)
+    return error
+  }
+  return assert.fail('expected the call to fail')
+}
+
+test("a visible load reads each project's lists once and caps timelines", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+
+  assert.deepEqual(tally(h.ado.calls), { repositories: 1, mine: 2, running: 2, approvals: 2, batches: 0, timelines: 6, checkSuites: 1, all: 14 })
+  assert.deepEqual(timelines(h.ado.calls).filter(id => ACTIVE.includes(id)), ACTIVE, 'every active run, at most 8')
+  assert.deepEqual(timelines(h.ado.calls).filter(id => FINISHED.includes(id)), FINISHED, 'newly finished runs, once')
+
+  const before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  const later = h.ado.calls.slice(before)
+  assert.deepEqual(tally(later), { repositories: 0, mine: 2, running: 2, approvals: 2, batches: 0, timelines: 2, checkSuites: 0, all: 8 })
+  assert.deepEqual(timelines(later), ACTIVE, 'only active runs are read again')
+  assert.equal(h.posts.length, 2)
+
+  const busy = harness()
+  for (let index = 0; index < 10; index += 1) {
+    const queuedAt = T0 - 90 * MINUTE + index * MINUTE
+    addBuild(busy.ado, 4600 + index, { status: 'inProgress', result: undefined, queueTime: iso(queuedAt), finishTime: undefined, requestedFor: { id: GRACE, displayName: 'Grace Hopper' } })
+    addBuild(busy.ado, 4700 + index, { status: 'completed', result: 'succeeded', queueTime: iso(queuedAt), finishTime: iso(queuedAt + MINUTE) })
+  }
+  busy.setOrgs([status()])
+  busy.show()
+  await busy.clock.tick(0)
+  const active = (id: number) => busy.ado.runs.builds.get(id)?.status === 'inProgress'
+  const read = timelines(busy.ado.calls)
+  assert.deepEqual([read.filter(active).length, read.filter(id => !active(id)).length], [8, 8], 'a cold load: 8 active runs and 8 newly finished')
+  assert.deepEqual(tally(busy.ado.calls), { repositories: 1, mine: 2, running: 2, approvals: 2, batches: 0, timelines: 16, checkSuites: 1, all: 24 })
+  const settled = busy.ado.calls.length
+  await busy.clock.tick(30_000)
+  const next = timelines(busy.ado.calls.slice(settled))
+  assert.deepEqual([next.filter(active).length, next.filter(id => !active(id)).length], [8, 6], 'then the rest of the finished runs')
+})
+
+test('a background load reads my runs and approvals only and keeps the chips', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const full = h.posts.at(-1)
+  h.show(false)
+
+  const before = h.ado.calls.length
+  await h.clock.tick(5 * MINUTE - 1)
+  assert.equal(h.ado.calls.length, before, 'the hidden cadence is five minutes')
+  await h.clock.tick(1)
+  assert.deepEqual(tally(h.ado.calls.slice(before)), { repositories: 0, mine: 2, running: 0, approvals: 2, batches: 1, timelines: 0, checkSuites: 0, all: 5 })
+
+  const background = h.posts.at(-1)
+  assert.equal(h.posts.length, 2, 'once a full load exists, background loads are posted too')
+  assert.deepEqual(ids(background?.runs), ids(full?.runs))
+  assert.deepEqual(background?.runs.map(run => run.stages), full?.runs.map(run => run.stages))
+  assert.equal(background?.updatedAt, T0 + 5 * MINUTE)
+
+  const cold = harness()
+  cold.setOrgs([status()])
+  await cold.clock.tick(0)
+  assert.deepEqual(tally(cold.ado.calls), { repositories: 1, mine: 2, running: 0, approvals: 2, batches: 1, timelines: 2, checkSuites: 1, all: 9 })
+  assert.deepEqual(cold.posts, [], 'no snapshot is posted before a full load')
+})
+
+test('a waiting run carries its approval with the stage and environment', async () => {
+  const h = harness()
+  const snapshot = await h.service.snapshot(ORG)
+  const run = runOf(snapshot, 4520)
+  assert.equal(run.state, 'waiting')
+  assert.deepEqual(run.stages?.map(chip => [chip.name, chip.state]), [['Build', 'succeeded'], ['Image', 'succeeded'], ['Deploy production', 'waiting']])
+  assert.deepEqual(run.approvals.map(approval => [approval.approvalId, approval.stage, approval.environment, approval.canApprove]), [
+    [APPROVAL_4520, 'Deploy production', 'production', false]
+  ])
+  assert.deepEqual({ ...snapshot, runs: [] }, { org: ORG, me: ME, runs: [], counts: { failedRuns: 1, approvals: 2 }, updatedAt: T0, stale: false })
+  assert.deepEqual(h.posts, [snapshot])
+})
+
+test('Needs me and Failed come from the shared rules', async () => {
+  const h = harness()
+  const snapshot = await h.service.snapshot(ORG)
+  assert.deepEqual(ids(snapshot.runs), [4531, 4520, 4512, 4505, 4498, 4490])
+  assert.deepEqual(snapshot.counts, { failedRuns: 1, approvals: 2 })
+  assert.deepEqual(ids(runsFor('needsMe', snapshot.runs, T0)), [4531, 4520])
+  assert.deepEqual(ids(runsFor('failed', snapshot.runs, T0)), [4512], 'the older develop failure was replaced by a later run')
+  assert.deepEqual(ids(runsFor('mine', snapshot.runs, T0)), [4520, 4512, 4505, 4498, 4490])
+  assert.deepEqual(ids(runsFor('running', snapshot.runs, T0)), [4531, 4520])
+})
+
+test('every load updates the signals; an org that leaves clears them', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  assert.deepEqual(h.updates.map(([org, runs]) => [org, ids(runs)]), [[ORG, [4531, 4520, 4512, 4505, 4498, 4490]]])
+  assert.equal(h.posts.length, 0, 'a background load posts nothing before a full one')
+
+  h.show()
+  await drain()
+  assert.equal(h.updates.length, 2, 'becoming visible ran a full load')
+  assert.deepEqual(h.updates[1][1], h.posts.at(-1)?.runs)
+
+  h.setOrgs([status({ state: 'expired' })])
+  assert.deepEqual(h.updates.at(-1), [ORG, null])
+  const calls = h.ado.calls.length
+  await h.clock.tick(10 * MINUTE)
+  assert.equal(h.ado.calls.length, calls, 'the job is gone')
+  assert.equal(h.service.cachedRun(ORG, 4520), null)
+
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  assert.equal(h.updates.at(-1)?.[1]?.length, 6, 'reconnecting brings the job back')
+  h.setOrgs([])
+  assert.deepEqual(h.updates.at(-1), [ORG, null])
+  h.setOrgs([status({ account: null })])
+  await h.clock.tick(10 * MINUTE)
+  assert.deepEqual(h.updates.at(-1), [ORG, null], 'an org without a pinned account has no job')
+  assert.deepEqual(await rejection(h.service.refresh(ORG)), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+test('watching starts the watch job, a finished watched run is dropped and the job stops', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  h.show(false)
+
+  const snapshot = await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  assert.equal(runOf(snapshot, 4531).watched, true)
+  assert.deepEqual(h.posts.at(-1), snapshot, 'the recomputed snapshot is posted')
+  assert.deepEqual(h.data[WATCHED], [{ projectId: PROJECT, buildId: 4531 }])
+  assert.deepEqual([h.service.isWatched(ORG, 4531), h.service.isWatched(ORG, 4520)], [true, false])
+
+  const before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  const polls = h.ado.calls.slice(before)
+  assert.deepEqual(polls.map(call => [call.query.get('buildIds'), call.path]), [
+    ['4531', `/${ORG}/${PROJECT}/_apis/build/builds`],
+    ['4531', `/${ORG}/${PROJECT}/_apis/build/builds`]
+  ], 'one batch at once, then every 30 s, and nothing else')
+  assert.deepEqual(runOf(h.posts.at(-1), 4531).approvals, runOf(snapshot, 4531).approvals, 'the merge keeps what the batch cannot know')
+  assert.deepEqual(runOf(h.posts.at(-1), 4531).stages, runOf(snapshot, 4531).stages)
+  assert.equal(runOf(h.posts.at(-1), 4531).state, 'waiting')
+
+  finish(h.ado, 4531, T0 + 40_000)
+  await h.clock.tick(30_000)
+  const [, seen] = h.updates.at(-1) ?? []
+  const done = seen?.find(run => run.buildId === 4531)
+  assert.deepEqual([done?.state, done?.watched], ['succeeded', true], 'the signals see the finish while it is still watched')
+  assert.equal(runOf(h.posts.at(-1), 4531).watched, false, 'then it is dropped')
+  assert.deepEqual(h.data[WATCHED], [])
+  assert.equal(h.service.isWatched(ORG, 4531), false)
+
+  const after = h.ado.calls.length
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(h.ado.calls.length, after, 'the watch job stopped')
+
+  const unwatch = harness()
+  unwatch.setOrgs([status()])
+  unwatch.show()
+  await unwatch.clock.tick(0)
+  await unwatch.service.watch({ org: ORG, projectId: PROJECT, buildId: 4520, watched: true })
+  const stopped = await unwatch.service.watch({ org: ORG, projectId: PROJECT, buildId: 4520, watched: false })
+  assert.equal(runOf(stopped, 4520).watched, false)
+  assert.deepEqual(unwatch.data[WATCHED], [])
+  await unwatch.clock.tick(0)
+  unwatch.show(false)
+  const quiet = unwatch.ado.calls.length
+  await unwatch.clock.tick(2 * MINUTE)
+  assert.equal(unwatch.ado.calls.length, quiet, 'unwatching the last run stops the watch job')
+})
+
+test('watching a finished run or a 21st run is refused', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const posts = h.posts.length
+  const finished = await rejection(h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4512, watched: true }))
+  assert.deepEqual([finished.code, finished.status, finished.message], ['bad_request', 400, ALREADY_FINISHED])
+  assert.equal(h.data[WATCHED], undefined)
+  assert.equal(h.posts.length, posts)
+  assert.equal(runOf(await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4512, watched: false }), 4512).watched, false, 'unwatching is never refused')
+
+  const keys = Array.from({ length: 20 }, (_, index) => ({ projectId: PROJECT, buildId: 5000 + index }))
+  const full = harness({ store: memoryStore({ [WATCHED]: keys }) })
+  const tooMany = await rejection(full.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true }))
+  assert.deepEqual([tooMany.code, tooMany.status, tooMany.message], ['bad_request', 400, TOO_MANY_WATCHED])
+  assert.deepEqual(full.data[WATCHED], keys)
+  assert.deepEqual(full.ado.calls.filter(isBuildsByIds).map(call => call.query.get('buildIds')), ['4531'], 'a run not loaded yet is read fresh')
+  assert.deepEqual(full.posts, [])
+
+  const fresh = harness()
+  finish(fresh.ado, 4531, T0 - MINUTE)
+  assert.equal((await rejection(fresh.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true }))).message, ALREADY_FINISHED)
+  const gone = await rejection(fresh.service.watch({ org: ORG, projectId: PROJECT, buildId: 9999, watched: true }))
+  assert.deepEqual([gone.code, gone.status, gone.message], ['not_found', 404, RUN_GONE])
+  assert.deepEqual(await rejection(fresh.service.watch({ org: 'fabrikam', projectId: PROJECT, buildId: 4531, watched: true })), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+test('the watch list survives a restart', async () => {
+  const store = memoryStore()
+  const first = harness({ store })
+  first.setOrgs([status()])
+  const watched = await first.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  assert.equal(runOf(watched, 4531).watched, true)
+  first.scheduler.dispose()
+  first.service.dispose()
+
+  const second = harness({ store })
+  assert.equal(second.service.isWatched(ORG, 4531), false, 'nothing is known before the first load')
+  second.setOrgs([status()])
+  await second.clock.tick(0)
+  assert.equal(second.service.isWatched(ORG, 4531), true)
+  assert.equal(second.updates.at(-1)?.[1]?.find(run => run.buildId === 4531)?.watched, true)
+  assert.equal(runOf(await second.service.snapshot(ORG), 4531).watched, true)
+
+  const before = second.ado.count(isBuildsByIds)
+  await second.clock.tick(30_000)
+  assert.equal(second.ado.count(isBuildsByIds), before + 1, 'the watch job runs again after a restart')
+
+  finish(second.ado, 4531, T0 + 40_000)
+  await second.clock.tick(30_000)
+  assert.deepEqual(store.data[WATCHED], [])
+  second.scheduler.dispose()
+  second.service.dispose()
+  const third = harness({ store })
+  finish(third.ado, 4531, T0 + 40_000)
+  third.setOrgs([status()])
+  await third.clock.tick(0)
+  assert.equal(third.updates.at(-1)?.[1]?.find(run => run.buildId === 4531)?.watched, false, 'a dropped run is not watched after a restart, so it cannot notify again')
+})
+
+test('pressure moves the org to the background cadence for five minutes', async () => {
+  const h = harness()
+  let pressured = true
+  h.ado.on(
+    call => pressured && isMineRuns(call),
+    () => {
+      pressured = false
+      return json(200, { value: [] }, { 'retry-after': '1' })
+    }
+  )
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  assert.equal(h.ado.count(isMineRuns), 2)
+
+  await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  await h.clock.tick(0)
+  const batches = h.ado.count(isBuildsByIds)
+  await h.clock.tick(2 * MINUTE - 1)
+  assert.deepEqual([h.ado.count(isMineRuns), h.ado.count(isBuildsByIds)], [2, batches], 'no visible 30 s load and no 30 s watch')
+  await h.clock.tick(1)
+  assert.equal(h.ado.count(isBuildsByIds), batches + 1, 'the watch runs every 2 minutes')
+
+  await h.clock.tick(3 * MINUTE - 1)
+  assert.equal(h.ado.count(isMineRuns), 2)
+  await h.clock.tick(1)
+  assert.equal(h.ado.count(isMineRuns), 4, 'the next load comes 5 minutes later')
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isMineRuns), 6, 'and then every 30 s again')
+})
+
+test('a forbidden builds list pauses the org; a forbidden approvals list only turns approvals off', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const good = h.posts.at(-1)
+
+  h.ado.on(isMineRuns, () => json(403, { message: 'TF215106: Access denied.' }))
+  await h.clock.tick(30_000)
+  assert.deepEqual(h.posts.at(-1), { ...good, stale: true, message: NEED_BUILD_READ })
+
+  const calls = h.ado.calls.length
+  await h.clock.tick(10 * MINUTE - 1)
+  assert.equal((await h.service.snapshot(ORG)).message, NEED_BUILD_READ)
+  assert.equal((await h.service.refresh(ORG)).message, NEED_BUILD_READ)
+  assert.equal(h.ado.calls.length, calls, 'no calls for 10 minutes')
+  await h.clock.tick(1)
+  await h.service.refresh(ORG)
+  assert.ok(h.ado.calls.length > calls, 'loads resume after 10 minutes')
+
+  const fresh = harness()
+  fresh.ado.on(isRunningRuns, () => json(403, { message: 'TF215106: Access denied.' }))
+  assert.deepEqual(await rejection(fresh.service.refresh(ORG)), new AdoError('forbidden', 403, NEED_BUILD_READ))
+  const before = fresh.ado.calls.length
+  assert.equal((await rejection(fresh.service.snapshot(ORG))).message, NEED_BUILD_READ)
+  assert.equal(fresh.ado.calls.length, before)
+  assert.deepEqual(fresh.posts, [])
+
+  const approvals = harness()
+  approvals.ado.on(isApprovals, () => json(403, { message: 'TF400813: not authorized.' }))
+  approvals.setOrgs([status()])
+  approvals.show()
+  await approvals.clock.tick(0)
+  const snapshot = approvals.posts.at(-1)
+  assert.deepEqual([snapshot?.stale, snapshot?.message, snapshot?.counts], [false, APPROVALS_NEED_ACCESS, { failedRuns: 1, approvals: 0 }])
+  assert.equal(runOf(snapshot, 4520).state, 'running')
+  const tried = approvals.ado.count(isApprovals)
+  await approvals.clock.tick(9 * MINUTE)
+  assert.equal(approvals.ado.count(isMineRuns), 38, 'runs keep loading every 30 s')
+  assert.equal(approvals.ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
+  assert.equal(approvals.posts.at(-1)?.message, APPROVALS_NEED_ACCESS)
+})
+
+test('a failed refresh keeps the last snapshot as stale', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const good = h.posts.at(-1)
+
+  h.ado.on(isMineRuns, () => json(500, { message: OUTAGE }))
+  const stale = await h.service.refresh(ORG)
+  assert.deepEqual(stale, { ...good, stale: true, message: OUTAGE })
+  assert.deepEqual(h.posts.at(-1), stale)
+  const signalled = h.updates.length
+
+  h.failing.orgs = true
+  await h.clock.tick(30_000)
+  assert.deepEqual(h.posts.at(-1), { ...good, stale: true, message: LOAD_FAILED }, 'a failure that is not from Azure DevOps says so plainly')
+  assert.equal(h.updates.length, signalled, 'a failed load leaves the signals alone')
+
+  const fresh = harness()
+  fresh.ado.on(isMineRuns, () => json(500, { message: OUTAGE }))
+  assert.equal((await rejection(fresh.service.refresh(ORG))).message, OUTAGE)
+  assert.deepEqual(fresh.posts, [])
+  const plain = harness()
+  plain.failing.orgs = true
+  assert.equal((await rejection(plain.service.snapshot(ORG))).message, LOAD_FAILED)
+})
+
+test('a snapshot over the post budget is trimmed with the message', async () => {
+  const h = harness()
+  for (let index = 0; index < 40; index += 1) {
+    const queuedAt = T0 - (60 + index) * MINUTE
+    addBuild(h.ado, 5000 + index, {
+      queueTime: iso(queuedAt),
+      finishTime: iso(queuedAt + MINUTE),
+      definition: { id: 30 + index, name: `${index} ${'x'.repeat(7000)}` }
+    })
+  }
+  const stages = fixtureTimeline(h.ado).records
+  const many: RawTimeline = {
+    changeId: 1,
+    records: Array.from({ length: 15 }, (_, index) => ({ ...stages[0], id: `stage-${index}`, name: `Stage ${index}`, identifier: `S${index}`, order: index }))
+  }
+  h.ado.runs.timelines.set(4520, many)
+
+  const snapshot = await h.service.snapshot(ORG)
+  assert.ok(byteLength(snapshot) <= 240 * 1024, `${byteLength(snapshot)} bytes`)
+  assert.equal(snapshot.message, TRIMMED)
+  assert.deepEqual(ids(snapshot.runs).slice(0, 2), [4531, 4520], 'active runs are kept first')
+  const kept = snapshot.runs.slice(2)
+  assert.ok(kept.length > 0 && kept.length < 40)
+  const newest = [...h.ado.runs.builds.values()].filter(raw => raw.status === 'completed').sort((a, b) => Date.parse(b.queueTime ?? '') - Date.parse(a.queueTime ?? ''))
+  assert.deepEqual(ids(kept).sort(), newest.slice(0, kept.length).map(raw => raw.id).sort(), 'then the newest finished runs')
+  assert.equal(runOf(snapshot, 4520).stages?.length, 12, 'at most 12 chips per run')
+  assert.equal(h.service.cachedRun(ORG, 4520)?.stages?.length, 15, 'the worker keeps them all')
+  assert.deepEqual(snapshot.counts, { failedRuns: 1, approvals: 2 }, 'counts are taken before trimming')
+  assert.deepEqual(h.posts, [snapshot])
+
+  const small = harness()
+  for (let index = 0; index < 60; index += 1) {
+    const queuedAt = T0 - (60 + index) * MINUTE
+    for (const project of [{ id: PROJECT, name: 'Fabrikam Web' }, { id: PLATFORM, name: 'Fabrikam Platform' }]) {
+      addBuild(small.ado, (project.id === PROJECT ? 5000 : 6000) + index, { project, queueTime: iso(queuedAt), finishTime: iso(queuedAt + MINUTE) })
+    }
+  }
+  const capped = await small.service.snapshot(ORG)
+  assert.deepEqual([capped.runs.length, capped.message], [100, TRIMMED])
+  assert.deepEqual(ids(capped.runs).slice(0, 2), [4531, 4520])
+})
+
+test('a removed job aborts its requests and nothing is posted after sign-out', async () => {
+  const h = harness()
+  const hung = h.ado.hang(isMineRuns)
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  assert.equal(hung.length, 2)
+
+  h.setOrgs([status({ state: 'disconnected', account: null })])
+  await drain()
+  assert.ok(hung.every(call => call.signal?.aborted), 'every request is aborted')
+  assert.deepEqual(h.posts, [])
+  assert.deepEqual(h.updates, [[ORG, null]])
+
+  for (const after of [[status({ state: 'disconnected', account: null })], []]) {
+    const late = harness()
+    const held = late.ado.hold(isMineRuns)
+    const loading = late.service.snapshot(ORG).catch(() => null)
+    await drain()
+    late.setOrgs(after)
+    held.release()
+    assert.equal(await loading, null)
+    assert.deepEqual(late.posts, [], JSON.stringify(after))
+    assert.ok(late.updates.every(([, runs]) => runs === null), 'nothing is signalled')
+    assert.equal(late.service.cachedRun(ORG, 4520), null)
+  }
+
+  const disposed = harness()
+  const stuck = disposed.ado.hang(isMineRuns)
+  const answer = rejection(disposed.service.snapshot(ORG))
+  await drain()
+  disposed.scheduler.dispose()
+  disposed.service.dispose()
+  await drain()
+  assert.ok(stuck.every(call => call.signal?.aborted))
+  assert.deepEqual(await answer, new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+test('approval returns the cached pair, else reads it fresh', async () => {
+  const h = harness()
+  const snapshot = await h.service.snapshot(ORG)
+  const calls = h.ado.calls.length
+  const pair = await h.service.approval(ORG, { projectId: PROJECT, approvalId: APPROVAL_4520 })
+  assert.deepEqual(pair, { run: runOf(snapshot, 4520), approval: runOf(snapshot, 4520).approvals[0] })
+  assert.equal(h.ado.calls.length, calls, 'from the last snapshot')
+  assert.deepEqual(h.service.cachedRun(ORG, 4520), runOf(snapshot, 4520))
+  assert.equal(h.service.cachedRun(ORG, 1), null)
+
+  const other = harness()
+  const first = await other.service.approval(ORG, { projectId: PROJECT, approvalId: APPROVAL_4520 })
+  assert.deepEqual([first?.run.buildId, first?.run.state, first?.approval.stage, first?.approval.environment], [4520, 'waiting', 'Deploy production', 'production'])
+  assert.deepEqual([isApprovals, isOneBuild, isTimeline, isCheckSuite].map(match => other.ado.count(match)), [1, 1, 1, 1])
+  assert.equal(other.ado.calls.length, 4, 'a fresh read and nothing else')
+
+  other.ado.runs.approvals.delete(APPROVAL_4520)
+  assert.equal(await other.service.approval(ORG, { projectId: PROJECT, approvalId: APPROVAL_4520 }), null, 'gone')
+  assert.deepEqual(await rejection(other.service.approval('fabrikam', { projectId: PROJECT, approvalId: APPROVAL_4520 })), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+test('snapshot answers from memory for 30 s; refresh and becoming visible load in full', async () => {
+  const h = harness()
+  const [first, second] = await Promise.all([h.service.snapshot(ORG), h.service.snapshot(ORG)])
+  assert.deepEqual(first, second)
+  assert.equal(h.ado.count(isMineRuns), 2, 'loads are single-flight')
+  await h.clock.tick(30_000 - 1)
+  assert.deepEqual(await h.service.snapshot(ORG), first)
+  assert.equal(h.ado.count(isMineRuns), 2)
+  await h.clock.tick(1)
+  await h.service.snapshot(ORG)
+  assert.equal(h.ado.count(isMineRuns), 4)
+
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  const lists = h.ado.count(isRunningRuns)
+  const refreshed = await h.service.refresh(ORG)
+  assert.equal(refreshed.updatedAt, T0 + 30_000)
+  assert.equal(h.ado.count(isRunningRuns), lists + 2, 'a hidden refresh still loads in full')
+
+  const shown = harness()
+  shown.setOrgs([status()])
+  await shown.clock.tick(0)
+  await shown.clock.tick(10_000)
+  assert.deepEqual(shown.show(), { ok: true })
+  await drain()
+  assert.equal(shown.ado.count(isRunningRuns), 2, 'becoming visible without a full snapshot loads one')
+  assert.equal(await shown.service.me(ORG), ME)
+  assert.deepEqual(await rejection(shown.service.me('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+function fixtureTimeline(ado: FakePipelines): RawTimeline {
+  return structuredClone(ado.runs.timelines.get(4520) ?? assert.fail('no timeline for 4520'))
+}

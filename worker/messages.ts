@@ -65,6 +65,13 @@ export const UNKNOWN_SHARE_KIND = "That can't be shared."
 export const NOTIFY_FAILED = "Couldn't show a desktop notification."
 export const MORE_UPDATES_BODY = 'Open the Pipelines tab in the Azure DevOps panel to see them.'
 export const YOU_CAN_APPROVE = 'You can approve it.'
+export const RUNS_TRIMMED = 'Showing the newest runs only.'
+export const RUNS_NEED_BUILD_READ = 'Pipelines need Build (Read) access.'
+export const RUNS_LOAD_FAILED = "Couldn't load pipeline runs."
+export const APPROVALS_NEED_ACCESS = 'Pending approvals need more access, so Needs me may be incomplete.'
+export const TOO_MANY_WATCHED = 'You can watch up to 20 runs.'
+export const RUN_ALREADY_FINISHED = 'This run has already finished.'
+export const RUN_GONE = "That run no longer exists, or you can't see it."
 
 export const ALL_JOBS_STAGE = 'All jobs'
 

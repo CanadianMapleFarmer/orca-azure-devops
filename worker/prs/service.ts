@@ -1,6 +1,7 @@
 import type { AutoCompleteOptions, PrKey, PrSnapshot, PrSummary, ReleaseSet } from '../../src/shared/prs'
 import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
 import { linkedAbort } from '../abort'
+import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import {
@@ -14,7 +15,7 @@ import {
   PRS_WORK_ITEMS_NEED_ACCESS
 } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
-import { cachedCodeProjects, createPrSource, type CodeProjects, type FullLoad, type PrSource } from './load'
+import { createPrSource, type FullLoad, type PrSource } from './load'
 import { newestCreatedAt, releaseSets, toReviewOf } from './release-sets'
 
 export interface PrsServiceDeps {

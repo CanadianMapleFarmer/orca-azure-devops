@@ -1,3 +1,4 @@
+import type { RunsSnapshot } from './shared/pipelines'
 import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
@@ -41,13 +42,16 @@ declare module 'orca' {
     'work.cancelWorkspace': { input: {}; output: { ok: true } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
-      input: { surface: 'work' | 'board' | 'prs'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
+      input: { surface: 'work' | 'board' | 'prs' | 'pipelines'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
       output: { ok: true }
     }
     'prs.snapshot': { input: { org: string }; output: PrSnapshot }
     'prs.refresh': { input: { org: string }; output: PrSnapshot }
     'prs.approve': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
     'prs.autoComplete': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
+    'runs.snapshot': { input: { org: string }; output: RunsSnapshot }
+    'runs.refresh': { input: { org: string }; output: RunsSnapshot }
+    'runs.watch': { input: { org: string; projectId: string; buildId: number; watched: boolean }; output: RunsSnapshot }
     'share.prefs': { input: { org: string; kind: ShareKind }; output: SharePrefsView }
     'share.send': { input: ShareRequest; output: { results: ShareResult[] } }
     'share.people': { input: { org: string; query: string; groups: boolean }; output: Identity[] }
@@ -63,5 +67,6 @@ declare module 'orca' {
     'work.changed': WorkSnapshot
     'work.boardChanged': { org: string; teamId: string; boardId: string }
     'prs.changed': PrSnapshot
+    'runs.changed': RunsSnapshot
   }
 }
