@@ -25,6 +25,8 @@ test('the template errors are exact', () => {
   assert.deepEqual(parseTemplate('{id} {nope}', PR_VARS), { error: 'Unknown placeholder {nope} in the share template.' })
   assert.deepEqual(parseTemplate('[{id}]({link})', PR_VARS), { error: 'Unknown placeholder {link} in the share template.' })
   assert.deepEqual(parseTemplate('{id}', ['title']), { error: 'Unknown placeholder {id} in the share template.' })
+  assert.deepEqual(parseTemplate('[]({url}): {title}', PR_VARS), { error: 'The link needs text, like [Pull Request {id}]({url}).' })
+  assert.deepEqual(parseTemplate('[ ]({url})', PR_VARS), { error: 'The link needs text, like [Pull Request {id}]({url}).' })
 })
 
 test('brackets that do not form a link span stay literal text', () => {
@@ -57,4 +59,9 @@ test('a link whose filled target is not an http(s) URL becomes plain text', () =
 
 test('a variable missing from the values fills as empty', () => {
   assert.deepEqual(fillLine(parsed('{id}: {title}'), { id: '7' }), [{ text: '7: ' }])
+})
+
+test('line breaks inside a value fill as single spaces', () => {
+  const segments = fillLine(parsed('{id}: {title}'), { id: '7', title: 'a\nb\r\nc\rd\u2028e\u2029f' })
+  assert.deepEqual(segments, [{ text: '7: a b c d e f' }])
 })

@@ -76,9 +76,18 @@ export function pullRequestUrl(
   repoIdOrName: string,
   prId: number
 ): string {
-  return typeof webUrl === 'string' && webUrl !== ''
-    ? `${webUrl}/pullrequest/${prId}`
-    : pullRequestNamedUrl(org, projectIdOrName, repoIdOrName, prId)
+  const base = typeof webUrl === 'string' ? parsedHref(webUrl) : undefined
+  return base === undefined
+    ? pullRequestNamedUrl(org, projectIdOrName, repoIdOrName, prId)
+    : `${base}/pullrequest/${prId}`
+}
+
+function parsedHref(url: string): string | undefined {
+  try {
+    return new URL(url).href
+  } catch {
+    return undefined
+  }
 }
 
 export function pullRequestNamedUrl(org: string, projectIdOrName: string, repoIdOrName: string, prId: number): string {

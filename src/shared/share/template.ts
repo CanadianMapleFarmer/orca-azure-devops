@@ -5,6 +5,7 @@ export const PR_VARS = ['id', 'title', 'url', 'repo', 'project', 'source', 'targ
 
 export const TEMPLATE_EMPTY = 'The share template is empty.'
 export const TEMPLATE_TWO_LINKS = 'The share template can have only one link.'
+export const TEMPLATE_EMPTY_LINK = 'The link needs text, like [Pull Request {id}]({url}).'
 export const unknownPlaceholder = (name: string): string => `Unknown placeholder {${name}} in the share template.`
 
 type Piece = { readonly text: string } | { readonly variable: string }
@@ -17,6 +18,7 @@ export type ParsedTemplate = { readonly kind: 'parsed'; readonly parts: readonly
 
 const LINK_SPAN = /\[([^\]]*)\]\(([^)]*)\)/g
 const PLACEHOLDER = /\{([^{}]*)\}/g
+const LINE_BREAKS = /\r\n|[\r\n\u2028\u2029]/g
 const WEB_URL = /^https?:\/\/[^\s\u0000-\u001f\u007f/?#][^\s\u0000-\u001f\u007f]*$/i
 
 export function isWebUrl(url: string): boolean {
@@ -42,6 +44,7 @@ export function parseTemplate(template: string, vars: readonly string[]): Parsed
   const spans = [...template.matchAll(LINK_SPAN)]
   if (spans.length > 1) return { error: TEMPLATE_TWO_LINKS }
   const span = spans[0]
+  if (span && span[1].trim() === '') return { error: TEMPLATE_EMPTY_LINK }
   const sources = span
     ? [template.slice(0, span.index), span[1], span[2], template.slice(span.index + span[0].length)]
     : [template]
@@ -63,7 +66,9 @@ export function parseTemplate(template: string, vars: readonly string[]): Parsed
 }
 
 function fill(pieces: readonly Piece[], values: Record<string, string>): string {
-  return pieces.map(piece => ('text' in piece ? piece.text : (values[piece.variable] ?? ''))).join('')
+  return pieces
+    .map(piece => ('text' in piece ? piece.text : (values[piece.variable] ?? '').replace(LINE_BREAKS, ' ')))
+    .join('')
 }
 
 export function fillLine(template: ParsedTemplate, values: Record<string, string>): Segment[] {

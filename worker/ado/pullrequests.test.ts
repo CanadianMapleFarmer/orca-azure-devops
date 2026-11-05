@@ -128,6 +128,15 @@ test('toPrSummary builds the web URL from names when webUrl is missing', () => {
   assert.equal(toPrSummary(raw, ORG).url, 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/4101')
 })
 
+test('toPrSummary percent-encodes a raw space in webUrl and falls back to names when webUrl cannot be parsed', () => {
+  const spaced = mine(0)
+  spaced.repository.webUrl = 'https://dev.azure.com/contoso/Fabrikam Web/_git/web-app'
+  assert.equal(toPrSummary(spaced, ORG).url, 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/4101')
+  const unparsable = mine(0)
+  unparsable.repository.webUrl = 'not a url'
+  assert.equal(toPrSummary(unparsable, ORG).url, 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/4101')
+})
+
 test('toReviewer maps a group and treats a missing vote as 0', () => {
   const group = toReviewer({ id: TEAM, displayName: 'Team', isContainer: true })
   assert.deepEqual(group, { id: TEAM, name: 'Team', uniqueName: '', vote: 0, isRequired: false, isGroup: true, hasDeclined: false })
