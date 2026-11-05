@@ -12,6 +12,7 @@ type ActionRequest = 'prs.approve' | 'prs.autoComplete'
 export const snapshot = atom<PrSnapshot | null>(null)
 export const load = atom<Load>({ status: 'idle' })
 export const notice = atom<string | null>(null)
+export const reviewNotice = atom<string | null>(null)
 export const refreshing = atom(false)
 export const toReviewOpen = atom(false)
 const outcomes = atom<Outcome[]>([])
@@ -51,6 +52,7 @@ function align(org: string | null, visibleOrg: string | null): void {
     set(acting, [])
     set(toReviewOpen, false)
     set(notice, null)
+    set(reviewNotice, null)
     set(refreshing, false)
     set(load, { status: 'idle' })
   }
@@ -92,9 +94,9 @@ export const setToReviewOpen = (open: boolean): void => set(toReviewOpen, open)
 export function openPr(url: string): void {
   const org = read(source)
   const opening = shell.openExternal(url)
-  set(notice, null)
+  set(reviewNotice, null)
   const show = (text: string): void => {
-    if (read(source) === org) set(notice, text)
+    if (read(source) === org) set(reviewNotice, text)
   }
   opening.then(
     result => {

@@ -381,6 +381,12 @@ test('a set that fits shows no pull request note', async () => {
   assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
 })
 
+function assertInToReview(callout: { path: string } | null): void {
+  const section = panel.find({ type: 'Collapsible', label: 'To review (1)' })
+  assert.ok(callout && section, 'the notice and the To review section are drawn')
+  assert.equal(callout.path, `${section.path}/#0/#0`, 'the notice is the first thing under the To review header')
+}
+
 async function pressReview(answer: unknown) {
   const host = await open(snapshotOf({ toReview: [prOf(80, { title: 'Cache the lookups' })], toReviewCount: 1 }))
   host.respond('shell.openExternal', answer)
@@ -395,6 +401,7 @@ test('a link Orca refuses to open shows the error message and the next press cle
   })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, 'Orca could not open the link.')
+  assertInToReview(panel.find({ type: 'Callout' }))
   host.respond('shell.openExternal', { opened: true })
   await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
   assert.equal(panel.find({ type: 'Callout' }), null)
@@ -405,6 +412,7 @@ test('a link Orca could not ask about shows a fixed message', async () => {
   await pressReview({ opened: false, reason: 'consent-unavailable' })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, OPEN_UNAVAILABLE)
+  assertInToReview(panel.find({ type: 'Callout' }))
 })
 
 test('a link the person declined to open stays silent', async () => {

@@ -3,7 +3,7 @@ import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type PrSnapshot, type 
 import type { OrgStatus } from '../../shared/types'
 import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
 import { ReleaseSetCard } from './release-set'
-import { load, notice, openPr, refresh, refreshing, retryLoad, setToReviewOpen, snapshot, toReviewOpen } from './state'
+import { load, notice, openPr, refresh, refreshing, retryLoad, reviewNotice, setToReviewOpen, snapshot, toReviewOpen } from './state'
 
 const MAX_SETS = 30
 const MAX_ROWS = 150
@@ -70,9 +70,11 @@ function Sets({ org, current }: { org: string; current: PrSnapshot }): OrcaNode 
 function ToReview({ current }: { current: PrSnapshot }): OrcaNode {
   if (current.toReviewCount === 0 && current.toReview.length === 0) return null
   const shown = current.toReview.slice(0, MAX_TO_REVIEW)
+  const failure = read(reviewNotice)
   return (
     <Collapsible title={`To review (${current.toReviewCount})`} open={read(toReviewOpen)} onChange={setToReviewOpen}>
       <Stack gap="sm">
+        {failure ? <Callout tone="danger">{failure}</Callout> : null}
         <List label="To review">
           {shown.map(pr => (
             <ListItem key={pr.prId} title={pr.title} description={`Pull Request ${pr.prId} · ${pr.repoName} · ${pr.createdBy.name}`} onPress={() => openPr(pr.url)} />
