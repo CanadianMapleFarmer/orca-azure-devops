@@ -15,6 +15,7 @@ export async function postToWebhook(fetchFn: typeof fetch, url: string, payload:
       signal: deadline.signal
     })
     status = response.status
+    await response.body?.cancel().catch(() => {})
   } catch {
     throw new Error(TEAMS_UNREACHABLE)
   } finally {

@@ -7,9 +7,10 @@ import type { Person, ShareDestination, ShareMessage } from '../../src/shared/sh
 import type { Identity, OrgStatus } from '../../src/shared/types'
 import { AdoError, createAdoHttp } from '../ado/http'
 import type { SecretsPort } from '../auth/pat'
+import type { StorePort } from '../connections'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { createScheduler } from '../poll/scheduler'
-import { fakePrs, isOnePr, ME } from '../prs/fake-prs'
+import { fakePrs, isOnePr, isPrWorkItems, ME } from '../prs/fake-prs'
 import { createPrsService } from '../prs/service'
 import { prShareSource } from '../prs/share-source'
 import type { Clipboard } from '../sys/clipboard'
@@ -74,7 +75,7 @@ interface RealDestinations {
   reviewers: WorkerDestination
 }
 
-function harness(pick: (real: RealDestinations) => WorkerDestination[] = real => [real.copy, real.channel, real.reviewers]) {
+function harness(pick: (real: RealDestinations) => WorkerDestination[] = real => [real.copy, real.channel, real.reviewers], seed: Record<string, unknown> = {}) {
   const ado = fakePrs()
   ado.on(isPutReviewer, call => json(200, { id: REVIEWER.exec(call.path)?.[2], ...call.body }))
   ado.on(isSubjectQuery, call => {
@@ -87,7 +88,18 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     return json(200, { value: fixture<{ value: { subjectDescriptor: string }[] }>('identities').value.filter(identity => wanted.has(identity.subjectDescriptor)) })
   })
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
-  const { data: storage, store } = memoryStore()
+  const memory = memoryStore(seed)
+  const storage = memory.data
+  const failing = { prefs: false }
+  const store: StorePort = {
+    get: memory.store.get,
+    set: async (key, value) => {
+      if (failing.prefs && key.startsWith('share:prefs:')) throw new Error(`storage refused ${JSON.stringify(value)}`)
+      await memory.store.set(key, value)
+    }
+  }
+  const logs: string[] = []
+  const log = (message: string) => void logs.push(message)
   const secretData: Record<string, string> = {}
   const secrets: SecretsPort = {
     get: async key => secretData[key] ?? null,
@@ -99,7 +111,7 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     }
   }
   let next = 0
-  const channels = createChannelStore({ store, secrets, newId: () => `channel-${++next}`, now: () => T0 })
+  const channels = createChannelStore({ store, secrets, newId: () => `channel-${++next}`, now: () => T0, log })
   const posted: { url: string; body: any }[] = []
   const answer = { status: 202 }
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -131,15 +143,16 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     channels,
     fetch: fetchFn,
     orgs: async () => structuredClone(orgs),
-    sources: { pr: prShareSource(prs, { shareTemplate: () => template.value }) },
-    destinations: pick({ copy: copyDestination(clipboard), channel: channelDestination(channels, fetchFn), reviewers: reviewersDestination(http) })
+    sources: { pr: prShareSource(http, prs, { shareTemplate: () => template.value }) },
+    destinations: pick({ copy: copyDestination(clipboard), channel: channelDestination(channels, fetchFn), reviewers: reviewersDestination(http) }),
+    log
   })
   const puts = () =>
     ado.calls
       .filter(isPutReviewer)
       .map(call => ({ prId: Number(REVIEWER.exec(call.path)?.[1]), reviewer: REVIEWER.exec(call.path)?.[2], body: call.body }))
       .sort((a, b) => a.prId - b.prId)
-  return { ado, storage, channels, posted, answer, copies, prs, template, share, puts }
+  return { ado, storage, failing, logs, channels, posted, answer, copies, prs, template, share, puts }
 }
 
 function recording(kind: ShareDestination['kind'], seen: { ctx: DestinationContext; destination: ShareDestination }[]): WorkerDestination {
@@ -162,6 +175,7 @@ function exploding(kind: ShareDestination['kind']): WorkerDestination {
 }
 
 const notConnected = (error: unknown) => error instanceof AdoError && error.message === NOT_CONNECTED
+const failsWith = (message: string) => (error: unknown) => error instanceof Error && error.message === message
 
 test('send copies, posts and adds reviewers, one result per destination', async () => {
   const h = harness()
@@ -206,7 +220,7 @@ test("a destination failure doesn't stop the others", async () => {
   })
   assert.deepEqual(failed.results, [
     { destination: 'channel:channel-1', ok: false, text: "Teams didn't accept the post (HTTP 404). If the workflow changed, replace its URL." },
-    { destination: 'reviewers', ok: false, text: `Couldn't add reviewers to Pull Request 4101: ${NO_PERMISSION}` },
+    { destination: 'reviewers', ok: false, text: `Couldn't add Nia Okafor to Pull Request 4101: ${NO_PERMISSION}` },
     { destination: 'copy', ok: true, text: 'Copied as rich text.' }
   ])
 
@@ -241,7 +255,7 @@ test('items come from the PR source by key', async () => {
   assert.deepEqual(seen[1].ctx.message.lines, [MESSAGE.lines[0]])
   assert.equal(h.ado.count(isOnePr), reads, 'a loaded pull request comes from the cache')
 
-  await assert.rejects(send(['pr:not-a-key']), (error: unknown) => error instanceof Error && error.message === 'Choose at least one pull request to share.')
+  await assert.rejects(send(['pr:not-a-key']), (error: unknown) => error instanceof Error && error.message === 'Choose at least one item to share.')
   assert.equal(seen.length, 2)
 })
 
@@ -356,11 +370,77 @@ test('test posts the test card and says sent (accepted)', async () => {
   })
   assert.equal(h.posted.length, 1)
   assert.equal(h.posted[0].url, WEBHOOK)
-  assert.deepEqual(h.posted[0].body.attachments[0].content.body, [{ type: 'TextBlock', text: 'Azure DevOps for Orca can post to this channel.', wrap: true }])
+  assert.deepEqual(h.posted[0].body.attachments[0].content.body, [
+    { type: 'RichTextBlock', inlines: [{ type: 'TextRun', text: 'Azure DevOps for Orca can post to this channel.' }] }
+  ])
 
   h.answer.status = 429
   assert.deepEqual(await h.share.test(channel.id), { destination: 'channel:channel-1', ok: false, text: 'Teams is throttling posts. Try again in a minute.' })
   assert.deepEqual(await h.share.test('channel-9'), { destination: 'channel:channel-9', ok: false, text: 'That channel no longer exists.' })
   assert.equal(h.posted.length, 2)
   assert.equal(h.share.channels, h.channels)
+})
+
+test('a failed prefs write is logged and never fails the send', async () => {
+  const h = harness()
+  const channel = await h.channels.add('Release train', WEBHOOK)
+  h.failing.prefs = true
+  const { results } = await h.share.send({ org: ORG, kind: 'pr', keys: [KEY_A], intro: '', destinations: [{ kind: 'channel', id: channel.id }] })
+  assert.deepEqual(results, [{ destination: 'channel:channel-1', ok: true, text: 'Sent to Release train (accepted).' }])
+  assert.deepEqual(h.logs, ["Couldn't save the share choices."])
+  assert.equal(h.storage['share:prefs:contoso'], undefined)
+})
+
+test('uncached pull requests are read without their work items', async () => {
+  const h = harness()
+  h.ado.on(isPrWorkItems, () => json(500, { message: 'TF400733: the work item service is unavailable.' }))
+  const { results } = await h.share.send({ org: ORG, kind: 'pr', keys: [KEY_A, KEY_B], intro: 'Ready for QA.', destinations: [{ kind: 'copy' }] })
+  assert.deepEqual(results, [{ destination: 'copy', ok: true, text: 'Copied as rich text.' }])
+  assert.equal(h.copies[0].plain, PLAIN)
+  assert.equal(h.ado.count(isOnePr), 2)
+  assert.equal(h.ado.count(isPrWorkItems), 0)
+})
+
+test('a send over 50 items or 20 people is refused before anything happens', async () => {
+  const seen: { ctx: DestinationContext; destination: ShareDestination }[] = []
+  const h = harness(() => [recording('copy', seen), recording('reviewers', seen)])
+  const people = (count: number): Person[] => Array.from({ length: count }, (_, index) => ({ ...NIA, id: `person-${index}`, displayName: `Person ${index}` }))
+  const many = Array.from({ length: 51 }, (_, index) => prItemKey({ ...PR_A, prId: 5000 + index }))
+  const send = (keys: string[], destinations: ShareDestination[]) => h.share.send({ org: ORG, kind: 'pr', keys, intro: '', destinations })
+
+  await assert.rejects(send(many, [{ kind: 'copy' }]), failsWith('Share up to 50 items at a time.'))
+  await assert.rejects(send([KEY_A], [{ kind: 'copy' }, { kind: 'reviewers', people: people(21) }]), failsWith('Choose up to 20 people.'))
+  await assert.rejects(send([KEY_A], [{ kind: 'copy' }, { kind: 'chat', people: people(21) }]), failsWith('Choose up to 20 people.'))
+  assert.deepEqual([seen, h.storage, h.ado.calls.length], [[], {}, 0])
+
+  const { results } = await send([KEY_A], [{ kind: 'chat', people: people(20) }, { kind: 'reviewers', people: people(20) }])
+  assert.deepEqual(results, [{ destination: 'reviewers', ok: true, text: 'reviewers done' }])
+  assert.equal((await h.share.prefs(ORG, 'pr')).prefs.destinations.length, 2)
+})
+
+test('corrupt stored prefs are dropped entry by entry, never thrown', async () => {
+  const crowd = Array.from({ length: 25 }, (_, index) => ({ ...GRACE, id: `person-${index}` }))
+  const h = harness(undefined, {
+    'share:channels': [{ id: 'channel-1', name: 'Release train', service: 'teams', addedAt: T0 }],
+    'share:prefs:contoso': {
+      destinations: [
+        null,
+        'copy',
+        42,
+        { kind: 'chat' },
+        { kind: 'chat', people: 'Grace Hopper' },
+        { kind: 'reviewers', people: [null, { id: 7 }, { displayName: 'No id' }, { ...NIA, vote: 10 }] },
+        { kind: 'channel' },
+        { kind: 'channel', id: 'channel-1', url: WEBHOOK },
+        { kind: 'email', people: [GRACE] },
+        { kind: 'copy', extra: true },
+        { kind: 'chat', people: crowd }
+      ]
+    },
+    'share:prefs:fabrikam': { destinations: 'copy' }
+  })
+  assert.deepEqual((await h.share.prefs(ORG, 'pr')).prefs, {
+    destinations: [{ kind: 'reviewers', people: [NIA] }, { kind: 'channel', id: 'channel-1' }, { kind: 'copy' }, { kind: 'chat', people: crowd.slice(0, 20) }]
+  })
+  assert.deepEqual((await h.share.prefs('fabrikam', 'pr')).prefs, { destinations: [{ kind: 'copy' }] })
 })

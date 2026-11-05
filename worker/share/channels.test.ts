@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { SecretsPort } from '../auth/pat'
+import type { StorePort } from '../connections'
 import { memoryStore } from '../test-support'
 import { checkWebhookUrl, createChannelStore } from './channels'
 
@@ -23,9 +24,18 @@ function refusalOf(input: string): string {
 }
 
 function setup() {
-  const { data: storage, store } = memoryStore()
+  const memory = memoryStore()
+  const storage = memory.data
   const secretData: Record<string, string> = {}
-  const failing = { set: false, delete: false }
+  const failing = { set: false, delete: false, store: false }
+  const logs: string[] = []
+  const store: StorePort = {
+    get: memory.store.get,
+    set: async (key, value) => {
+      if (failing.store) throw new Error('storage is full')
+      await memory.store.set(key, value)
+    }
+  }
   const secrets: SecretsPort = {
     get: async key => secretData[key] ?? null,
     set: async (key, value) => {
@@ -38,8 +48,8 @@ function setup() {
     }
   }
   let next = 0
-  const channels = createChannelStore({ store, secrets, newId: () => `channel-${++next}`, now: () => T0 })
-  return { storage, secretData, failing, channels }
+  const channels = createChannelStore({ store, secrets, newId: () => `channel-${++next}`, now: () => T0, log: message => logs.push(message) })
+  return { storage, secretData, failing, logs, channels }
 }
 
 test('add keeps the URL only in secrets and returns metadata', async () => {
@@ -136,6 +146,27 @@ test('list returns only channel metadata, whatever storage holds', async () => {
     ]
   })
   const secrets: SecretsPort = { get: async () => null, set: async () => {}, delete: async () => {} }
-  const channels = createChannelStore({ store, secrets, newId: () => 'unused', now: () => T0 })
+  const channels = createChannelStore({ store, secrets, newId: () => 'unused', now: () => T0, log: () => {} })
   assert.deepEqual(await channels.list(), [{ id: 'channel-1', name: 'Release train', service: 'teams', addedAt: T0 }])
+})
+
+test('channel names are trimmed and at most 100 characters', async () => {
+  const { storage, secretData, channels } = setup()
+  const longest = 'R'.repeat(100)
+  assert.equal((await channels.add(`  ${longest}\t`, WEBHOOK)).name, longest)
+  await assert.rejects(channels.add(`${'Q'.repeat(101)}`, ROTATED), failsWith('Keep the channel name under 100 characters.'))
+  assert.equal((storage['share:channels'] as unknown[]).length, 1)
+  assert.equal(Object.keys(secretData).length, 1)
+})
+
+test('a failed metadata write takes the secret back, and logs when it cannot', async () => {
+  const { storage, secretData, failing, logs, channels } = setup()
+  failing.store = true
+  await assert.rejects(channels.add('Release train', WEBHOOK), failsWith('storage is full'))
+  assert.deepEqual([storage, secretData, logs], [{}, {}, []])
+
+  failing.delete = true
+  await assert.rejects(channels.add('Release train', WEBHOOK), failsWith('storage is full'))
+  assert.deepEqual(logs, ["Couldn't remove the saved URL of a Teams channel that failed to save."])
+  assert.ok(!JSON.stringify(logs).includes(SIG))
 })

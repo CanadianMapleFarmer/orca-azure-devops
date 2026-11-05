@@ -51,11 +51,17 @@ export const CHANNEL_URL_MISSING = "This channel's webhook URL is missing. Repla
 export const SECRETS_UNAVAILABLE = "Orca can't store secrets on this system, so Teams channels are unavailable."
 export const TEAMS_THROTTLED = 'Teams is throttling posts. Try again in a minute.'
 export const TEAMS_UNREACHABLE = "Couldn't reach Teams."
-export const CARD_TOO_LARGE = 'Too much to post at once. Share fewer pull requests.'
+export const CARD_TOO_LARGE = 'Too much to post at once. Share fewer items.'
 export const CHANNEL_TEST_INTRO = 'Azure DevOps for Orca can post to this channel.'
 export const CHANNEL_TEST_SENT = "Sent (accepted). Teams doesn't confirm delivery; check the channel."
 export const NO_REVIEWERS_CHOSEN = 'Choose people to add as reviewers.'
-export const NOTHING_TO_SHARE = 'Choose at least one pull request to share.'
+export const NOTHING_TO_SHARE = 'Choose at least one item to share.'
+export const TOO_MANY_ITEMS = 'Share up to 50 items at a time.'
+export const TOO_MANY_PEOPLE = 'Choose up to 20 people.'
+export const CHANNEL_NAME_TOO_LONG = 'Keep the channel name under 100 characters.'
+export const NO_PULL_REQUESTS_FOR_REVIEWERS = 'There are no pull requests to add reviewers to.'
+export const SHARE_PREFS_NOT_SAVED = "Couldn't save the share choices."
+export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams channel that failed to save."
 export const UNKNOWN_SHARE_KIND = "That can't be shared."
 
 export const MALFORMED = {
@@ -106,8 +112,8 @@ export function alreadyReviewer(name: string, prId: number): string {
   return `${name} is already on Pull Request ${prId}.`
 }
 
-export function reviewersNotAdded(prId: number, reason: string): string {
-  return `Couldn't add reviewers to Pull Request ${prId}: ${reason}`
+export function reviewerNotAdded(name: string, prId: number, reason: string): string {
+  return `Couldn't add ${name} to Pull Request ${prId}: ${reason}`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

@@ -38,7 +38,8 @@ export function deactivate(): Promise<void> {
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const home = os.homedir()
   const bar = createStatusBar(state => void orca.host.call('statusBar.update', { id: 'status', ...state }).catch(() => {}))
-  const prSettings = await watchPrSettings(orca.settings, message => orca.log(message))
+  const log = (message: string) => orca.log(message)
+  const prSettings = await watchPrSettings(orca.settings, log)
 
   const store: StorePort = {
     get: async <T,>(key: string) => (await orca.storage.get(key)) as T | null,
@@ -93,17 +94,18 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     home,
     exists: existsSync,
     list: dir => readdirSync(dir),
-    log: message => orca.log(message)
+    log
   })
-  const channels = createChannelStore({ store, secrets: orca.secrets, newId: () => crypto.randomUUID(), now: Date.now })
+  const channels = createChannelStore({ store, secrets: orca.secrets, newId: () => crypto.randomUUID(), now: Date.now, log })
   const share = createShareService({
     http: connections.http,
     store,
     channels,
     fetch: globalThis.fetch,
     orgs: () => connections.list(),
-    sources: { pr: prShareSource(prs, prSettings) },
-    destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(connections.http)]
+    sources: { pr: prShareSource(connections.http, prs, prSettings) },
+    destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(connections.http)],
+    log
   })
   stopPolling = () => {
     scheduler.dispose()

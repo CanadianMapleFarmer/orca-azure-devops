@@ -816,3 +816,35 @@ test('webhook failures never mention the URL', async () => {
     }
   )
 })
+
+test('a stored webhook URL that is not https is never posted', async () => {
+  const ado = fakePrs()
+  const insecure = WEBHOOK.replace('https:', 'http:')
+  const posted: string[] = []
+  const host = mockHost({
+    capabilities: CAPABILITIES,
+    storage: {
+      orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME } }],
+      'share:channels': [{ id: 'channel-1', name: 'Release train', service: 'teams', addedAt: 0 }]
+    },
+    secrets: { 'pat:contoso': PAT, 'teams-webhook:channel-1': insecure }
+  })
+  const webhook = {
+    respond: (url: string) => {
+      posted.push(url)
+      return new Response(null, { status: 202 })
+    }
+  }
+  await withFetch(withWebhook(ado, webhook), async () => {
+    await withWorker(worker, { host }, async w => {
+      const refused = { destination: 'channel:channel-1', ok: false, text: "That isn't a valid https webhook URL." }
+      const share = { org: 'contoso', kind: 'pr' as const, keys: [`pr:${PROJECT}/${REPO}/4101`], intro: '', destinations: [{ kind: 'channel' as const, id: 'channel-1' }] }
+      const answers = [await outcome(w.request('share.testChannel', { id: 'channel-1' })), await outcome(w.request('share.send', share))]
+      assert.deepEqual(answers, [refused, { results: [refused] }])
+      assert.deepEqual(posted, [], 'nothing was sent to the stored URL')
+      const seen = exposed(w, answers)
+      for (const secret of [insecure, SIG]) assert.ok(!seen.includes(secret), 'the stored URL leaked')
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})

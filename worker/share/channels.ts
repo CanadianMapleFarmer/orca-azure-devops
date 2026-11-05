@@ -6,6 +6,8 @@ import {
   CHANNEL_LIMIT,
   CHANNEL_NAME_EMPTY,
   CHANNEL_NAME_TAKEN,
+  CHANNEL_NAME_TOO_LONG,
+  CHANNEL_SECRET_LEFT,
   SECRETS_UNAVAILABLE,
   WEBHOOK_URL_EMPTY,
   WEBHOOK_URL_INVALID
@@ -24,11 +26,13 @@ export interface ChannelStoreDeps {
   secrets: SecretsPort
   newId: () => string
   now: () => number
+  log: (message: string) => void
 }
 
 const CHANNELS_KEY = 'share:channels'
 const MAX_CHANNELS = 20
 const MAX_URL_LENGTH = 4096
+const MAX_NAME_LENGTH = 100
 
 export function checkWebhookUrl(input: string): string {
   const text = input.trim()
@@ -38,7 +42,7 @@ export function checkWebhookUrl(input: string): string {
   return text
 }
 
-export function createChannelStore({ store, secrets, newId, now }: ChannelStoreDeps): ChannelStore {
+export function createChannelStore({ store, secrets, newId, now, log }: ChannelStoreDeps): ChannelStore {
   let queue: Promise<unknown> = Promise.resolve()
 
   function serially<T>(change: () => Promise<T>): Promise<T> {
@@ -67,6 +71,7 @@ export function createChannelStore({ store, secrets, newId, now }: ChannelStoreD
       serially(async () => {
         const label = name.trim()
         if (label === '') throw new Error(CHANNEL_NAME_EMPTY)
+        if (label.length > MAX_NAME_LENGTH) throw new Error(CHANNEL_NAME_TOO_LONG)
         const checked = checkWebhookUrl(url)
         const channels = await list()
         if (channels.some(channel => channel.name.toLowerCase() === label.toLowerCase())) throw new Error(CHANNEL_NAME_TAKEN)
@@ -76,7 +81,7 @@ export function createChannelStore({ store, secrets, newId, now }: ChannelStoreD
         try {
           await store.set(CHANNELS_KEY, [...channels, channel])
         } catch (error) {
-          await secrets.delete(secretKey(channel.id)).catch(() => {})
+          await secrets.delete(secretKey(channel.id)).catch(() => log(CHANNEL_SECRET_LEFT))
           throw error
         }
         return channel

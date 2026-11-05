@@ -29,6 +29,7 @@ const PLAIN = `Ready for QA.\n\nPull Request 4101: Add vehicle search filters ${
 
 const GRACE: Person = { id: 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d', displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example', kind: 'user', required: false }
 const NIA: Person = { id: 'e5f6a7b8-5555-4eaf-9fb1-3c4d5e6f7081', displayName: 'Nia Okafor', uniqueName: 'nia@contoso.example', kind: 'user', required: true }
+const OMAR: Person = { id: 'f6a7b8c9-5555-4fb0-8ac2-4d5e6f708192', displayName: 'Omar Haddad', uniqueName: 'omar@contoso.example', kind: 'user', required: false }
 
 const REVIEWERS = /^\/contoso\/[^/]+\/_apis\/git\/repositories\/[^/]+\/pullRequests\/(\d+)\/reviewers$/
 const REVIEWER = /^\/contoso\/[^/]+\/_apis\/git\/repositories\/[^/]+\/pullRequests\/(\d+)\/reviewers\/([^/]+)$/
@@ -71,16 +72,44 @@ test('adding an existing reviewer never resets their vote', async () => {
   ])
 })
 
-test('a reviewer refusal on one pull request is reported and the others still get added', async () => {
+test('a reviewer refusal on one pull request is reported per person and the others still get added', async () => {
   const { ado, http, puts } = reviewersSetup()
   ado.on(call => isPutReviewer(call) && prOf(call) === 4102, () => json(403, { message: NO_PERMISSION }))
-  const results = await reviewersDestination(http).send(context({ prs: [key(4101), key(4102), key(4103)] }), { kind: 'reviewers', people: [NIA] })
-  assert.deepEqual(puts().map(put => put.prId).sort(), [4101, 4102, 4103])
+  const results = await reviewersDestination(http).send(context({ prs: [key(4101), key(4102), key(4103)] }), { kind: 'reviewers', people: [NIA, OMAR] })
+  assert.deepEqual(puts().map(put => put.prId).sort(), [4101, 4101, 4102, 4102, 4103, 4103])
   assert.deepEqual(results, [
     {
       destination: 'reviewers',
       ok: false,
-      text: `Added Nia Okafor to 2 pull requests. Couldn't add reviewers to Pull Request 4102: ${NO_PERMISSION}`
+      text: [
+        'Added Nia Okafor, Omar Haddad to 2 pull requests.',
+        `Couldn't add Nia Okafor to Pull Request 4102: ${NO_PERMISSION}`,
+        `Couldn't add Omar Haddad to Pull Request 4102: ${NO_PERMISSION}`
+      ].join(' ')
+    }
+  ])
+})
+
+test('the added note counts each person by the pull requests they were added to', async () => {
+  const { ado, http, puts } = reviewersSetup()
+  const reviewers = fixture<{ value: unknown[] }>('pull-request-reviewers')
+  ado.on(call => isListReviewers(call) && prOf(call) === 4102, () => json(200, { value: [...reviewers.value, { id: NIA.id, displayName: NIA.displayName, vote: 5 }] }))
+  const results = await reviewersDestination(http).send(context(), { kind: 'reviewers', people: [NIA, OMAR] })
+  assert.deepEqual(
+    puts()
+      .sort((a, b) => a.prId - b.prId)
+      .map(put => [put.prId, put.reviewer]),
+    [
+      [4101, NIA.id],
+      [4101, OMAR.id],
+      [4102, OMAR.id]
+    ]
+  )
+  assert.deepEqual(results, [
+    {
+      destination: 'reviewers',
+      ok: true,
+      text: 'Added Nia Okafor to 1 pull request. Added Omar Haddad to 2 pull requests. Nia Okafor is already on Pull Request 4102.'
     }
   ])
 })
@@ -94,6 +123,8 @@ test('each person is added once, and adding nobody is refused', async () => {
   const calls = ado.calls.length
   const nobody = await reviewersDestination(http).send(context(), { kind: 'reviewers', people: [] })
   assert.deepEqual(nobody, [{ destination: 'reviewers', ok: false, text: 'Choose people to add as reviewers.' }])
+  const nothing = await reviewersDestination(http).send(context({ prs: [] }), { kind: 'reviewers', people: [NIA] })
+  assert.deepEqual(nothing, [{ destination: 'reviewers', ok: false, text: 'There are no pull requests to add reviewers to.' }])
   assert.equal(ado.calls.length, calls)
 })
 
@@ -131,9 +162,10 @@ test('a failed copy returns the plain text to copy by hand', async () => {
   }
 })
 
-function channelSetup(seed: Record<string, unknown> = {}) {
+function channelSetup(seed: Record<string, unknown> = {}, secretSeed: Record<string, string> = {}) {
   const { store } = memoryStore(seed)
-  const secretData: Record<string, string> = {}
+  const secretData: Record<string, string> = { ...secretSeed }
+  const logs: string[] = []
   const secrets: SecretsPort = {
     get: async key => secretData[key] ?? null,
     set: async (key, value) => {
@@ -143,14 +175,14 @@ function channelSetup(seed: Record<string, unknown> = {}) {
       delete secretData[key]
     }
   }
-  const channels = createChannelStore({ store, secrets, newId: () => 'channel-1', now: () => T0 })
+  const channels = createChannelStore({ store, secrets, newId: () => 'channel-1', now: () => T0, log: message => logs.push(message) })
   const posted: { url: string; body: unknown }[] = []
   const answer = { status: 202 }
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     posted.push({ url: String(input), body: JSON.parse(String(init?.body)) })
     return new Response(null, { status: answer.status })
   }) as typeof fetch
-  return { channels, posted, answer, destination: channelDestination(channels, fetchFn) }
+  return { channels, posted, answer, logs, destination: channelDestination(channels, fetchFn) }
 }
 
 test('a channel post carries the card and the sharer and says sent (accepted)', async () => {
@@ -181,7 +213,26 @@ test('a channel with a missing secret says to replace it', async () => {
   ])
   const huge: ShareMessage = { intro: 'x'.repeat(30_000), lines: [] }
   assert.deepEqual(await destination.send(context({ message: huge }), { kind: 'channel', id: 'channel-1' }), [
-    { destination: 'channel:channel-1', ok: false, text: 'Too much to post at once. Share fewer pull requests.' }
+    { destination: 'channel:channel-1', ok: false, text: 'Too much to post at once. Share fewer items.' }
   ])
   assert.equal(posted.length, 1)
+})
+
+test('a stored URL that is not https is never posted', async () => {
+  const stored = [
+    WEBHOOK.replace('https:', 'http:'),
+    WEBHOOK.replace('https://', 'https://ada:hunter2@'),
+    `javascript:fetch('${WEBHOOK}')`,
+    'not a url'
+  ]
+  for (const url of stored) {
+    const { posted, logs, destination } = channelSetup(
+      { 'share:channels': [{ id: 'channel-1', name: 'Release train', service: 'teams', addedAt: T0 }] },
+      { 'teams-webhook:channel-1': url }
+    )
+    const results = await destination.send(context(), { kind: 'channel', id: 'channel-1' })
+    assert.deepEqual(results, [{ destination: 'channel:channel-1', ok: false, text: "That isn't a valid https webhook URL." }], url)
+    assert.deepEqual(posted, [], url)
+    assert.ok(!JSON.stringify([results, logs]).includes(SIG), url)
+  }
 })

@@ -82,3 +82,22 @@ test('a post that takes longer than the timeout is abandoned as unreachable', as
   assert.ok(Date.now() - started < 2_000)
   assert.equal(posted[0].init.signal?.aborted, true)
 })
+
+test('the response body is cancelled, never left open', async () => {
+  for (const status of [202, 404]) {
+    const cancelled: number[] = []
+    const body = new ReadableStream({ cancel: () => void cancelled.push(status) })
+    const outcome = await postToWebhook(answering(() => new Response(body, { status })).fetch, WEBHOOK, PAYLOAD).then(
+      () => 'accepted',
+      (error: unknown) => (error as Error).message
+    )
+    assert.equal(outcome, status === 202 ? 'accepted' : refused(404))
+    assert.deepEqual(cancelled, [status])
+  }
+  const stubborn = new ReadableStream({
+    cancel: () => {
+      throw new Error('the stream refused to cancel')
+    }
+  })
+  assert.equal(await postToWebhook(answering(() => new Response(stubborn, { status: 202 })).fetch, WEBHOOK, PAYLOAD), undefined)
+})

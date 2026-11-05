@@ -12,14 +12,15 @@ import {
   CHANNEL_URL_MISSING,
   COPIED_HTML,
   COPIED_RICH,
+  NO_PULL_REQUESTS_FOR_REVIEWERS,
   NO_REVIEWERS_CHOSEN,
-  reviewersNotAdded,
+  reviewerNotAdded,
   sentTo,
   sharedBy
 } from '../messages'
 import type { Clipboard } from '../sys/clipboard'
 import { adaptiveCard, webhookPayload } from './card'
-import type { ChannelStore } from './channels'
+import { checkWebhookUrl, type ChannelStore } from './channels'
 import { postToWebhook } from './webhook'
 
 export interface DestinationContext {
@@ -38,7 +39,7 @@ interface PrOutcome {
   prId: number
   added: Person[]
   already: Person[]
-  failure: string | null
+  failures: { person: Person; reason: string }[]
 }
 
 const PRS_AT_A_TIME = 3
@@ -65,9 +66,9 @@ export function copyDestination(clipboard: Clipboard): WorkerDestination {
 export async function postToChannel(channels: ChannelStore, fetchFn: typeof fetch, id: string, card: Record<string, unknown>): Promise<Channel> {
   const channel = (await channels.list()).find(item => item.id === id)
   if (!channel) throw new Error(CHANNEL_GONE)
-  const url = await channels.url(id)
-  if (!url) throw new Error(CHANNEL_URL_MISSING)
-  await postToWebhook(fetchFn, url, webhookPayload(card))
+  const stored = await channels.url(id)
+  if (!stored) throw new Error(CHANNEL_URL_MISSING)
+  await postToWebhook(fetchFn, checkWebhookUrl(stored), webhookPayload(card))
   return channel
 }
 
@@ -94,6 +95,7 @@ export function reviewersDestination(http: AdoHttp): WorkerDestination {
       if (destination.kind !== 'reviewers') return []
       const people = distinctPeople(destination.people)
       if (people.length === 0) return [{ destination: 'reviewers', ok: false, text: NO_REVIEWERS_CHOSEN }]
+      if (prs.length === 0) return [{ destination: 'reviewers', ok: false, text: NO_PULL_REQUESTS_FOR_REVIEWERS }]
       const outcomes = await mapLimit(prs, PRS_AT_A_TIME, key => addTo(http, org, key, people))
       return [summary(people, outcomes)]
     }
@@ -101,26 +103,30 @@ export function reviewersDestination(http: AdoHttp): WorkerDestination {
 }
 
 async function addTo(http: AdoHttp, org: string, key: PrKey, people: Person[]): Promise<PrOutcome> {
-  const outcome: PrOutcome = { prId: key.prId, added: [], already: [], failure: null }
+  const outcome: PrOutcome = { prId: key.prId, added: [], already: [], failures: [] }
   for (const person of people) {
     try {
       const result = await addReviewer(http, org, key, person.id, person.required)
       outcome[result].push(person)
     } catch (error) {
-      outcome.failure ??= messageOf(error)
+      outcome.failures.push({ person, reason: messageOf(error) })
     }
   }
   return outcome
 }
 
 function summary(people: Person[], outcomes: PrOutcome[]): ShareResult {
-  const added = people.filter(person => outcomes.some(outcome => outcome.added.includes(person)))
+  const namesByCount = new Map<number, string[]>()
+  for (const person of people) {
+    const count = outcomes.filter(outcome => outcome.added.includes(person)).length
+    if (count > 0) namesByCount.set(count, [...(namesByCount.get(count) ?? []), person.displayName])
+  }
   const notes = [
-    ...(added.length === 0 ? [] : [addedReviewers(added.map(person => person.displayName), outcomes.filter(outcome => outcome.added.length > 0).length)]),
+    ...[...namesByCount].map(([count, names]) => addedReviewers(names, count)),
     ...outcomes.flatMap(outcome => outcome.already.map(person => alreadyReviewer(person.displayName, outcome.prId))),
-    ...outcomes.flatMap(outcome => (outcome.failure === null ? [] : [reviewersNotAdded(outcome.prId, outcome.failure)]))
+    ...outcomes.flatMap(outcome => outcome.failures.map(({ person, reason }) => reviewerNotAdded(person.displayName, outcome.prId, reason)))
   ]
-  return { destination: 'reviewers', ok: outcomes.every(outcome => outcome.failure === null), text: notes.join(' ') }
+  return { destination: 'reviewers', ok: outcomes.every(outcome => outcome.failures.length === 0), text: notes.join(' ') }
 }
 
 function distinctPeople(people: Person[]): Person[] {

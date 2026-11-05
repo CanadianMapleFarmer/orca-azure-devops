@@ -6,12 +6,12 @@ import { adaptiveCard, MAX_CARD_BYTES, webhookPayload } from './card'
 const PR_4101 = 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/4101'
 const PR_4104 = 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/api/pullrequest/4104'
 const FOOTER = 'Shared by Alex Contoso from Orca'
-const TOO_MUCH = 'Too much to post at once. Share fewer pull requests.'
+const TOO_MUCH = 'Too much to post at once. Share fewer items.'
 const SCHEMA = 'http://adaptivecards.io/schemas/adaptive-card.json'
 
 test('each line is a RichTextBlock with an OpenUrl TextRun for the link', () => {
   const message: ShareMessage = {
-    intro: 'Release 2026.11 is ready for QA.\nPlease review.',
+    intro: 'Release 2026.11 is **ready** for [QA](https://attacker.example).\n\n  Please review _today_.',
     lines: [
       [{ text: 'Pull Request 4101', href: PR_4101 }, { text: ': [PROJ-55283] <script>alert(1)</script>](javascript:alert(1)) & 🚀' }],
       [{ text: 'Before ' }, { text: 'Pull Request 4104', href: PR_4104 }, { text: ': Fix pagination offset' }],
@@ -25,17 +25,19 @@ test('each line is a RichTextBlock with an OpenUrl TextRun for the link', () => 
     version: '1.4',
     msteams: { width: 'Full' },
     body: [
-      { type: 'TextBlock', text: 'Release 2026.11 is ready for QA.\nPlease review.', wrap: true },
+      { type: 'RichTextBlock', inlines: [run('Release 2026.11 is **ready** for [QA](https://attacker.example).')] },
+      { type: 'RichTextBlock', inlines: [run('  Please review _today_.')] },
       {
         type: 'RichTextBlock',
         inlines: [run('Pull Request 4101', PR_4101), run(': [PROJ-55283] <script>alert(1)</script>](javascript:alert(1)) & 🚀')]
       },
       { type: 'RichTextBlock', inlines: [run('Before '), run('Pull Request 4104', PR_4104), run(': Fix pagination offset')] },
       { type: 'RichTextBlock', inlines: [run('Pull Request 4105')] },
-      { type: 'TextBlock', text: FOOTER, isSubtle: true, size: 'Small', wrap: true }
+      { type: 'RichTextBlock', inlines: [{ type: 'TextRun', text: FOOTER, isSubtle: true, size: 'Small' }] }
     ]
   })
 
+  assert.ok(!JSON.stringify(adaptiveCard(message, FOOTER)).includes('"TextBlock"'), 'no block that Teams reads as Markdown')
   const bare = adaptiveCard({ intro: '', lines: [[{ text: 'Pull Request 4101', href: PR_4101 }]] }, '')
   assert.deepEqual(bare.body, [{ type: 'RichTextBlock', inlines: [run('Pull Request 4101', PR_4101)] }], 'no intro or footer block when they are empty')
 })
