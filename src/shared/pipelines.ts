@@ -98,6 +98,8 @@ export interface JobView {
   state: StepState
   startedAt: number | null
   finishedAt: number | null
+  logId: number | null
+  issues: Issue[]
   steps: StepView[]
 }
 

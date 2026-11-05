@@ -484,6 +484,49 @@ test('a failed job without a failed step is its own failure', () => {
   assert.deepEqual(failuresOf([]), [])
 })
 
+test('a failed job without a failed step carries its own issues and log', () => {
+  const records: RawRecord[] = [
+    rec('s', 'Stage', 'Release', { result: 'failed' }),
+    rec('j', 'Job', 'Deploy', {
+      parentId: 's',
+      result: 'failed',
+      log: { id: 3 },
+      issues: [
+        { type: 'warning', message: 'Pool is nearly full.' },
+        { type: 'error', message: 'The agent lost communication with the server.' },
+        { type: 'info', message: 'Ignored.' }
+      ]
+    }),
+    rec('t', 'Task', 'Initialize job', { parentId: 'j' })
+  ]
+  const stages = runStages({ changeId: 1, records }, new Map(), false)
+  const issues = [
+    { type: 'error', message: 'The agent lost communication with the server.', file: null },
+    { type: 'warning', message: 'Pool is nearly full.', file: null }
+  ]
+  assert.deepEqual([stages[0].jobs[0].logId, stages[0].jobs[0].issues], [3, issues])
+  assert.deepEqual(failuresOf(stages), [
+    { stageId: 's', jobId: 'j', stepId: 'j', path: 'Release › Deploy', issues, logId: 3 }
+  ])
+  assert.deepEqual(
+    stages[0].jobs[0].steps.map(step => step.issues),
+    [[]]
+  )
+})
+
+test('a job reads its log and issues defensively', () => {
+  const stages = runStages(timeline('timeline-4512'), new Map(), false)
+  assert.deepEqual(stages.flatMap(stage => stage.jobs.map(job => [job.name, job.logId, job.issues])), [
+    ['Build', 1, []],
+    ['Build image', 6, []]
+  ])
+  const odd: RawTimeline = {
+    changeId: 1,
+    records: [rec('j', 'Job', 'Odd', { log: { id: -1 }, issues: 'nope' as unknown as RawIssue[] })]
+  }
+  assert.deepEqual(runStages(odd, new Map(), false)[0].jobs.map(job => [job.logId, job.issues]), [[null, []]])
+})
+
 test('stageChips follows the stages', () => {
   assert.deepEqual(stageChips(timeline('timeline-4512')), [
     { id: '9a2b3c4d-6101-4b3c-8d4e-5f6a7b8c9e01', name: 'Build', state: 'succeeded' },
@@ -607,6 +650,17 @@ test('a malformed timeline becomes the fixed error', async () => {
     { changeId: 1, records: [{ id: 'a', name: 'Build' }] },
     { changeId: 1, records: [{ id: 'a', type: 'Stage' }] },
     { changeId: 1, records: [record, record] },
+    { changeId: 1, records: [{ ...record, parentId: 'a' }] },
+    { changeId: 1, records: [{ ...record, parentId: 'b' }, { id: 'b', type: 'Job', name: 'Deploy', parentId: 'a' }] },
+    {
+      changeId: 1,
+      records: [
+        { id: 'a', type: 'Phase', name: 'one', parentId: 'c' },
+        { id: 'b', type: 'Phase', name: 'two', parentId: 'a' },
+        { id: 'c', type: 'Phase', name: 'three', parentId: 'b' },
+        { id: 'd', type: 'Stage', name: 'Build' }
+      ]
+    },
     null,
     []
   ]
@@ -614,6 +668,19 @@ test('a malformed timeline becomes the fixed error', async () => {
     ado.on(isTimeline, () => json(200, body))
     assert(isFixedError(await failure(getTimeline(http, ORG, PROJECT, 4520))), JSON.stringify(body))
   }
+})
+
+test('a timeline with shared or dangling parents is not a loop', async () => {
+  const { ado, http } = setup()
+  const records = [
+    { id: 's', type: 'Stage', name: 'Build' },
+    { id: 'j1', type: 'Job', name: 'one', parentId: 's' },
+    { id: 'j2', type: 'Job', name: 'two', parentId: 's' },
+    { id: 't', type: 'Task', name: 'run', parentId: 'j1' },
+    { id: 'x', type: 'Job', name: 'orphan', parentId: 'gone' }
+  ]
+  ado.on(isTimeline, () => json(200, { changeId: 5, records }))
+  assert.deepEqual(await getTimeline(http, ORG, PROJECT, 4520), { changeId: 5, records })
 })
 
 test('the timeline read stops when its signal aborts and ADO errors pass through', async () => {

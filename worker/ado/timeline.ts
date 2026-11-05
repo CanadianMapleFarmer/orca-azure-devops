@@ -141,7 +141,23 @@ function expectTimeline(value: unknown): RawTimeline {
     if (ids.has(id)) throw new TypeError('expected unique record ids')
     ids.add(id)
   }
+  expectNoParentLoop(list)
   return { changeId, records: list }
+}
+
+function expectNoParentLoop(records: readonly RawRecord[]): void {
+  const parentOf = new Map(records.map(record => [record.id, record.parentId] as const))
+  const acyclic = new Set<string>()
+  for (const record of records) {
+    const walked = new Set<string>()
+    let id: unknown = record.id
+    while (typeof id === 'string' && parentOf.has(id) && !acyclic.has(id)) {
+      if (walked.has(id)) throw new TypeError('expected no parent loops')
+      walked.add(id)
+      id = parentOf.get(id)
+    }
+    for (const seen of walked) acyclic.add(seen)
+  }
 }
 
 function compareRecords(a: RawRecord, b: RawRecord): number {
@@ -270,6 +286,8 @@ function jobView(job: RawRecord, index: ChildIndex, logLines: ReadonlyMap<number
     state: stepStateOf(job),
     startedAt: optionalTimestamp(job.startTime),
     finishedAt: optionalTimestamp(job.finishTime),
+    logId: logIdOf(job),
+    issues: issuesOf(job.issues),
     steps: (index.get(job.id) ?? []).filter(child => child.type === TASK).map(task => stepView(task, logLines))
   }
 }
@@ -303,7 +321,7 @@ function jobFailures(stage: StageView, job: JobView): Failure[] {
     }))
   }
   if (job.state !== 'failed') return []
-  return [{ stageId: stage.id, jobId: job.id, stepId: job.id, path: [stage.name, job.name].join(PATH_SEPARATOR), issues: [], logId: null }]
+  return [{ stageId: stage.id, jobId: job.id, stepId: job.id, path: [stage.name, job.name].join(PATH_SEPARATOR), issues: job.issues, logId: job.logId }]
 }
 
 function issuesOf(raw: unknown): Issue[] {
