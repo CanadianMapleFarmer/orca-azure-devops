@@ -11,8 +11,9 @@ const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile
 const input = JSON.parse(ObjC.unwrap($.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding)))
 const pasteboard = $.NSPasteboard.generalPasteboard
 pasteboard.clearContents
-pasteboard.setStringForType($(input.html), 'public.html')
-pasteboard.setStringForType($(input.plain), 'public.utf8-plain-text')
+const wroteHtml = pasteboard.setStringForType($(input.html), 'public.html')
+const wrotePlain = pasteboard.setStringForType($(input.plain), 'public.utf8-plain-text')
+if (!wroteHtml || !wrotePlain) throw new Error('pasteboard write refused')
 `
 
 const WINDOWS_SCRIPT = `$ErrorActionPreference = 'Stop'
@@ -30,6 +31,8 @@ export type SpawnWithInput = (
   opts: { input: string; env: Record<string, string>; timeoutMs: number }
 ) => Promise<{ code: number }>
 
+export class SpawnTimeoutError extends Error {}
+
 export const spawnWithInput: SpawnWithInput = (file, args, opts) =>
   new Promise((resolve, reject) => {
     const name = path.basename(file)
@@ -37,7 +40,7 @@ export const spawnWithInput: SpawnWithInput = (file, args, opts) =>
     let settled = false
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      settle(() => reject(new Error(`${name} timed out after ${opts.timeoutMs}ms`)))
+      settle(() => reject(new SpawnTimeoutError(`${name} timed out after ${opts.timeoutMs}ms`)))
     }, opts.timeoutMs)
     const settle = (finish: () => void): void => {
       if (settled) return
@@ -84,13 +87,17 @@ export function linuxDisplayEnv(deps: {
   home: string
   exists: (path: string) => boolean
   list: (dir: string) => string[]
+  env?: NodeJS.ProcessEnv
 }): { kind: 'wayland' | 'x11'; env: Record<string, string> } | null {
-  const runtimeDir = `/run/user/${deps.uid}`
-  const socket = waylandSockets(deps.list, runtimeDir)[0]
+  const ambient = deps.env ?? {}
+  const runtimeDir = ambient.XDG_RUNTIME_DIR || `/run/user/${deps.uid}`
+  const socket = ambient.WAYLAND_DISPLAY || waylandSockets(deps.list, runtimeDir)[0]
   if (socket) return { kind: 'wayland', env: { XDG_RUNTIME_DIR: runtimeDir, WAYLAND_DISPLAY: socket } }
-  if (!deps.exists(X11_SOCKET)) return null
-  const xauthority = `${deps.home}/.Xauthority`
-  return { kind: 'x11', env: { DISPLAY: ':0', ...(deps.exists(xauthority) ? { XAUTHORITY: xauthority } : {}) } }
+  const display = ambient.DISPLAY || (deps.exists(X11_SOCKET) ? ':0' : undefined)
+  if (!display) return null
+  const homeAuthority = `${deps.home}/.Xauthority`
+  const xauthority = ambient.XAUTHORITY || (deps.exists(homeAuthority) ? homeAuthority : undefined)
+  return { kind: 'x11', env: { DISPLAY: display, ...(xauthority ? { XAUTHORITY: xauthority } : {}) } }
 }
 
 function waylandSockets(list: (dir: string) => string[], dir: string): string[] {
@@ -118,6 +125,7 @@ export interface ClipboardDeps {
   home: string
   exists: (path: string) => boolean
   list: (dir: string) => string[]
+  log: (message: string) => void
 }
 
 export interface Clipboard {
@@ -136,13 +144,14 @@ export function createClipboard(deps: ClipboardDeps): Clipboard {
   return {
     async write(content) {
       const plan = planFor(deps, content)
+      const tool = path.basename(plan.file)
       let exit: { code: number }
       try {
         exit = await deps.spawn(plan.file, plan.args, { input: plan.input, env: plan.env, timeoutMs: COPY_TIMEOUT_MS })
-      } catch {
-        throw new Error(COPY_FAILED)
+      } catch (error) {
+        throw failure(deps, `${tool} ${spawnFailureReason(error)}`)
       }
-      if (exit.code !== 0) throw new Error(COPY_FAILED)
+      if (exit.code !== 0) throw failure(deps, `${tool} exited ${exit.code}`)
       return plan.result
     }
   }
@@ -169,8 +178,19 @@ function planFor(deps: ClipboardDeps, content: { html: string; plain: string }):
     case 'linux':
       return linuxPlan(deps, content.html)
     default:
-      throw new Error(COPY_FAILED)
+      throw failure(deps, `unsupported platform ${deps.platform}`)
   }
+}
+
+function failure(deps: ClipboardDeps, reason: string): Error {
+  deps.log(`clipboard: ${reason}`)
+  return new Error(COPY_FAILED)
+}
+
+function spawnFailureReason(error: unknown): string {
+  if (error instanceof SpawnTimeoutError) return 'timeout'
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : 'failed'
 }
 
 function linuxPlan(deps: ClipboardDeps, html: string): Plan {
@@ -178,7 +198,7 @@ function linuxPlan(deps: ClipboardDeps, html: string): Plan {
   const xclip = deps.find('xclip')
   if (!wlCopy && !xclip) throw new Error(COPY_NEEDS_TOOL)
   const display = linuxDisplayEnv(deps)
-  if (!display) throw new Error(COPY_FAILED)
+  if (!display) throw failure(deps, 'no display found')
   const env = { ...definedEnv(deps.env), ...display.env }
   if (display.kind === 'wayland') {
     if (!wlCopy) throw new Error(COPY_NEEDS_TOOL)
@@ -189,7 +209,7 @@ function linuxPlan(deps: ClipboardDeps, html: string): Plan {
 }
 
 function asciiJson(value: unknown): string {
-  return JSON.stringify(value).replace(/[\u007f-￿]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
 }
 
 function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {

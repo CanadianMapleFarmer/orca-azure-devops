@@ -1,7 +1,15 @@
 import { spawnSync } from 'node:child_process'
 import { assert, test } from 'orca/testing'
 import { COPY_FAILED, COPY_NEEDS_TOOL } from '../messages'
-import { cfHtml, type ClipboardDeps, createClipboard, linuxDisplayEnv, spawnWithInput, type SpawnWithInput } from './clipboard'
+import {
+  cfHtml,
+  type ClipboardDeps,
+  createClipboard,
+  linuxDisplayEnv,
+  SpawnTimeoutError,
+  spawnWithInput,
+  type SpawnWithInput
+} from './clipboard'
 
 const CONTENT = {
   html: '<p><a href="https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/41">Pull Request 41</a>: Fix é login — 🚀</p>',
@@ -36,6 +44,7 @@ function depsFor(spawn: SpawnWithInput, overrides: Partial<ClipboardDeps> = {}):
     home: '/home/me',
     exists: () => false,
     list: () => [],
+    log: () => {},
     ...overrides
   }
 }
@@ -86,10 +95,19 @@ test('the content never appears in argv', async () => {
   }
 })
 
-test('the stdin JSON is ASCII, so no console code page can garble it', async () => {
+test('the stdin JSON is ASCII on macOS and Windows, so no console code page can garble it', async () => {
+  for (const platform of ['darwin', 'win32'] as const) {
+    const { calls, spawn } = recorder()
+    await createClipboard(depsFor(spawn, { platform })).write(CONTENT)
+    const codePoints = Array.from(calls[0].input, char => char.codePointAt(0) ?? 0)
+    assert.ok(codePoints.length > 0 && codePoints.every(codePoint => codePoint < 0x80), `${platform} stdin is pure ASCII`)
+  }
+})
+
+test('the macOS script fails the run when a pasteboard write is refused', async () => {
   const { calls, spawn } = recorder()
   await createClipboard(depsFor(spawn)).write(CONTENT)
-  assert.ok(/^[\x20-\x7e]*$/.test(calls[0].input))
+  assert.ok(calls[0].args[3].includes('if (!wroteHtml || !wrotePlain) throw'))
 })
 
 test('cfHtml offsets are UTF-8 byte offsets', () => {
@@ -223,11 +241,90 @@ test('linuxDisplayEnv orders Wayland sockets numerically and skips lock files', 
   assert.equal(found?.env.WAYLAND_DISPLAY, 'wayland-2')
 })
 
+test('ambient display variables win over derived ones', async () => {
+  const { calls, spawn } = recorder()
+  const listed: string[] = []
+  const env = { PATH: '/usr/bin', WAYLAND_DISPLAY: 'wayland-9', XDG_RUNTIME_DIR: '/run/custom' }
+  const clipboard = createClipboard(
+    depsFor(spawn, {
+      platform: 'linux',
+      env,
+      find: findOnly('wl-copy'),
+      list: dir => {
+        listed.push(dir)
+        return ['wayland-0']
+      }
+    })
+  )
+  await clipboard.write(CONTENT)
+  assert.equal(calls[0].env.WAYLAND_DISPLAY, 'wayland-9')
+  assert.equal(calls[0].env.XDG_RUNTIME_DIR, '/run/custom')
+  assert.deepEqual(listed, [])
+})
+
+test('linuxDisplayEnv only fills in what the environment is missing', () => {
+  const base = { uid: 1000, home: '/home/me', exists: () => false }
+  const runtimeOnly = linuxDisplayEnv({ ...base, env: { XDG_RUNTIME_DIR: '/run/custom' }, list: dir => (dir === '/run/custom' ? ['wayland-3'] : []) })
+  assert.deepEqual(runtimeOnly, { kind: 'wayland', env: { XDG_RUNTIME_DIR: '/run/custom', WAYLAND_DISPLAY: 'wayland-3' } })
+
+  const displayOnly = linuxDisplayEnv({ ...base, env: { WAYLAND_DISPLAY: 'wayland-5' }, list: () => [] })
+  assert.deepEqual(displayOnly, { kind: 'wayland', env: { XDG_RUNTIME_DIR: '/run/user/1000', WAYLAND_DISPLAY: 'wayland-5' } })
+
+  const x11 = linuxDisplayEnv({
+    ...base,
+    env: { DISPLAY: ':1' },
+    exists: path => path === '/home/me/.Xauthority',
+    list: () => []
+  })
+  assert.deepEqual(x11, { kind: 'x11', env: { DISPLAY: ':1', XAUTHORITY: '/home/me/.Xauthority' } })
+
+  const ownAuthority = linuxDisplayEnv({ ...base, env: { DISPLAY: ':2', XAUTHORITY: '/custom/auth' }, list: () => [] })
+  assert.deepEqual(ownAuthority, { kind: 'x11', env: { DISPLAY: ':2', XAUTHORITY: '/custom/auth' } })
+
+  const emptyValues = linuxDisplayEnv({ ...base, env: { DISPLAY: '', WAYLAND_DISPLAY: '' }, list: () => [] })
+  assert.equal(emptyValues, null)
+})
+
+test('a failure is logged as the tool and a cause, never the content', async () => {
+  const cases: { outcome: { code: number } | Error; logged: string }[] = [
+    { outcome: { code: 1 }, logged: 'clipboard: osascript exited 1' },
+    { outcome: new SpawnTimeoutError(`timed out: ${CONTENT.plain}`), logged: 'clipboard: osascript timeout' },
+    { outcome: Object.assign(new Error(`spawn failed: ${CONTENT.html}`), { code: 'ENOENT' }), logged: 'clipboard: osascript ENOENT' },
+    { outcome: new Error(CONTENT.plain), logged: 'clipboard: osascript failed' },
+    { outcome: Object.assign(new Error('x'), { code: CONTENT.plain }), logged: 'clipboard: osascript failed' }
+  ]
+  for (const { outcome, logged } of cases) {
+    const lines: string[] = []
+    const { spawn } = recorder(outcome)
+    await assert.rejects(createClipboard(depsFor(spawn, { log: line => lines.push(line) })).write(CONTENT), failsWith(COPY_FAILED))
+    assert.deepEqual(lines, [logged])
+    assert.ok(!lines.join('\n').includes('Pull Request'))
+  }
+})
+
+test('failures before a spawn are logged without content too', async () => {
+  const lines: string[] = []
+  const { spawn } = recorder()
+  const log = (line: string) => lines.push(line)
+  await assert.rejects(createClipboard(depsFor(spawn, { platform: 'freebsd', log })).write(CONTENT), failsWith(COPY_FAILED))
+  await assert.rejects(createClipboard(depsFor(spawn, { platform: 'linux', find: findOnly('xclip'), log })).write(CONTENT), failsWith(COPY_FAILED))
+  assert.deepEqual(lines, ['clipboard: unsupported platform freebsd', 'clipboard: no display found'])
+})
+
+test('a successful write and a missing tool log nothing', async () => {
+  const lines: string[] = []
+  const { spawn } = recorder()
+  const log = (line: string) => lines.push(line)
+  await createClipboard(depsFor(spawn, { log })).write(CONTENT)
+  await assert.rejects(createClipboard(depsFor(spawn, { platform: 'linux', log })).write(CONTENT), failsWith(COPY_NEEDS_TOOL))
+  assert.deepEqual(lines, [])
+})
+
 test('a non-zero exit or a timeout gives the fixed failure message', async () => {
   assert.equal(COPY_FAILED, "Couldn't copy to the clipboard.")
   const failed = recorder({ code: 1 })
   await assert.rejects(createClipboard(depsFor(failed.spawn)).write(CONTENT), failsWith(COPY_FAILED))
-  const timedOut = recorder(new Error(`osascript timed out after 10000ms: ${CONTENT.plain}`))
+  const timedOut = recorder(new SpawnTimeoutError(`osascript timed out after 10000ms: ${CONTENT.plain}`))
   await assert.rejects(createClipboard(depsFor(timedOut.spawn)).write(CONTENT), failsWith(COPY_FAILED))
 })
 
