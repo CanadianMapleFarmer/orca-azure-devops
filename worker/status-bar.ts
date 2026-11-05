@@ -1,6 +1,6 @@
 import type { OrgState, OrgStatus } from '../src/shared/types'
 
-export type CountKind = 'toReview'
+export type CountKind = 'toReview' | 'failedRuns' | 'approvals'
 export type OrgCounts = ReadonlyMap<string, Partial<Record<CountKind, number>>>
 
 export interface StatusBarState {
@@ -26,21 +26,44 @@ const STATE_LABEL: Record<OrgState, string> = {
 
 const TONES_WORST_FIRST: StatusBarState['tone'][] = ['danger', 'warning', 'accent', 'success', 'neutral']
 
+interface Signal {
+  kind: CountKind
+  tone: StatusBarState['tone']
+  part(total: number): string
+  line(total: number): string
+}
+
+const SIGNALS: readonly Signal[] = [
+  { kind: 'failedRuns', tone: 'danger', part: total => `${total} failed`, line: total => `${total} failed pipeline ${total === 1 ? 'run' : 'runs'}` },
+  {
+    kind: 'approvals',
+    tone: 'warning',
+    part: total => `${total} ${total === 1 ? 'approval' : 'approvals'}`,
+    line: total => `${total} ${total === 1 ? 'approval' : 'approvals'} waiting`
+  },
+  {
+    kind: 'toReview',
+    tone: 'accent',
+    part: total => `${total} to review`,
+    line: total => `${total} ${total === 1 ? 'pull request' : 'pull requests'} to review`
+  }
+]
+
 export function statusBarFor(orgs: OrgStatus[], counts?: OrgCounts): StatusBarState {
   if (orgs.length === 0) return { text: 'ADO', tone: 'neutral', tooltip: 'Azure DevOps: not connected' }
   const lines = orgs.map(status => (connectedAs(status) ? `${status.org} (${connectedAs(status)})` : `${status.org}: ${detail(status)}`))
-  const review = reviewOf(orgs, counts)
+  const shown = signalsOf(orgs, counts)
   return {
-    text: review ? `ADO · ${review.total} to review` : 'ADO',
-    tone: review ? worst(toneFor(orgs), 'accent') : toneFor(orgs),
-    tooltip: [`Azure DevOps: ${lines.join('\n')}`, review?.line].filter(Boolean).join('\n')
+    text: ['ADO', ...shown.map(entry => entry.signal.part(entry.total))].join(' · '),
+    tone: shown.map(entry => entry.signal.tone).reduce(worst, toneFor(orgs)),
+    tooltip: [`Azure DevOps: ${lines.join('\n')}`, ...shown.map(signalLine)].join('\n')
   }
 }
 
 export function statusText(orgs: OrgStatus[], counts?: OrgCounts): string {
   if (orgs.length === 0) return 'Not connected. Open the Azure DevOps panel to connect.'
   const lines = orgs.map(status => (connectedAs(status) ? `${status.org} — connected as ${connectedAs(status)}` : `${status.org} — ${detail(status)}`))
-  return [...lines, reviewOf(orgs, counts)?.line].filter(Boolean).join('\n')
+  return [...lines, ...signalsOf(orgs, counts).map(signalLine)].join('\n')
 }
 
 export function createStatusBar(update: (state: StatusBarState) => void): StatusBar {
@@ -75,15 +98,25 @@ export function createStatusBar(update: (state: StatusBarState) => void): Status
   }
 }
 
-function reviewOf(orgs: OrgStatus[], counts?: OrgCounts): { total: number; line: string } | null {
-  const perOrg = orgs
-    .filter(status => status.state === 'connected')
-    .map(status => ({ org: status.org, count: counts?.get(status.org)?.toReview ?? 0 }))
-    .filter(entry => entry.count > 0)
-  const total = perOrg.reduce((sum, entry) => sum + entry.count, 0)
-  if (total === 0) return null
-  const noun = total === 1 ? 'pull request' : 'pull requests'
-  return { total, line: `${total} ${noun} to review: ${perOrg.map(entry => `${entry.org} ${entry.count}`).join(', ')}` }
+interface Shown {
+  signal: Signal
+  total: number
+  perOrg: { org: string; count: number }[]
+}
+
+function signalsOf(orgs: OrgStatus[], counts?: OrgCounts): Shown[] {
+  return SIGNALS.flatMap(signal => {
+    const perOrg = orgs
+      .filter(status => status.state === 'connected')
+      .map(status => ({ org: status.org, count: counts?.get(status.org)?.[signal.kind] ?? 0 }))
+      .filter(entry => entry.count > 0)
+    const total = perOrg.reduce((sum, entry) => sum + entry.count, 0)
+    return total === 0 ? [] : [{ signal, total, perOrg }]
+  })
+}
+
+function signalLine(entry: Shown): string {
+  return `${entry.signal.line(entry.total)}: ${entry.perOrg.map(item => `${item.org} ${item.count}`).join(', ')}`
 }
 
 function toneFor(orgs: OrgStatus[]): StatusBarState['tone'] {

@@ -62,6 +62,9 @@ export const NO_PULL_REQUESTS_FOR_REVIEWERS = 'There are no pull requests to add
 export const SHARE_PREFS_NOT_SAVED = "Couldn't save the share choices."
 export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams channel that failed to save."
 export const UNKNOWN_SHARE_KIND = "That can't be shared."
+export const NOTIFY_FAILED = "Couldn't show a desktop notification."
+export const MORE_UPDATES_BODY = 'Open the Pipelines tab in the Azure DevOps panel to see them.'
+export const YOU_CAN_APPROVE = 'You can approve it.'
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -119,6 +122,36 @@ export function alreadyReviewer(name: string, prId: number): string {
 
 export function reviewerNotAdded(name: string, prId: number, reason: string): string {
   return `Couldn't add ${name} to Pull Request ${prId}: ${reason}`
+}
+
+export function runFailedTitle(pipeline: string): string {
+  return `${pipeline} failed`
+}
+
+const FINISHED_PHRASE = { succeeded: 'succeeded', warning: 'finished with warnings', canceled: 'was canceled' } as const
+
+export function runFinishedTitle(pipeline: string, state: keyof typeof FINISHED_PHRASE): string {
+  return `${pipeline} ${FINISHED_PHRASE[state]}`
+}
+
+export function approvalTitle(pipeline: string): string {
+  return `${pipeline} is waiting for approval`
+}
+
+export function runBody(org: string, runNumber: string, branch: string, detail?: string): string {
+  return `${org} · ${runNumber} on ${branch}${detail ? ` · ${detail}` : ''}`
+}
+
+export function failedAt(stage: string): string {
+  return `failed at ${stage}`
+}
+
+export function waitingAt(place: string): string {
+  return `waiting at ${place}`
+}
+
+export function moreRunUpdates(count: number): string {
+  return `${count} more pipeline updates`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

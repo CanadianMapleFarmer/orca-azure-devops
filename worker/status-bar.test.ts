@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { OrgState, OrgStatus } from '../src/shared/types'
-import { createStatusBar, statusBarFor, statusText, type OrgCounts, type StatusBarState } from './status-bar'
+import { createStatusBar, statusBarFor, statusText, type CountKind, type OrgCounts, type StatusBarState } from './status-bar'
 
 function org(name: string, state: OrgState, message?: string): OrgStatus {
   return {
@@ -70,6 +70,10 @@ function counts(entries: Record<string, number>): OrgCounts {
   return new Map(Object.entries(entries).map(([name, toReview]) => [name, { toReview }]))
 }
 
+function countsOf(entries: Record<string, Partial<Record<CountKind, number>>>): OrgCounts {
+  return new Map(Object.entries(entries))
+}
+
 test('a to-review count shows in the text and tooltip and lifts the tone to accent', () => {
   const item = statusBarFor([org('contoso', 'connected'), org('fabrikam', 'connected'), org('adatum', 'connected')], counts({ contoso: 2, fabrikam: 1, adatum: 0 }))
   assert.deepEqual(item, {
@@ -99,6 +103,10 @@ test('danger and warning connection tones win over the count', () => {
 test("counts of orgs that aren't connected are ignored, and an org that is gone loses its count", () => {
   const stale = counts({ fabrikam: 5, ghost: 2 })
   assert.deepEqual(statusBarFor([org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')], stale), statusBarFor([org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')]))
+  const staleRuns = countsOf({ fabrikam: { failedRuns: 2, approvals: 1, toReview: 5 }, ghost: { failedRuns: 1, approvals: 1 } })
+  const expired = [org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')]
+  assert.deepEqual(statusBarFor(expired, staleRuns), statusBarFor(expired))
+  assert.equal(statusText(expired, staleRuns), statusText(expired))
 
   const seen: StatusBarState[] = []
   const bar = createStatusBar(state => seen.push(state))
@@ -110,6 +118,12 @@ test("counts of orgs that aren't connected are ignored, and an org that is gone 
   assert.equal(seen.at(-1)?.text, 'ADO · 2 to review')
   bar.setOrgs([org('contoso', 'connected'), org('fabrikam', 'connected')])
   assert.equal(seen.at(-1)?.text, 'ADO · 2 to review')
+
+  bar.setCount('contoso', 'failedRuns', 1)
+  bar.setCount('fabrikam', 'approvals', 3)
+  bar.setOrgs([org('contoso', 'connected')])
+  assert.deepEqual([...bar.counts()], [['contoso', { toReview: 2, failedRuns: 1 }]])
+  assert.equal(seen.at(-1)?.text, 'ADO · 1 failed · 2 to review')
 })
 
 test('createStatusBar calls update only when the state changes, and null clears a count', () => {
@@ -143,4 +157,73 @@ test('statusText adds the review line', () => {
 test('one pull request to review reads in the singular', () => {
   const orgs = [org('contoso', 'connected')]
   assert.ok(statusText(orgs, counts({ contoso: 1 })).endsWith('\n1 pull request to review: contoso 1'))
+})
+
+test('failed runs, approvals and reviews show in order with the worst tone', () => {
+  const orgs = [org('contoso', 'connected'), org('fabrikam', 'connected')]
+  const all = statusBarFor(orgs, countsOf({ contoso: { failedRuns: 1, approvals: 2, toReview: 3 }, fabrikam: { failedRuns: 2, approvals: 0, toReview: 1 } }))
+  assert.deepEqual(all, {
+    text: 'ADO · 3 failed · 2 approvals · 4 to review',
+    tone: 'danger',
+    tooltip: [
+      'Azure DevOps: contoso (ada@contoso.com)',
+      'fabrikam (ada@fabrikam.com)',
+      '3 failed pipeline runs: contoso 1, fabrikam 2',
+      '2 approvals waiting: contoso 2',
+      '4 pull requests to review: contoso 3, fabrikam 1'
+    ].join('\n')
+  })
+
+  const approvals = statusBarFor(orgs, countsOf({ contoso: { approvals: 2, toReview: 3 } }))
+  assert.equal(approvals.text, 'ADO · 2 approvals · 3 to review')
+  assert.equal(approvals.tone, 'warning')
+  assert.equal(statusBarFor(orgs, countsOf({ fabrikam: { failedRuns: 1 } })).text, 'ADO · 1 failed')
+  assert.equal(statusBarFor(orgs, countsOf({ fabrikam: { failedRuns: 1 } })).tone, 'danger')
+  assert.equal(statusBarFor(orgs, countsOf({ fabrikam: { toReview: 1 } })).tone, 'accent')
+  assert.deepEqual(statusBarFor(orgs, countsOf({ contoso: { failedRuns: 0, approvals: 0, toReview: 0 } })), statusBarFor(orgs))
+
+  const expired = [org('contoso', 'connected'), org('fabrikam', 'expired', 'Expired.')]
+  assert.equal(statusBarFor(expired, countsOf({ contoso: { approvals: 1 } })).tone, 'warning')
+  assert.equal(statusBarFor(expired, countsOf({ contoso: { toReview: 1 } })).tone, 'warning')
+  assert.equal(statusBarFor(expired, countsOf({ contoso: { failedRuns: 1 } })).tone, 'danger')
+  const broken = [org('contoso', 'connected'), org('fabrikam', 'error', 'No.')]
+  assert.equal(statusBarFor(broken, countsOf({ contoso: { approvals: 1, toReview: 1 } })).tone, 'danger')
+  const signingIn = [org('contoso', 'connected'), org('fabrikam', 'signing-in')]
+  assert.equal(statusBarFor(signingIn, countsOf({ contoso: { approvals: 1 } })).tone, 'warning')
+})
+
+test('one of each uses the singular', () => {
+  const orgs = [org('contoso', 'connected')]
+  const item = statusBarFor(orgs, countsOf({ contoso: { failedRuns: 1, approvals: 1, toReview: 1 } }))
+  assert.equal(item.text, 'ADO · 1 failed · 1 approval · 1 to review')
+  assert.ok(item.tooltip.includes('\n1 failed pipeline run: contoso 1\n1 approval waiting: contoso 1\n1 pull request to review: contoso 1'))
+  assert.ok(!item.tooltip.includes('runs') && !item.tooltip.includes('approvals'))
+})
+
+test('statusText adds the run and approval lines', () => {
+  const orgs = [org('contoso', 'connected'), org('fabrikam', 'connected')]
+  assert.equal(
+    statusText(orgs, countsOf({ contoso: { failedRuns: 1, approvals: 2 }, fabrikam: { approvals: 1, toReview: 1 } })),
+    [
+      'contoso — connected as ada@contoso.com',
+      'fabrikam — connected as ada@fabrikam.com',
+      '1 failed pipeline run: contoso 1',
+      '3 approvals waiting: contoso 2, fabrikam 1',
+      '1 pull request to review: fabrikam 1'
+    ].join('\n')
+  )
+  assert.equal(statusText(orgs, countsOf({ contoso: { failedRuns: 0, approvals: 0 } })), statusText(orgs))
+})
+
+test('failed and approval counts set and clear like any other kind', () => {
+  const seen: StatusBarState[] = []
+  const bar = createStatusBar(state => seen.push(state))
+  bar.setOrgs([org('contoso', 'connected')])
+  bar.setCount('contoso', 'failedRuns', 2)
+  bar.setCount('contoso', 'approvals', 1)
+  assert.equal(seen.at(-1)?.text, 'ADO · 2 failed · 1 approval')
+  bar.setCount('contoso', 'failedRuns', null)
+  bar.setCount('contoso', 'approvals', null)
+  assert.deepEqual(seen.at(-1), statusBarFor([org('contoso', 'connected')]))
+  assert.equal(bar.counts().size, 0)
 })
