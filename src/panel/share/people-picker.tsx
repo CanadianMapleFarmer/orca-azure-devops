@@ -2,7 +2,7 @@ import { Box, IconButton, Input, List, ListItem, Row, Stack, Switch, Text, type 
 import { MAX_SHARE_PEOPLE, TOO_MANY_PEOPLE } from '../../shared/share/limits'
 import type { Person } from '../../shared/share/types'
 import type { Identity } from '../../shared/types'
-import { findPeople, searchOf, setQuery } from './state'
+import { findPeople, searchOf, setQuery } from './people-search'
 
 const MAX_RESULTS = 20
 const MAX_SUGGESTIONS = 10

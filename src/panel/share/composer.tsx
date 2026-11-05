@@ -5,6 +5,7 @@ import type { ShareResult } from '../../shared/share/types'
 import { LoadFailure } from '../snapshot-parts'
 import { openChannels } from './channels'
 import { PeoplePicker } from './people-picker'
+import { retryChat, sending, share } from './send'
 import {
   chat,
   chatHint,
@@ -18,12 +19,9 @@ import {
   composer,
   intro,
   prefs,
-  retryChat,
   retryPrefs,
-  sending,
   sent,
   setIntro,
-  share,
   sharePlan,
   shownChannels,
   type ChatResult,
