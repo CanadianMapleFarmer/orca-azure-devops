@@ -1,4 +1,5 @@
 import * as path from 'node:path'
+import { isBuildId } from '../../src/shared/runs'
 import { isValidOrgName } from '../ado/org'
 import { BAD_RUN, badRequest, NO_LOCAL_WORKSPACE_RUN } from '../messages'
 import { openTabFile, type TabFileFs } from '../tab-files'
@@ -6,13 +7,13 @@ import type { HostCall } from '../workspace/focused'
 
 export const RUN_FILE_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 
-export type RunFileFs = TabFileFs & Pick<typeof import('node:fs/promises'), 'readdir' | 'stat' | 'unlink'>
+export type RunFileFs = TabFileFs & Pick<typeof import('node:fs/promises'), 'readdir' | 'stat' | 'unlink' | 'utimes'>
 
 const RUN_FILE_EXTENSION = '.adorun'
 const MAX_PRUNED = 50
 
 export function runFileName(org: string, buildId: number): string {
-  if (!isValidOrgName(org) || !Number.isSafeInteger(buildId) || buildId <= 0) throw badRequest(BAD_RUN)
+  if (!isValidOrgName(org) || !isBuildId(buildId)) throw badRequest(BAD_RUN)
   return `${org}.${buildId}${RUN_FILE_EXTENSION}`
 }
 
@@ -24,6 +25,8 @@ export async function openRun(
   const text = `${JSON.stringify({ org: input.org, projectId: input.projectId, buildId: input.buildId }, null, 2)}\n`
   const opened = await openTabFile(deps, name, text, NO_LOCAL_WORKSPACE_RUN)
   if (!opened.opened) return opened
+  const openedAt = new Date(deps.now())
+  await deps.fs.utimes(opened.file, openedAt, openedAt).catch(() => {})
   await prune(deps.fs, path.dirname(opened.file), name, deps.now() - RUN_FILE_MAX_AGE_MS)
   return { opened: true }
 }

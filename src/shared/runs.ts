@@ -22,6 +22,10 @@ export function isActive(run: RunSummary): boolean {
   return ACTIVE_STATES.has(run.state)
 }
 
+export function isBuildId(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
 export function finishedStatus(status: string): boolean {
   return status === COMPLETED_STATUS
 }

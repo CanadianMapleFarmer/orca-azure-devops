@@ -74,3 +74,18 @@ test('only answers that reach the caller count; a throttled call is left to http
   assert.deepEqual([error.code, error.retryAfterMs], ['rate_limited', 600_000])
   assert.equal(pressure.slowed(ORG), false, 'a thrown rate_limited pauses through the scheduler instead')
 })
+
+test('wrapByOrg slows the org each request names, so one wrapper serves every org', async () => {
+  const clock = { now: T0 }
+  const pressure = createPressure(() => clock.now)
+  const http = pressure.wrapByOrg({
+    json: async <T,>(req: { org: string }) => ({ data: null as T, headers: new Headers(req.org === ORG ? { 'x-ratelimit-delay': '2' } : {}) })
+  })
+
+  await http.json({ org: 'fabrikam', path: '/_apis/build/builds' })
+  assert.equal(pressure.slowed('fabrikam'), false, 'a plain answer slows nobody')
+  await http.json(REQUEST)
+  assert.deepEqual([pressure.slowed(ORG), pressure.slowed('fabrikam')], [true, false])
+  clock.now += PRESSURE_MS
+  assert.equal(pressure.slowed(ORG), false)
+})

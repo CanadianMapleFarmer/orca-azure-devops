@@ -1020,6 +1020,26 @@ test('runs.retryStage and runs.cancel answer through the handlers', async () => 
   })
 })
 
+test('deactivate stops a run view reload that no scheduled poll started', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  const run = { projectId: PROJECT, buildId: 4512 }
+  const reads = () => ado.count(call => isOneBuild(call) && buildIdOf(call) === 4512)
+  const reload = ado.hang(call => isOneBuild(call) && buildIdOf(call) === 4512 && reads() >= 3)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      await w.request('ui.visibility', { surface: 'run', org: 'contoso', visible: true, run })
+      assert.ok(await until(() => viewsChanged(w.posts).length === 1), 'the run view loaded')
+      const retry = { org: 'contoso', ...run, stageId: '9a2b3c4d-6108-4b3c-8d4e-5f6a7b8c9e08' }
+      assert.deepEqual(await w.request('runs.retryStage', retry), { ok: true, message: 'Rerunning Image.' })
+      assert.ok(await until(() => reload.length === 1), 'the action reloads the open view')
+
+      await w.deactivate()
+      assert.equal(reload[0].signal?.aborted, true)
+      assert.equal(viewsChanged(w.posts).length, 1, 'the tab is told nothing more')
+    })
+  })
+})
+
 function runTabHost(dir: string) {
   return mockHost({
     capabilities: [...CAPABILITIES, 'notifications:show', 'workspace:read', 'workspace:write'],

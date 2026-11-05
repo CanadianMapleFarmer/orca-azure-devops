@@ -290,6 +290,6 @@ function chipKey(run: RunSummary): string {
   return `${run.buildId}:${run.finishedAt}`
 }
 
-function placeKey(approvalId: string): string {
+export function placeKey(approvalId: string): string {
   return approvalId.toLowerCase()
 }

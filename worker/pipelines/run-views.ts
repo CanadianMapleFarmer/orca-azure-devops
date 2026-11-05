@@ -1,5 +1,15 @@
-import { LOG_FIRST_LINE, MAX_LOG_LINES, type ApprovalSummary, type Issue, type LogChunk, type RunKey, type RunView } from '../../src/shared/pipelines'
-import { cancellableStatus, finishedStatus } from '../../src/shared/runs'
+import {
+  LOG_FIRST_LINE,
+  MAX_LOG_LINES,
+  type ApprovalSummary,
+  type Issue,
+  type LogChunk,
+  type RunKey,
+  type RunView,
+  type StageChip,
+  type StageView
+} from '../../src/shared/pipelines'
+import { cancellableStatus, finishedStatus, isBuildId } from '../../src/shared/runs'
 import type { OrgStatus } from '../../src/shared/types'
 import { linkedAbort, untilAborted } from '../abort'
 import { getApprovals, toApprovalSummary, type RawApproval } from '../ado/approvals'
@@ -18,13 +28,14 @@ import {
   badRequest,
   failureMessage,
   joinMessages,
+  RUN_CUT,
   RUN_GONE,
   RUN_TRIMMED,
   RUNS_LOAD_FAILED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
-import { placeApproval, placeIsUnsettled, waitingIf, type ApprovalPlace } from './load'
+import { placeApproval, placeIsUnsettled, placeKey, waitingIf, type ApprovalPlace } from './load'
 import type { Pressure } from './pressure'
 
 export interface RunViewsDeps {
@@ -43,6 +54,7 @@ export interface RunViews {
   log(input: { org: string; projectId: string; buildId: number; logId: number; first?: number }): Promise<LogChunk>
   setVisible(input: { org: string; visible: boolean; run?: RunKey }): { ok: true }
   refreshNow(org: string, buildId: number): void
+  dispose(): void
 }
 
 interface RunTarget extends RunKey {
@@ -86,6 +98,8 @@ const MAX_CACHED_VIEWS = 10
 const IN_FLIGHT = 4
 const ANSWER_BUDGET_BYTES = 900 * 1024
 const TRIMMED_ISSUES = 3
+const ISSUE_LIMITS = [Infinity, TRIMMED_ISSUES, 0]
+const MAX_RECORDS = 2_000
 const PENDING = 'pending'
 const IN_PROGRESS = 'inProgress'
 
@@ -95,13 +109,14 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
   const views = new Map<string, Held>()
   const shown = new Map<string, RunTarget>()
   const connected = new Set<string>()
+  let disposed = false
 
   async function statusOf(org: string): Promise<SignedInStatus> {
     const orgs = await deps.orgs().catch(error => {
       throw loadFailure(error, RUNS_LOAD_FAILED)
     })
     const status = orgs.find(item => item.org === org)
-    if (!status || !isSignedIn(status)) throw notConnected()
+    if (disposed || !status || !isSignedIn(status)) throw notConnected()
     return status
   }
 
@@ -307,7 +322,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
         ...summary,
         approvals: reads.approvals,
         state: waitingIf(summary.state, reads.approvals),
-        stages: stages.map(({ id, name, state }) => ({ id, name, state })),
+        stages: chipsOf(stages),
         watched: deps.watched(held.org, held.buildId)
       },
       stages,
@@ -316,11 +331,12 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
       updatedAt: now(),
       stale: false
     }
-    return trimmed(reads.notes ? { ...view, message: reads.notes } : view)
+    return bounded(reads.notes ? { ...view, message: reads.notes } : view)
   }
 
   return {
     onOrgs(orgs) {
+      if (disposed) return
       const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
       for (const org of new Set([...scopes.keys(), ...connected, ...[...views.values()].map(held => held.org)])) {
         if (!signedIn.has(org)) forget(org)
@@ -331,6 +347,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     },
 
     async view(input) {
+      if (!isBuildId(input.buildId)) throw badRequest(BAD_RUN)
       await statusOf(input.org)
       const held = hold({ org: input.org, projectId: input.projectId, buildId: input.buildId })
       if (fresh(held)) return held.view
@@ -340,7 +357,12 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     },
 
     async log({ org, projectId, buildId, logId, first }) {
-      if (!Number.isSafeInteger(logId) || logId < 0 || (first !== undefined && !(Number.isSafeInteger(first) && first >= LOG_FIRST_LINE))) {
+      if (
+        !isBuildId(buildId) ||
+        !Number.isSafeInteger(logId) ||
+        logId < 0 ||
+        (first !== undefined && !(Number.isSafeInteger(first) && first >= LOG_FIRST_LINE))
+      ) {
         throw badRequest(BAD_RUN)
       }
       const scope = scopeOf(org)
@@ -367,6 +389,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     },
 
     setVisible({ org, visible, run }) {
+      if (run && !isBuildId(run.buildId)) throw badRequest(BAD_RUN)
       const keys = run ? [viewKey(org, run.buildId)] : visible ? [] : [...shown].filter(([, target]) => target.org === org).map(([key]) => key)
       for (const key of keys) {
         if (visible && run) shown.set(key, { org, projectId: run.projectId, buildId: run.buildId })
@@ -386,16 +409,20 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
       held.at = -Infinity
       const target = shown.get(key)
       if (target && connected.has(org)) void reload(target).then(() => sync(key))
+    },
+
+    dispose() {
+      disposed = true
+      for (const key of shown.keys()) scheduler.remove(key)
+      for (const org of new Set([...scopes.keys(), ...connected, ...[...views.values()].map(held => held.org)])) forget(org)
+      connected.clear()
+      shown.clear()
     }
   }
 }
 
 function viewKey(org: string, buildId: number): string {
   return `runview:${org}:${buildId}`
-}
-
-function placeKey(approvalId: string): string {
-  return approvalId.toLowerCase()
 }
 
 function sameFinish(before: RawBuild, after: RawBuild): boolean {
@@ -410,21 +437,77 @@ function comparable(view: RunView): string {
   return JSON.stringify({ ...view, updatedAt: 0 })
 }
 
-function trimmed(view: RunView): RunView {
-  if (byteLength(view) <= ANSWER_BUDGET_BYTES) return view
-  return {
-    ...view,
-    stages: view.stages.map(stage => ({
-      ...stage,
-      jobs: stage.jobs.map(job => ({ ...job, issues: fewer(job.issues), steps: job.steps.map(step => ({ ...step, issues: fewer(step.issues) })) }))
-    })),
-    failures: view.failures.map(failure => ({ ...failure, issues: fewer(failure.issues) })),
-    message: joinMessages(view.message, RUN_TRIMMED)
-  }
+function chipsOf(stages: readonly StageView[]): StageChip[] {
+  return stages.map(({ id, name, state }) => ({ id, name, state }))
 }
 
-function fewer(issues: Issue[]): Issue[] {
-  return issues.slice(0, TRIMMED_ISSUES)
+function recordsIn(view: RunView): number {
+  const jobs = view.stages.flatMap(stage => stage.jobs)
+  return view.stages.length + jobs.length + jobs.reduce((total, job) => total + job.steps.length, 0)
+}
+
+function issuesIn(view: RunView): number {
+  const jobs = view.stages.flatMap(stage => stage.jobs)
+  return [...jobs, ...jobs.flatMap(job => job.steps)].reduce((total, record) => total + record.issues.length, 0)
+}
+
+function fits(view: RunView): boolean {
+  return byteLength(view) <= ANSWER_BUDGET_BYTES
+}
+
+function bounded(view: RunView): RunView {
+  const records = recordsIn(view)
+  if (records <= MAX_RECORDS && fits(view)) return view
+  const capped = keepRecords(view, MAX_RECORDS)
+  let result = capped
+  for (const limit of ISSUE_LIMITS) {
+    result = withIssues(capped, limit)
+    if (fits(result)) break
+  }
+  if (!fits(result)) result = keepFitting(result)
+  const issuesLeftOut = issuesIn(result) < issuesIn(capped)
+  const stepsLeftOut = recordsIn(result) < records
+  return { ...result, message: joinMessages(view.message, issuesLeftOut ? RUN_TRIMMED : undefined, stepsLeftOut ? RUN_CUT : undefined) }
+}
+
+function withIssues(view: RunView, limit: number): RunView {
+  const fewer = (issues: Issue[]) => issues.slice(0, limit)
+  const stages = view.stages.map(stage => ({
+    ...stage,
+    jobs: stage.jobs.map(job => ({ ...job, issues: fewer(job.issues), steps: job.steps.map(step => ({ ...step, issues: fewer(step.issues) })) }))
+  }))
+  return { ...view, stages, failures: failuresOf(stages) }
+}
+
+function keepFitting(view: RunView): RunView {
+  let low = 0
+  let high = recordsIn(view)
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    if (fits(keepRecords(view, middle))) low = middle
+    else high = middle - 1
+  }
+  return keepRecords(view, low)
+}
+
+function keepRecords(view: RunView, count: number): RunView {
+  if (count >= recordsIn(view)) return view
+  let room = count
+  const stages: StageView[] = []
+  for (const stage of view.stages) {
+    if (room === 0) break
+    room -= 1
+    const jobs: StageView['jobs'] = []
+    for (const job of stage.jobs) {
+      if (room === 0) break
+      room -= 1
+      const steps = job.steps.slice(0, room)
+      room -= steps.length
+      jobs.push({ ...job, steps })
+    }
+    stages.push({ ...stage, jobs })
+  }
+  return { ...view, run: { ...view.run, stages: chipsOf(stages) }, stages, failures: failuresOf(stages) }
 }
 
 function capChunk(chunk: LogChunk, tail: boolean): LogChunk {

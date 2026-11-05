@@ -31,6 +31,11 @@ const ANSWER_BYTES = 900 * 1024
 const RUN_GONE = "That run no longer exists, or you can't see it."
 const NOT_CONNECTED = 'Connect this organization first.'
 const TRIMMED = 'Some issue details were left out to keep this run view small.'
+const CUT = 'Some steps were left out to keep this run view small.'
+const OUTAGE = 'VS800075: The service is down for maintenance.'
+const APPROVALS_NEED_ACCESS = 'Pending approvals need more access, so Needs me may be incomplete.'
+const APPROVALS_UNREADABLE = "Some pending approvals couldn't be read, so Needs me may be incomplete."
+const BAD_RUN = "That run can't be opened."
 const IMAGE_4512 = '9a2b3c4d-6108-4b3c-8d4e-5f6a7b8c9e08'
 const DEPLOY_4520 = '6b2c3d4e-6014-4b3c-8d4e-5f6a7b8c9d14'
 
@@ -109,6 +114,20 @@ function adoError(code: AdoError['code'], status: number, message: string): (err
     assert.deepEqual([error.code, error.status, error.message], [code, status, message])
     return true
   }
+}
+
+function rawRecord(over: Partial<RawRecord>): RawRecord {
+  return { id: '', type: 'Task', name: '', state: 'completed', result: 'failed', ...over }
+}
+
+function bigTimeline(steps: number, over: (n: number) => Partial<RawRecord>): RawTimeline {
+  const records = [rawRecord({ id: 'stage', type: 'Stage', name: 'Build', identifier: 'Build' }), rawRecord({ id: 'job', parentId: 'stage', type: 'Job', name: 'Build' })]
+  for (let n = 0; n < steps; n += 1) records.push(rawRecord({ id: `task-${n}`, parentId: 'job', name: `Step ${n}`, order: n, log: { id: n + 1 }, ...over(n) }))
+  return { changeId: 9, records }
+}
+
+function recordsIn(view: RunView): number {
+  return view.stages.reduce((total, stage) => total + 1 + stage.jobs.reduce((jobs, job) => jobs + 1 + job.steps.length, 0), 0)
 }
 
 function stageOf(view: RunView, id: string) {
@@ -388,13 +407,9 @@ test('a view over 900 KiB keeps three issues per record and says so', async () =
   const h = harness()
   const issue = (n: number) => ({ type: 'error', message: `${n} ${'e'.repeat(1990)}` })
   const issues = Array.from({ length: 10 }, (_, n) => issue(n))
-  const record = (over: Partial<RawRecord>): RawRecord => ({ id: '', type: 'Task', name: '', state: 'completed', result: 'failed', ...over })
-  const records: RawRecord[] = [
-    record({ id: 'stage', type: 'Stage', name: 'Build', identifier: 'Build' }),
-    record({ id: 'job', parentId: 'stage', type: 'Job', name: 'Build', issues })
-  ]
-  for (let n = 0; n < 40; n += 1) records.push(record({ id: `task-${n}`, parentId: 'job', name: `Step ${n}`, order: n, issues, log: { id: n + 1 } }))
-  h.ado.runs.timelines.set(4490, { changeId: 9, records } satisfies RawTimeline)
+  const timeline = bigTimeline(40, () => ({ issues }))
+  Object.assign(timeline.records[1], { issues })
+  h.ado.runs.timelines.set(4490, timeline)
 
   const view = await h.view(4490)
   assert.equal(view.message, TRIMMED)
@@ -404,6 +419,141 @@ test('a view over 900 KiB keeps three issues per record and says so', async () =
   assert.ok(job.steps.every(step => step.issues.length === 3))
   assert.deepEqual([view.failures.length, view.failures.every(failure => failure.issues.length === 3)], [40, true])
   assert.equal((await h.view(4512)).message, undefined, 'a small view is left whole')
+})
+
+test('a timeline of thousands of records is cut to two thousand and says so', async () => {
+  const h = harness()
+  h.ado.runs.timelines.set(4490, bigTimeline(6_000, () => ({ result: 'succeeded' })))
+
+  const view = await h.view(4490)
+  assert.ok(byteLength(view) <= ANSWER_BYTES, `a view of ${byteLength(view)} bytes`)
+  assert.equal(recordsIn(view), 2_000)
+  assert.equal(view.message, CUT)
+  const steps = view.stages[0].jobs[0].steps
+  assert.deepEqual([steps.length, steps[0].name, steps.at(-1)?.name], [1_998, 'Step 0', 'Step 1997'], 'the steps from the end are the ones left out')
+  assert.deepEqual(view.run.stages?.map(chip => chip.name), ['Build'])
+  assert.equal((await h.view(4512)).message, undefined, 'a small view is left whole')
+})
+
+test('a view whose issues overflow the answer loses its issues, not its steps', async () => {
+  const h = harness()
+  const issues = Array.from({ length: 10 }, (_, n) => ({ type: 'error', message: `${n} ${'e'.repeat(1990)}` }))
+  h.ado.runs.timelines.set(4490, bigTimeline(150, () => ({ issues, errorCount: 10 })))
+
+  const view = await h.view(4490)
+  assert.ok(byteLength(view) <= ANSWER_BYTES, `a view of ${byteLength(view)} bytes`)
+  assert.equal(view.message, TRIMMED)
+  const steps = view.stages[0].jobs[0].steps
+  assert.deepEqual([steps.length, steps.every(step => step.issues.length === 0 && step.errorCount === 10)], [150, true], 'the counts stay')
+  assert.deepEqual([view.failures.length, view.failures.every(failure => failure.issues.length === 0)], [150, true])
+})
+
+test('a view still too large after its issues go loses steps from the end', async () => {
+  const h = harness()
+  const issues = [{ type: 'error', message: 'e'.repeat(1990) }]
+  h.ado.runs.timelines.set(4490, bigTimeline(1_000, n => ({ name: `Step ${n} ${'n'.repeat(5_000)}`, issues })))
+
+  const view = await h.view(4490)
+  assert.ok(byteLength(view) <= ANSWER_BYTES, `a view of ${byteLength(view)} bytes`)
+  assert.equal(view.message, `${TRIMMED} ${CUT}`)
+  const steps = view.stages[0].jobs[0].steps
+  assert.ok(steps.length > 50 && steps.length < 200, `${steps.length} steps kept`)
+  assert.deepEqual(steps.map(step => step.id), Array.from({ length: steps.length }, (_, n) => `task-${n}`), 'the first steps are the ones kept')
+  assert.deepEqual(view.failures.map(failure => failure.stepId), steps.map(step => step.id), 'failures follow the steps')
+  assert.ok(byteLength(view) > ANSWER_BYTES - 12_000, 'as many steps as fit are kept')
+})
+
+test('a run id that is not a positive safe integer is refused everywhere', async () => {
+  const h = harness()
+  const refused = adoError('bad_request', 400, BAD_RUN)
+  for (const buildId of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, '4520' as unknown as number]) {
+    await assert.rejects(h.views.view({ org: ORG, projectId: PROJECT, buildId }), refused)
+    await assert.rejects(h.views.log({ org: ORG, projectId: PROJECT, buildId, logId: 4 }), refused)
+    assert.throws(() => h.views.setVisible({ org: ORG, visible: true, run: { projectId: PROJECT, buildId } }), refused)
+  }
+  assert.equal(h.ado.calls.length, 0)
+  await h.clock.tick(10 * MINUTE)
+  assert.equal(h.ado.calls.length, 0, 'nothing was marked visible')
+})
+
+test('a failed poll keeps the last view as stale, tells the tab once, recovers and pauses when throttled', async () => {
+  const h = harness()
+  h.show(4520)
+  await h.clock.tick(0)
+  const good = await h.view(4520)
+  assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }])
+
+  let failing: (() => Response) | null = () => json(500, { message: OUTAGE })
+  h.ado.on(call => failing !== null && isOneBuild(call), () => failing?.() ?? assert.fail('the failure ended'))
+  await h.clock.tick(5_000)
+  const stale = await h.view(4520)
+  assert.deepEqual({ ...stale, updatedAt: good.updatedAt }, { ...good, stale: true, message: OUTAGE })
+  assert.equal(h.changes.length, 2, 'the tab hears about the failure')
+  await h.clock.tick(5_000)
+  assert.equal(h.changes.length, 2, 'the same failure again is not news')
+  assert.equal((await h.view(4520)).message, OUTAGE)
+
+  failing = null
+  await h.clock.tick(5_000)
+  const recovered = await h.view(4520)
+  assert.deepEqual({ ...recovered, updatedAt: good.updatedAt }, good, 'the stale mark and message are cleared')
+  assert.equal(h.changes.length, 3, 'and the tab hears that too')
+
+  failing = () => json(429, { message: 'Too many requests.' }, { 'retry-after': '90' })
+  await h.clock.tick(5_000)
+  const throttled = h.ado.calls.length
+  assert.equal((await h.view(4520)).stale, true)
+  await h.clock.tick(80_000)
+  assert.deepEqual(h.since(throttled), NO_CALLS, 'polling pauses for what ADO asked')
+  failing = null
+  await h.clock.tick(10_000)
+  assert.equal(h.since(throttled).builds, 1, 'and resumes after it')
+  assert.equal((await h.view(4520)).stale, false)
+})
+
+test('approvals that cannot be read are reported on the view and the run keeps loading', async () => {
+  const forbidden = harness()
+  forbidden.ado.on(isApprovals, () => json(403, { message: 'TF400813: not authorized.' }))
+  const noAccess = await forbidden.view(4520)
+  assert.deepEqual([noAccess.stale, noAccess.message, noAccess.run.approvals, noAccess.run.state], [false, APPROVALS_NEED_ACCESS, [], 'running'])
+  assert.equal(stageOf(noAccess, DEPLOY_4520).state, 'waiting')
+
+  const malformed = harness()
+  malformed.ado.on(isApprovals, () => json(200, { count: 1, value: 'nope' }))
+  const unreadable = await malformed.view(4520)
+  assert.deepEqual([unreadable.stale, unreadable.message, unreadable.run.approvals], [false, APPROVALS_UNREADABLE, []])
+
+  const odd = harness()
+  Reflect.deleteProperty(odd.ado.runs.approvals.get(APPROVAL_4520) ?? assert.fail('no approval on 4520'), 'pipeline')
+  const skipped = await odd.view(4520)
+  assert.deepEqual([skipped.message, skipped.run.approvals], [APPROVALS_UNREADABLE, []])
+})
+
+test('disposing the run views stops every poll and posts nothing more', async () => {
+  const h = harness()
+  h.show(4520)
+  await h.clock.tick(0)
+  assert.equal(h.changes.length, 1)
+
+  const hung = h.ado.hang(isOneBuild)
+  await h.clock.tick(5_000)
+  assert.equal(hung.length, 1, 'a poll is in flight')
+  const asking = h.view(4520).then(
+    () => assert.fail('the view is not answered'),
+    (error: unknown) => error
+  )
+  h.views.dispose()
+  assert.equal(hung[0].signal?.aborted, true, 'disposing aborts the load')
+  assert.ok(adoError('unauthorized', 401, NOT_CONNECTED)(await asking))
+
+  h.views.refreshNow(ORG, 4520)
+  h.views.onOrgs([status()])
+  h.show(4520)
+  const after = h.ado.calls.length
+  await h.clock.tick(10 * MINUTE)
+  assert.deepEqual(h.since(after), NO_CALLS)
+  assert.equal(h.changes.length, 1)
+  await assert.rejects(h.view(4520), adoError('unauthorized', 401, NOT_CONNECTED))
 })
 
 test('runs.log reads the tail by default and earlier lines on request', async () => {
@@ -432,7 +582,7 @@ test('runs.log reads the tail by default and earlier lines on request', async ()
   assert.deepEqual(missing, { logId: 77, first: 1, lines: [], total: 0 })
 
   for (const bad of [{ logId: -1 }, { logId: 1.5 }, { logId: 4, first: 0 }, { logId: 4, first: 2.5 }]) {
-    await assert.rejects(h.views.log({ org: ORG, projectId: PROJECT, buildId: 4520, ...bad }), adoError('bad_request', 400, "That run can't be opened."))
+    await assert.rejects(h.views.log({ org: ORG, projectId: PROJECT, buildId: 4520, ...bad }), adoError('bad_request', 400, BAD_RUN))
   }
 })
 

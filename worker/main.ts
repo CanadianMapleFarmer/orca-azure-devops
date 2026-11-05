@@ -126,7 +126,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
   const runActions = createRunActions({
-    http: connections.http,
+    http: pressure.wrapByOrg(connections.http),
     me: org => pipelines.me(org),
     after: (org, buildId) => {
       void pipelines.reloadFresh(org).catch(() => {})
@@ -159,6 +159,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     scheduler.dispose()
     prs.dispose()
     pipelines.dispose()
+    runViews.dispose()
   }
   await connections.resetInterrupted()
 

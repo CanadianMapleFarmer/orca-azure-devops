@@ -45,7 +45,8 @@ const untouched = {
   readFile: async () => assert.fail('nothing is read'),
   readdir: async () => assert.fail('nothing is listed'),
   stat: async () => assert.fail('nothing is read'),
-  unlink: async () => assert.fail('nothing is deleted')
+  unlink: async () => assert.fail('nothing is deleted'),
+  utimes: async () => assert.fail('nothing is touched')
 } as unknown as RunFileFs
 
 function refusedRun(error: unknown): boolean {
@@ -99,6 +100,26 @@ test('old run files are pruned, the new one never', async () => {
     const { call } = focusedOn(dir)
     assert.deepEqual(await openRun({ call, fs, now: () => NOW }, { org: 'contoso', projectId: PROJECT, buildId: 4512 }), { opened: true })
     assert.deepEqual((await fs.readdir(folder)).sort(), ['.gitignore', 'contoso.4500.adorun', 'contoso.4512.adorun', 'contoso.board.adoboard', 'notes.md'])
+  })
+})
+
+test('reopening a run counts as using its file, so a later open does not prune it', async () => {
+  await withTempDir(async dir => {
+    const folder = path.join(dir, '.orca-ado')
+    const { call } = focusedOn(dir)
+    const open = (buildId: number, at: number) => openRun({ call, fs, now: () => at }, { org: 'contoso', projectId: PROJECT, buildId })
+    const runFiles = async () => (await fs.readdir(folder)).filter(name => name.endsWith('.adorun')).sort()
+
+    await open(4512, NOW)
+    await open(4400, NOW)
+    assert.equal((await fs.stat(path.join(folder, 'contoso.4512.adorun'))).mtimeMs, NOW, 'a new file is stamped with the time it was opened')
+
+    await open(4512, NOW + 8 * DAY)
+    assert.deepEqual(await runFiles(), ['contoso.4512.adorun'], 'the file nobody opened for eight days went')
+    assert.equal((await fs.stat(path.join(folder, 'contoso.4512.adorun'))).mtimeMs, NOW + 8 * DAY, 'reopening an unchanged file refreshes its age')
+
+    await open(4513, NOW + 8 * DAY)
+    assert.deepEqual(await runFiles(), ['contoso.4512.adorun', 'contoso.4513.adorun'], 'the reopened file survives the next open')
   })
 })
 
