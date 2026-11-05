@@ -123,12 +123,13 @@ test('toApprovalSummary lists each approver once in step order and falls back fo
     { id: 'g-1', name: 'Release Approvers', uniqueName: '', isGroup: true },
     { id: 'u-2', name: 'Grace Hopper', uniqueName: '', isGroup: false }
   ])
-  assert.deepEqual([summary.minRequired, summary.instructions, summary.createdAt], [1, '', 0])
+  assert.deepEqual([summary.minRequired, summary.instructions, summary.createdAt], [2, '', 0])
 })
 
 test('toApprovalSummary reads the number of approvals required', () => {
   assert.equal(summaryOf({ minRequiredApprovers: 2 }).minRequired, 2)
   assert.equal(summaryOf({ minRequiredApprovers: 0 }).minRequired, 1)
+  assert.equal(summaryOf({ minRequiredApprovers: 0, steps: [approverStep('u-1', 'Ada Lovelace'), approverStep('u-2', 'Grace Hopper')] }).minRequired, 2)
   assert.deepEqual(summaryOf({ steps: undefined }).approvers, [])
 })
 
@@ -217,11 +218,13 @@ test('listPendingApprovals falls back once and only on a refused request', async
 
 test('listPendingApprovals stops on an abort without asking again', async () => {
   const { ado, http } = setup()
-  ado.on(isList, () => json(400, { message: 'Bad expand.' }))
   const controller = new AbortController()
-  controller.abort(new Error('stopped'))
+  ado.on(isList, () => {
+    controller.abort(new Error('stopped'))
+    return json(400, { message: 'Bad expand.' })
+  })
   await assert.rejects(listPendingApprovals(http, ORG, PROJECT, controller.signal), /stopped/)
-  assert.equal(ado.calls.length, 0)
+  assert.equal(ado.calls.length, 1)
 })
 
 test('listPendingApprovals reads an empty list and refuses a malformed one', async () => {
@@ -347,7 +350,7 @@ test('checkSuiteEnvironment takes the first environment resource and returns nul
   )
   assert.equal(await checkSuiteEnvironment(mixed.http, ORG, PROJECT, CHECK_SUITE_4520), 'production')
 
-  for (const body of [{ id: CHECK_SUITE_4520 }, { id: CHECK_SUITE_4520, resources: [] }, { id: CHECK_SUITE_4520, resources: [{ type: 'repository', name: 'web-app' }] }]) {
+  for (const body of [{ id: CHECK_SUITE_4520 }, { id: CHECK_SUITE_4520, resources: null }, { id: CHECK_SUITE_4520, resources: [] }, { id: CHECK_SUITE_4520, resources: [{ type: 'repository', name: 'web-app' }] }]) {
     const none = setup()
     none.ado.on(isCheckSuite, () => json(200, body))
     assert.equal(await checkSuiteEnvironment(none.http, ORG, PROJECT, CHECK_SUITE_4520), null)

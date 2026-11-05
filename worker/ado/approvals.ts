@@ -95,14 +95,15 @@ export function toApprovalSummary(
   const buildId = runIdOf(raw)
   return shaped(() => {
     const steps = expectList<RawApprovalStep>(raw.steps ?? [])
+    const approvers = approversOf(steps)
     return {
       projectId: input.projectId,
       buildId,
       approvalId: expectText(raw.id),
       stage: input.stage,
       environment: input.environment,
-      approvers: approversOf(steps),
-      minRequired: minRequiredOf(raw.minRequiredApprovers),
+      approvers,
+      minRequired: minRequiredOf(raw.minRequiredApprovers, approvers.length),
       instructions: textOr(raw.instructions, ''),
       createdAt: timestamp(raw.createdOn),
       canApprove: canDecide(raw.permissions, steps, input.me)
@@ -117,7 +118,7 @@ export async function checkSuiteEnvironment(
   checkSuiteId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  const { data } = await http.json<{ resources?: (CheckResource | null)[] } | null | undefined>({
+  const { data } = await http.json<{ resources?: (CheckResource | null)[] | null } | null | undefined>({
     org,
     project: projectId,
     path: `/_apis/pipelines/checks/runs/${encodeURIComponent(checkSuiteId)}`,
@@ -126,7 +127,7 @@ export async function checkSuiteEnvironment(
     signal
   })
   const resources = data?.resources
-  if (resources === undefined) return null
+  if (resources === undefined || resources === null) return null
   return shaped(() => environmentName(expectList<CheckResource | null>(resources)), MALFORMED.approval)
 }
 
@@ -164,8 +165,8 @@ function approversOf(steps: readonly RawApprovalStep[]): Approver[] {
   return approvers
 }
 
-function minRequiredOf(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 1
+function minRequiredOf(value: unknown, approverCount: number): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : Math.max(1, approverCount)
 }
 
 function canDecide(permissions: unknown, steps: readonly RawApprovalStep[], me: string): boolean {
