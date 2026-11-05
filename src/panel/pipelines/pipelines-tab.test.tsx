@@ -13,7 +13,7 @@ interface OpenOptions {
   orgs?: OrgStatus[]
   visible?: boolean
   tab?: string
-  filter?: RunFilter
+  filter?: string
 }
 
 async function open(snapshot: MockRequests['runs.snapshot'], more: MockRequests = {}, options: OpenOptions = {}) {
@@ -143,6 +143,13 @@ test('stageLine writes each stage with its glyph and says how many more there ar
   assert.equal(stageLine(many.slice(0, 12)).includes('more'), false)
 })
 
+test('a run with an empty stage list draws no stage bar and no stage line', async () => {
+  await open(runsSnapshotOf({ runs: [runOf(1, { stages: [] }), runOf(2, { stages: [stageOf('Build', 'succeeded')] })] }))
+  assert.equal(inside(cardOf(1), { type: 'Box' }).length, 0)
+  assert.equal(inside(cardOf(1), { type: 'Text' }).filter(text => text.props.size === 'xs').length, 0)
+  assert.equal(inside(cardOf(2), { type: 'Box' }).length, 1)
+})
+
 test('a stage bar draws at most twelve segments', async () => {
   const stages = Array.from({ length: 15 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
   await open(runsSnapshotOf({ runs: [runOf(1, { stages })] }))
@@ -192,6 +199,15 @@ test('the chosen filter is remembered for the workspace', async () => {
   await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'failed' })
   assert.deepEqual(ids(), [1])
   assert.equal(panel.find({ type: 'Button', text: 'Failed · 1' })?.props.variant, 'solid')
+})
+
+test('an unknown remembered filter falls back to Mine', async () => {
+  await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'everything' })
+  assert.deepEqual(ids(), [3, 1])
+  assert.equal(panel.find({ type: 'Button', text: 'Mine' })?.props.variant, 'solid')
+  await panel.press({ type: 'Button', text: 'Failed · 1' })
+  assert.deepEqual(ids(), [1])
+  assert.equal(panel.persisted.workspace.pipelinesFilter, 'failed')
 })
 
 test('Needs me shows the approval with approvers and waiting time', async () => {

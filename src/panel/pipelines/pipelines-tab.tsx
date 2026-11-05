@@ -22,6 +22,8 @@ const EMPTY: Record<RunFilter, { title: string; description: string }> = {
   failed: { title: 'No failed runs', description: 'Your runs that failed in the last 24 hours show up here until a newer run replaces them.' }
 }
 
+const filterOf = (stored: string): RunFilter => FILTERS.find(item => item.id === stored)?.id ?? 'mine'
+
 function Header({ org, current }: { org: string; current: RunsSnapshot }): OrcaNode {
   return (
     <Stack gap="xs">
@@ -79,7 +81,7 @@ export function PipelinesTab({ org }: { org: OrgStatus }): OrcaNode {
     return <LoadFailure message={status.message} onRetry={retryLoad} />
   }
   const failure = read(notice)
-  const filter = read(runFilter)
+  const filter = filterOf(read(runFilter))
   const now = Date.now()
   return (
     <Stack gap="md">

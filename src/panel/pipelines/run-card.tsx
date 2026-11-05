@@ -71,7 +71,7 @@ export function RunCard({ org, run }: { org: string; run: RunSummary }): OrcaNod
         <Badge tone={BADGE_TONE[run.state]}>{RUN_STATE_TEXT[run.state]}</Badge>
         <When run={run} />
       </Row>
-      {run.stages ? <StageBar stages={run.stages} /> : null}
+      {run.stages && run.stages.length > 0 ? <StageBar stages={run.stages} /> : null}
       <Row gap="sm" align="center" wrap>
         <Button size="sm" disabled={isBusy(`open:${run.buildId}`)} onPress={() => openRun(org, run)}>
           Open run
