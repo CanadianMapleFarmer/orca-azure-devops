@@ -3,8 +3,9 @@ import type { RunSummary } from '../../src/shared/pipelines'
 import type { RawApproval } from '../ado/approvals'
 import type { RawBuild } from '../ado/builds'
 import { AdoError, createAdoHttp } from '../ado/http'
-import { json, PROJECT, type AdoCall } from '../boards/fake-ado'
+import { fixture, json, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { PLATFORM } from '../prs/fake-prs'
+import { drain } from '../test-support'
 import {
   APPROVAL_4520,
   APPROVAL_4531,
@@ -33,6 +34,8 @@ const PROJECTS = [
 ]
 const MALFORMED_BUILD = 'Azure DevOps returned an unexpected pipeline run response.'
 const MALFORMED_APPROVAL = 'Azure DevOps returned an unexpected approval response.'
+const NOTHING_OFF = { approvals: false, skippedApprovals: false, environments: false }
+const ALL_RUNS = [4531, 4520, 4512, 4505, 4498, 4490]
 
 function setup() {
   const ado = fakePipelines()
@@ -98,7 +101,7 @@ test('a full load unions my runs, running runs and approval runs, ordered, with 
   const { runs, off } = await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4531 }])
 
   assert.deepEqual(ids(runs), [4531, 4520, 4512, 4505, 4498, 4490])
-  assert.deepEqual(off, { approvals: false })
+  assert.deepEqual(off, NOTHING_OFF)
   const byId = new Map(runs.map(run => [run.buildId, run]))
   assert.deepEqual([byId.get(4531)?.watched, byId.get(4531)?.mine, byId.get(4520)?.watched, byId.get(4520)?.mine], [true, false, false, true])
   assert.deepEqual(runs.map(run => run.state), ['waiting', 'waiting', 'failed', 'succeeded', 'succeeded', 'failed'])
@@ -221,18 +224,18 @@ test('a forbidden approvals list turns approvals off for 10 minutes while runs k
   assert.deepEqual(ids(first.runs), [4531, 4520, 4512, 4505, 4498, 4490])
   assert.ok(first.runs.every(run => run.approvals.length === 0))
   assert.equal(first.runs.find(run => run.buildId === 4520)?.state, 'running')
-  assert.deepEqual(first.off, { approvals: true })
+  assert.deepEqual(first.off, { ...NOTHING_OFF, approvals: true })
   const tried = ado.count(isApprovals)
 
   clock.now += 10 * MINUTE - 1
-  assert.deepEqual((await source.full(ME, PROJECTS, [])).off, { approvals: true })
-  assert.deepEqual((await source.background(ME, PROJECTS, [])).off, { approvals: true })
+  assert.deepEqual((await source.full(ME, PROJECTS, [])).off, { ...NOTHING_OFF, approvals: true })
+  assert.deepEqual((await source.background(ME, PROJECTS, [])).off, { ...NOTHING_OFF, approvals: true })
   assert.equal(ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
 
   refused = false
   clock.now += 1
   const back = await source.full(ME, PROJECTS, [])
-  assert.deepEqual(back.off, { approvals: false })
+  assert.deepEqual(back.off, NOTHING_OFF)
   assert.equal(back.runs.find(run => run.buildId === 4520)?.state, 'waiting')
 })
 
@@ -298,16 +301,83 @@ test('approval reads a pending approval fresh with its run and place, and answer
   assert.equal(await orphan.source.approval(ME, { projectId: PROJECT, approvalId: APPROVAL_4531 }), null, 'its run is gone')
 })
 
-test('one malformed build or approval fails the load with the fixed message', async () => {
-  const builds = setup()
-  const broken = builds.ado.runs.builds.get(4505) ?? assert.fail('no build 4505')
+test('one malformed build fails the load with the fixed message', async () => {
+  const { ado, source } = setup()
+  const broken = ado.runs.builds.get(4505) ?? assert.fail('no build 4505')
   delete (broken as Partial<RawBuild>).buildNumber
-  assert.equal((await failure(builds.source.full(ME, PROJECTS, []))).message, MALFORMED_BUILD)
+  assert.equal((await failure(source.full(ME, PROJECTS, []))).message, MALFORMED_BUILD)
+})
 
-  const approvals = setup()
-  const orphan = approvals.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531')
-  delete orphan.pipeline
-  assert.equal((await failure(approvals.source.background(ME, PROJECTS, []))).message, MALFORMED_APPROVAL)
+test('a malformed pending approval is skipped and flagged while the runs and the other approvals load', async () => {
+  const pipeline = setup()
+  Reflect.deleteProperty(pipeline.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531'), 'pipeline')
+  const skipped = await pipeline.source.full(ME, PROJECTS, [])
+  assert.deepEqual(ids(skipped.runs), ALL_RUNS)
+  assert.deepEqual(skipped.off, { ...NOTHING_OFF, skippedApprovals: true })
+  assert.deepEqual(skipped.runs.map(run => [run.buildId, run.approvals.length]), [[4531, 0], [4520, 1], [4512, 0], [4505, 0], [4498, 0], [4490, 0]])
+  assert.equal(skipped.runs.find(run => run.buildId === 4531)?.state, 'running')
+  assert.equal(skipped.runs.find(run => run.buildId === 4520)?.state, 'waiting')
+
+  const steps = setup()
+  const odd = steps.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531')
+  odd.steps = [{ assignedApprover: {} } as NonNullable<RawApproval['steps']>[number]]
+  const background = await steps.source.background(ME, PROJECTS, [])
+  assert.deepEqual(background.off, { ...NOTHING_OFF, skippedApprovals: true })
+  assert.deepEqual(background.runs.flatMap(run => run.approvals.map(approval => approval.approvalId)), [APPROVAL_4520])
+
+  const list = setup()
+  list.ado.on(isApprovals, () => json(200, { value: 'nope' }))
+  const unreadable = await list.source.full(ME, PROJECTS, [])
+  assert.deepEqual(ids(unreadable.runs), ALL_RUNS)
+  assert.deepEqual(unreadable.off, { ...NOTHING_OFF, skippedApprovals: true })
+  assert.ok(unreadable.runs.every(run => run.approvals.length === 0))
+
+  const healthy = setup()
+  assert.deepEqual((await healthy.source.full(ME, PROJECTS, [])).off, NOTHING_OFF)
+})
+
+test('an approval that cannot be read for a decision still fails with the fixed message', async () => {
+  const { ado, source } = setup()
+  Reflect.deleteProperty(ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531'), 'pipeline')
+  assert.equal((await failure(source.approval(ME, { projectId: PROJECT, approvalId: APPROVAL_4531 }))).message, MALFORMED_APPROVAL)
+})
+
+test('an environment that cannot be named leaves its approval unnamed while the runs load', async () => {
+  const answers: [string, () => Response, boolean][] = [
+    ['not found', () => json(404, { message: 'The check suite could not be found.' }), true],
+    ['forbidden', () => json(403, { message: 'TF400813: not authorized.' }), true],
+    ['malformed', () => json(200, { resources: 'nope' }), true],
+    ['an outage', () => json(500, { message: 'TF246017: the database is unavailable.' }), false]
+  ]
+  for (const [name, answer, cached] of answers) {
+    const { ado, clock, source } = setup()
+    ado.on(isCheckSuite, answer)
+    const first = await source.full(ME, PROJECTS, [])
+    assert.deepEqual(ids(first.runs), ALL_RUNS, name)
+    assert.deepEqual(first.off, { ...NOTHING_OFF, environments: true }, name)
+    const waiting = first.runs.find(run => run.buildId === 4520)
+    assert.deepEqual([waiting?.state, waiting?.approvals[0].stage, waiting?.approvals[0].environment], ['waiting', 'Deploy production', null], name)
+
+    clock.now += MINUTE
+    const second = await source.background(ME, PROJECTS, [])
+    assert.deepEqual(second.off, { ...NOTHING_OFF, environments: true }, name)
+    assert.equal(ado.count(isCheckSuite), cached ? 1 : 2, `${name}: ${cached ? 'asked once' : 'asked again'}`)
+
+    ado.on(isCheckSuite, () => json(200, fixture('check-suite-4520')))
+    clock.now += MINUTE
+    const third = await source.background(ME, PROJECTS, [])
+    assert.deepEqual(third.off, cached ? { ...NOTHING_OFF, environments: true } : NOTHING_OFF, name)
+    assert.equal(third.runs.find(run => run.buildId === 4520)?.approvals[0].environment, cached ? null : 'production', name)
+  }
+
+  const { ado, source } = setup()
+  const controller = new AbortController()
+  const hung = ado.hang(isCheckSuite)
+  const load = source.full(ME, PROJECTS, [], controller.signal)
+  await drain()
+  assert.equal(hung.length, 1)
+  controller.abort(new Error('stop'))
+  await assert.rejects(load, /^Error: stop$/)
 })
 
 test('a signal reaches every request of a load', async () => {

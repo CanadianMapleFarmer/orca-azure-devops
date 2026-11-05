@@ -12,6 +12,7 @@ import { isRepositories, PLATFORM } from '../prs/fake-prs'
 import { drain, fakeClock, memoryStore } from '../test-support'
 import {
   APPROVAL_4520,
+  APPROVAL_4531,
   buildIdOf,
   fakePipelines,
   GRACE,
@@ -23,10 +24,13 @@ import {
   isRunningRuns,
   isTimeline,
   ME,
+  runsProjectOf,
   type FakePipelines
 } from './fake-pipelines'
+import { createNotifier } from './notify'
 import { createPressure } from './pressure'
 import { createPipelinesService } from './service'
+import { createRunSignals, type RunSignals } from './signals'
 import { createWatchList } from './watched'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
@@ -37,6 +41,8 @@ const TRIMMED = 'Showing the newest runs only.'
 const NEED_BUILD_READ = 'Pipelines need Build (Read) access.'
 const LOAD_FAILED = "Couldn't load pipeline runs."
 const APPROVALS_NEED_ACCESS = 'Pending approvals need more access, so Needs me may be incomplete.'
+const APPROVALS_UNREADABLE = "Some pending approvals couldn't be read, so Needs me may be incomplete."
+const ENVIRONMENTS_UNREAD = "Some approval environments couldn't be read."
 const TOO_MANY_WATCHED = 'You can watch up to 20 runs.'
 const ALREADY_FINISHED = 'This run has already finished.'
 const RUN_GONE = "That run no longer exists, or you can't see it."
@@ -58,7 +64,7 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness(options: { store?: ReturnType<typeof memoryStore> } = {}) {
+function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (now: () => number) => RunSignals } = {}) {
   const ado = fakePipelines()
   const clock = fakeClock(T0)
   const posts: RunsSnapshot[] = []
@@ -77,7 +83,7 @@ function harness(options: { store?: ReturnType<typeof memoryStore> } = {}) {
     scheduler,
     watchList: createWatchList(memory.store),
     pressure: createPressure(clock.now),
-    signals: { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
+    signals: options.signals?.(clock.now) ?? { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
     post: snapshot => posts.push(structuredClone(snapshot)),
     now: clock.now
   })
@@ -293,10 +299,10 @@ test('watching starts the watch job, a finished watched run is dropped and the j
 
   finish(h.ado, 4531, T0 + 40_000)
   await h.clock.tick(30_000)
-  const [, seen] = h.updates.at(-1) ?? []
-  const done = seen?.find(run => run.buildId === 4531)
+  const done = h.updates.at(-2)?.[1]?.find(run => run.buildId === 4531)
   assert.deepEqual([done?.state, done?.watched], ['succeeded', true], 'the signals see the finish while it is still watched')
   assert.equal(runOf(h.posts.at(-1), 4531).watched, false, 'then it is dropped')
+  assert.deepEqual(h.updates.at(-1)?.[1], h.posts.at(-1)?.runs, 'and the signals take the posted list')
   assert.deepEqual(h.data[WATCHED], [])
   assert.equal(h.service.isWatched(ORG, 4531), false)
 
@@ -317,6 +323,62 @@ test('watching starts the watch job, a finished watched run is dropped and the j
   const quiet = unwatch.ado.calls.length
   await unwatch.clock.tick(2 * MINUTE)
   assert.equal(unwatch.ado.calls.length, quiet, 'unwatching the last run stops the watch job')
+})
+
+test('a watched run of someone else that fails is counted alike by the status bar and the snapshot and notifies once', async () => {
+  const bar: Record<string, number | null> = {}
+  const shown: { title: string; body: string }[] = []
+  const h = harness({
+    signals: now =>
+      createRunSignals({
+        bar: { setCount: (_org, kind, count) => void (bar[kind] = count) },
+        notifier: createNotifier({
+          show: async note => void shown.push(note),
+          prefs: () => ({ failures: true, approvals: true, watched: true }),
+          since: T0,
+          log: message => assert.fail(message)
+        }),
+        now
+      })
+  })
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await drain()
+  h.show(false)
+  const shownBefore = shown.length
+  const watched = await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  assert.equal(runOf(watched, 4531).mine, false)
+
+  finish(h.ado, 4531, T0 + 40_000, 'failed')
+  await h.clock.tick(30_000)
+  await drain()
+
+  const posted = h.posts.at(-1)
+  assert.equal(runOf(posted, 4531).watched, false)
+  assert.equal(bar.failedRuns, posted?.counts.failedRuns, 'the status bar and the snapshot count the same failures')
+  assert.equal(bar.approvals, posted?.counts.approvals)
+  assert.deepEqual(shown.slice(shownBefore).map(note => note.title), [`${runOf(posted, 4531).pipeline.name} failed`], 'the finish notifies once')
+  await h.clock.tick(30_000)
+  await drain()
+  assert.equal(shown.length, shownBefore + 1, 'and not again')
+})
+
+test("watching a loaded run stores the run's own project even when the caller names another", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+
+  await h.service.watch({ org: ORG, projectId: PLATFORM, buildId: 4531, watched: true })
+  assert.deepEqual(h.data[WATCHED], [{ projectId: PROJECT, buildId: 4531 }])
+  const before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  assert.deepEqual([...new Set(h.ado.calls.slice(before).filter(isBuildsByIds).map(runsProjectOf))], [PROJECT], 'the watch job reads the run in its own project')
+  assert.equal(h.service.isWatched(ORG, 4531), true, 'it is not dropped as gone')
+
+  await h.service.watch({ org: ORG, projectId: PLATFORM, buildId: 4531, watched: false })
+  assert.deepEqual(h.data[WATCHED], [])
 })
 
 test('watching a finished run or a 21st run is refused', async () => {
@@ -452,6 +514,34 @@ test('a forbidden builds list pauses the org; a forbidden approvals list only tu
   assert.equal(approvals.ado.count(isMineRuns), 38, 'runs keep loading every 30 s')
   assert.equal(approvals.ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
   assert.equal(approvals.posts.at(-1)?.message, APPROVALS_NEED_ACCESS)
+})
+
+test('approval details that cannot be read are reported while the runs keep loading', async () => {
+  const environments = harness()
+  environments.ado.on(isCheckSuite, () => json(403, { message: 'TF400813: not authorized.' }))
+  environments.setOrgs([status()])
+  environments.show()
+  await environments.clock.tick(0)
+  const first = environments.posts.at(-1)
+  assert.deepEqual([first?.stale, first?.message, first?.counts], [false, ENVIRONMENTS_UNREAD, { failedRuns: 1, approvals: 2 }])
+  assert.deepEqual(ids(first?.runs), [4531, 4520, 4512, 4505, 4498, 4490])
+  assert.equal(runOf(first, 4520).approvals[0].environment, null)
+  assert.equal(runOf(first, 4520).approvals[0].stage, 'Deploy production')
+  const mine = environments.ado.count(isMineRuns)
+  await environments.clock.tick(30_000)
+  assert.ok(environments.ado.count(isMineRuns) > mine, 'the org is not paused')
+  assert.deepEqual([environments.posts.at(-1)?.stale, environments.posts.at(-1)?.message], [false, ENVIRONMENTS_UNREAD])
+
+  const approvals = harness()
+  Reflect.deleteProperty(approvals.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531'), 'pipeline')
+  approvals.setOrgs([status()])
+  approvals.show()
+  await approvals.clock.tick(0)
+  const second = approvals.posts.at(-1)
+  assert.deepEqual([second?.stale, second?.message, second?.counts], [false, APPROVALS_UNREADABLE, { failedRuns: 1, approvals: 1 }])
+  assert.deepEqual(ids(second?.runs), [4531, 4520, 4512, 4505, 4498, 4490])
+  assert.equal(runOf(second, 4520).state, 'waiting')
+  assert.equal(runOf(second, 4531).state, 'running')
 })
 
 test('a failed refresh keeps the last snapshot as stale', async () => {

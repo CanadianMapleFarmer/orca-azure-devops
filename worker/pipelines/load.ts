@@ -5,7 +5,7 @@ import { buildsByIds, getBuild, listBuilds, toRunSummary, type RawBuild } from '
 import type { NamedItem } from '../ado/core'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
-import { malformed } from '../ado/shape'
+import { isMalformed, malformed } from '../ado/shape'
 import { approvalPlaceOf, getTimeline, stageChips, type RawTimeline } from '../ado/timeline'
 import { MALFORMED } from '../messages'
 
@@ -21,7 +21,7 @@ const APPROVALS_OFF_MS = 10 * MINUTE
 
 export interface RunsLoad {
   runs: RunSummary[]
-  off: { approvals: boolean }
+  off: { approvals: boolean; skippedApprovals: boolean; environments: boolean }
 }
 
 export interface RunSource {
@@ -36,9 +36,18 @@ interface Pending {
   raw: RawApproval
 }
 
+type Gap = 'permanent' | 'transient'
+
 interface Place {
   stage: string | null
   environment: string | null
+  gap: Gap | null
+}
+
+interface Lists {
+  builds: RawBuild[]
+  pending: Pending[]
+  skipped: boolean
 }
 
 type Kind = 'full' | 'background'
@@ -51,25 +60,32 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
 
   const approvalsOff = () => now() < approvalsOffUntil
 
-  async function pendingIn(scoped: AdoHttp, projectId: string): Promise<Pending[]> {
-    if (approvalsOff()) return []
+  async function pendingIn(scoped: AdoHttp, me: string, projectId: string): Promise<Lists> {
+    if (approvalsOff()) return withPending([])
     try {
-      return (await listPendingApprovals(scoped, org, projectId)).map(raw => ({ projectId, raw: checked(raw) }))
+      const listed = await listPendingApprovals(scoped, org, projectId)
+      const pending = listed.filter(raw => readable(raw, projectId, me)).map(raw => ({ projectId, raw }))
+      return withPending(pending, pending.length < listed.length)
     } catch (error) {
+      if (isMalformed(error)) return withPending([], true)
       if (!(error instanceof AdoError) || error.code !== 'forbidden') throw error
       approvalsOffUntil = now() + APPROVALS_OFF_MS
-      return []
+      return withPending([])
     }
   }
 
-  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind): Promise<{ builds: RawBuild[]; pending: Pending[] }> {
-    const reads: (() => Promise<{ builds: RawBuild[]; pending: Pending[] }>)[] = projects.flatMap(project => [
-      async () => ({ builds: await listBuilds(scoped, org, project.id, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP }), pending: [] }),
-      ...(kind === 'full' ? [async () => ({ builds: await listBuilds(scoped, org, project.id, { statusFilter: 'inProgress', top: RUNNING_TOP }), pending: [] })] : []),
-      async () => ({ builds: [], pending: await pendingIn(scoped, project.id) })
+  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind): Promise<Lists> {
+    const reads: (() => Promise<Lists>)[] = projects.flatMap(project => [
+      async () => withBuilds(await listBuilds(scoped, org, project.id, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP })),
+      ...(kind === 'full' ? [async () => withBuilds(await listBuilds(scoped, org, project.id, { statusFilter: 'inProgress', top: RUNNING_TOP }))] : []),
+      () => pendingIn(scoped, me, project.id)
     ])
     const loaded = await mapLimit(reads, IN_FLIGHT, read => read())
-    return { builds: loaded.flatMap(entry => entry.builds), pending: loaded.flatMap(entry => entry.pending) }
+    return {
+      builds: loaded.flatMap(entry => entry.builds),
+      pending: loaded.flatMap(entry => entry.pending),
+      skipped: loaded.some(entry => entry.skipped)
+    }
   }
 
   async function withUnlisted(scoped: AdoHttp, me: string, builds: RawBuild[], wanted: RunKey[]): Promise<Map<number, RunSummary>> {
@@ -89,8 +105,13 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     return new Map(runs.map((run, index) => [run.buildId, read[index]]))
   }
 
+  function placeIsOpen(approvalId: string): boolean {
+    const place = places.get(placeKey(approvalId))
+    return place === undefined || place.gap === 'transient'
+  }
+
   async function placeAll(scoped: AdoHttp, pending: Pending[], runs: ReadonlyMap<number, RunSummary>, timelines: Map<number, RawTimeline | null>): Promise<void> {
-    const unplaced = pending.filter(({ raw }) => runs.has(runIdOf(raw)) && !places.has(placeKey(raw.id)))
+    const unplaced = pending.filter(({ raw }) => runs.has(runIdOf(raw)) && placeIsOpen(raw.id))
     const unread = new Map<number, RunSummary>()
     for (const { raw } of unplaced) {
       const run = runs.get(runIdOf(raw))
@@ -104,8 +125,14 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
 
   async function placeOf(scoped: AdoHttp, projectId: string, approvalId: string, timeline: RawTimeline | null): Promise<Place> {
     const place = timeline ? approvalPlaceOf(timeline, approvalId) : null
-    const environment = place?.checkSuiteId ? await checkSuiteEnvironment(scoped, org, projectId, place.checkSuiteId) : null
-    return { stage: place?.stage ?? null, environment }
+    const stage = place?.stage ?? null
+    if (!place?.checkSuiteId) return { stage, environment: null, gap: null }
+    try {
+      return { stage, environment: await checkSuiteEnvironment(scoped, org, projectId, place.checkSuiteId), gap: null }
+    } catch (error) {
+      if (!(error instanceof AdoError)) throw error
+      return { stage, environment: null, gap: permanent(error) ? 'permanent' : 'transient' }
+    }
   }
 
   function chipTargets(runs: RunSummary[]): { active: RunSummary[]; finished: RunSummary[] } {
@@ -145,8 +172,8 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     for (const { projectId, raw } of pending) {
       const buildId = runIdOf(raw)
       if (!runs.has(buildId)) continue
-      const place = places.get(placeKey(raw.id)) ?? { stage: null, environment: null }
-      approvals.set(buildId, [...(approvals.get(buildId) ?? []), toApprovalSummary(raw, { projectId, me, ...place })])
+      const { stage, environment } = places.get(placeKey(raw.id)) ?? { stage: null, environment: null }
+      approvals.set(buildId, [...(approvals.get(buildId) ?? []), toApprovalSummary(raw, { projectId, me, stage, environment })])
     }
     const watchedIds = new Set(watched.map(key => key.buildId))
     return orderRuns(
@@ -160,7 +187,7 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
 
   async function load(kind: Kind, me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad> {
     const scoped = withSignal(http, signal)
-    const { builds, pending } = await lists(scoped, me, projects, kind)
+    const { builds, pending, skipped } = await lists(scoped, me, projects, kind)
     const wanted = [...pending.map(({ projectId, raw }) => ({ projectId, buildId: runIdOf(raw) })), ...watched]
     const runs = await withUnlisted(scoped, me, builds, wanted)
     const targets = kind === 'full' ? chipTargets([...runs.values()]) : { active: [], finished: [] }
@@ -175,7 +202,8 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
       kind === 'full' ? fullChips(run, timelines, active) : carriedChips(lastFull.get(run.buildId), run)
     )
     if (kind === 'full') lastFull = new Map(result.map(run => [run.buildId, run]))
-    return { runs: result, off: { approvals: approvalsOff() } }
+    const unnamed = pending.some(({ raw }) => places.get(placeKey(raw.id))?.gap != null)
+    return { runs: result, off: { approvals: approvalsOff(), skippedApprovals: skipped, environments: unnamed } }
   }
 
   return {
@@ -204,7 +232,7 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
       const timeline = known ? null : await getTimeline(scoped, org, key.projectId, run.buildId)
       const place = known ?? (await placeOf(scoped, key.projectId, raw.id, timeline))
       places.set(placeKey(raw.id), place)
-      const approval = toApprovalSummary(raw, { projectId: key.projectId, me, ...place })
+      const approval = toApprovalSummary(raw, { projectId: key.projectId, me, stage: place.stage, environment: place.environment })
       const approvals = [approval]
       return { run: { ...run, approvals, state: waitingIf(run.state, approvals), stages: chipsFrom(timeline) }, approval }
     }
@@ -217,6 +245,27 @@ export function carriedChips(previous: RunSummary | undefined, next: RunSummary)
 
 export function waitingIf(state: RunState, approvals: readonly ApprovalSummary[]): RunState {
   return approvals.length > 0 && (state === 'queued' || state === 'running') ? 'waiting' : state
+}
+
+function withBuilds(builds: RawBuild[]): Lists {
+  return { builds, pending: [], skipped: false }
+}
+
+function withPending(pending: Pending[], skipped = false): Lists {
+  return { builds: [], pending, skipped }
+}
+
+function readable(raw: RawApproval, projectId: string, me: string): boolean {
+  try {
+    toApprovalSummary(raw, { projectId, me, stage: null, environment: null })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function permanent(error: AdoError): boolean {
+  return error.code === 'not_found' || error.code === 'forbidden' || isMalformed(error)
 }
 
 function checked(raw: RawApproval): RawApproval {

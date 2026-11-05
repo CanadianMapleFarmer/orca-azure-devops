@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import { AdoError } from './http'
-import { expectList, expectText, malformed, shaped } from './shape'
+import { expectList, expectText, isMalformed, malformed, shaped } from './shape'
 
 const MESSAGE = 'Azure DevOps returned something unexpected.'
 const isTypeError = (error: unknown): boolean => error instanceof TypeError
@@ -36,4 +36,11 @@ test('shaped passes a built value through and turns any failure into a server er
 test('malformed throws the server error', () => {
   const error = failure(() => malformed(MESSAGE))
   assert.deepEqual([error.code, error.status, error.message], ['server', 200, MESSAGE])
+})
+
+test('isMalformed recognises only what malformed throws', () => {
+  assert.equal(isMalformed(failure(() => malformed(MESSAGE))), true)
+  assert.equal(isMalformed(new AdoError('server', 500, MESSAGE)), false)
+  assert.equal(isMalformed(new AdoError('not_found', 200, MESSAGE)), false)
+  assert.equal(isMalformed(new TypeError('expected text')), false)
 })

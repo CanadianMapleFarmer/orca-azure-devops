@@ -1,22 +1,24 @@
 import type { ApprovalSummary, RunKey, RunsSnapshot, RunSummary } from '../../src/shared/pipelines'
 import { isActive, orderRuns, runCounts } from '../../src/shared/runs'
-import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
-import { linkedAbort } from '../abort'
+import type { OrgStatus } from '../../src/shared/types'
+import { linkedAbort, untilAborted } from '../abort'
 import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import {
+  APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
+  APPROVALS_UNREADABLE,
   badRequest,
   failureMessage,
   joinMessages,
-  NOT_CONNECTED,
   RUN_ALREADY_FINISHED,
   RUN_GONE,
   RUNS_LOAD_FAILED,
   RUNS_NEED_BUILD_READ,
   RUNS_TRIMMED
 } from '../messages'
+import { isSignedIn, loadFailure, notConnected, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { carriedChips, createRunSource, waitingIf, type RunSource, type RunsLoad } from './load'
 import type { Pressure } from './pressure'
@@ -48,7 +50,6 @@ export interface PipelinesService {
 }
 
 type Kind = 'full' | 'background'
-type SignedInStatus = OrgStatus & { account: PinnedAccount }
 
 interface OrgRuns {
   controller: AbortController
@@ -83,7 +84,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
   async function statusOf(org: string): Promise<SignedInStatus> {
     const orgs = await deps.orgs().catch(error => {
-      throw loadFailure(error)
+      throw loadFailure(error, RUNS_LOAD_FAILED)
     })
     const status = orgs.find(item => item.org === org)
     if (disposed || !status || !isSignedIn(status)) throw notConnected()
@@ -175,13 +176,15 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     entry.watched = await deps.watchList.list(org)
     signal.throwIfAborted()
     syncWatchJob(org)
-    return flagged(entry, runs)
+    const listed = flagged(entry, runs)
+    if (listed.some((run, index) => run !== runs[index])) deps.signals.update(org, listed)
+    return listed
   }
 
   function fail(entry: OrgRuns, error: unknown): AdoError {
     const forbidden = error instanceof AdoError && error.code === 'forbidden'
     if (forbidden) entry.pausedUntil = now() + FORBIDDEN_PAUSE_MS
-    entry.failure = forbidden ? new AdoError('forbidden', 403, RUNS_NEED_BUILD_READ) : loadFailure(error)
+    entry.failure = forbidden ? new AdoError('forbidden', 403, RUNS_NEED_BUILD_READ) : loadFailure(error, RUNS_LOAD_FAILED)
     if (entry.base) publish(entry, { ...entry.base, stale: true, message: forbidden ? RUNS_NEED_BUILD_READ : failureMessage(error, RUNS_LOAD_FAILED) })
     return entry.failure
   }
@@ -218,7 +221,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
       if (last) return last
-      throw entry.failure ?? loadFailure(null)
+      throw entry.failure ?? loadFailure(null, RUNS_LOAD_FAILED)
     }
     try {
       const status = await statusOf(org)
@@ -363,16 +366,15 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const last = lastFull(org)
       if (last) return last
       const entry = entries.get(org)
-      throw entry ? (entry.failure ?? loadFailure(null)) : notConnected()
+      throw entry ? (entry.failure ?? loadFailure(null, RUNS_LOAD_FAILED)) : notConnected()
     },
 
     async watch({ org, projectId, buildId, watched }) {
       const status = await statusOf(org)
       const entry = entryOf(org)
-      const key = { projectId, buildId }
-      const run = watched ? (cachedRun(org, buildId) ?? (await readRun(entry, status.account.adoId, key))) : null
+      const run = watched ? (cachedRun(org, buildId) ?? (await readRun(entry, status.account.adoId, { projectId, buildId }))) : null
       if (run && !isActive(run)) throw badRequest(RUN_ALREADY_FINISHED)
-      const list = await deps.watchList.set(org, key, watched)
+      const list = await deps.watchList.set(org, { projectId: run?.projectId ?? projectId, buildId }, watched)
       if (entry.controller.signal.aborted) throw notConnected()
       entry.watched = list
       syncWatchJob(org)
@@ -452,26 +454,9 @@ function capRunsSnapshot(snapshot: RunsSnapshot): RunsSnapshot {
 }
 
 function offMessage({ off }: RunsLoad): string | undefined {
-  return off.approvals ? APPROVALS_NEED_ACCESS : undefined
-}
-
-function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const stop = () => reject(signal.reason)
-    if (signal.aborted) stop()
-    signal.addEventListener('abort', stop, { once: true })
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
-  })
-}
-
-function isSignedIn(status: OrgStatus): status is SignedInStatus {
-  return status.state === 'connected' && status.account !== null
-}
-
-function notConnected(): AdoError {
-  return new AdoError('unauthorized', 401, NOT_CONNECTED)
-}
-
-function loadFailure(error: unknown): AdoError {
-  return error instanceof AdoError ? error : new AdoError('server', 500, RUNS_LOAD_FAILED)
+  return joinMessages(
+    off.approvals ? APPROVALS_NEED_ACCESS : undefined,
+    off.skippedApprovals ? APPROVALS_UNREADABLE : undefined,
+    off.environments ? APPROVAL_ENVIRONMENTS_UNREAD : undefined
+  )
 }

@@ -10,8 +10,14 @@ export function expectList<T>(value: unknown): T[] {
   return value
 }
 
+const MALFORMED_STATUS = 200
+
 export function malformed(message: string): never {
-  throw new AdoError('server', 200, message)
+  throw new AdoError('server', MALFORMED_STATUS, message)
+}
+
+export function isMalformed(error: unknown): boolean {
+  return error instanceof AdoError && error.code === 'server' && error.status === MALFORMED_STATUS
 }
 
 export function shaped<T>(build: () => T, message: string): T {

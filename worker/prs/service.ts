@@ -1,19 +1,19 @@
 import type { AutoCompleteOptions, PrKey, PrSnapshot, PrSummary, ReleaseSet } from '../../src/shared/prs'
-import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
-import { linkedAbort } from '../abort'
+import type { OrgStatus } from '../../src/shared/types'
+import { linkedAbort, untilAborted } from '../abort'
 import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import {
   failureMessage,
   joinMessages,
-  NOT_CONNECTED,
   PRS_CHECKS_NEED_ACCESS,
   PRS_LOAD_FAILED,
   PRS_NEED_CODE_READ,
   PRS_TRIMMED,
   PRS_WORK_ITEMS_NEED_ACCESS
 } from '../messages'
+import { isSignedIn, loadFailure, notConnected, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource } from './load'
 import { newestCreatedAt, releaseSets, toReviewOf } from './release-sets'
@@ -40,7 +40,6 @@ export interface PrsService {
 }
 
 type Kind = 'full' | 'reviews'
-type SignedInStatus = OrgStatus & { account: PinnedAccount }
 
 interface OrgPrs {
   controller: AbortController
@@ -72,7 +71,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
   async function statusOf(org: string): Promise<SignedInStatus> {
     const orgs = await deps.orgs().catch(error => {
-      throw loadFailure(error)
+      throw loadFailure(error, PRS_LOAD_FAILED)
     })
     const status = orgs.find(item => item.org === org)
     if (disposed || !status || !isSignedIn(status)) throw notConnected()
@@ -162,7 +161,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
       if (last) return last
-      throw entry.failure ?? loadFailure(null)
+      throw entry.failure ?? loadFailure(null, PRS_LOAD_FAILED)
     }
     try {
       const status = await statusOf(org)
@@ -193,7 +192,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const forbidden = error instanceof AdoError && error.code === 'forbidden'
       if (forbidden) entry.pausedUntil = now() + FORBIDDEN_PAUSE_MS
       if (kind === 'full') entry.fullLoads += 1
-      entry.failure = forbidden ? new AdoError('forbidden', 403, PRS_NEED_CODE_READ) : loadFailure(error)
+      entry.failure = forbidden ? new AdoError('forbidden', 403, PRS_NEED_CODE_READ) : loadFailure(error, PRS_LOAD_FAILED)
       if (entry.base) publish(entry, { ...entry.base, stale: true, message: forbidden ? PRS_NEED_CODE_READ : failureMessage(error, PRS_LOAD_FAILED) })
       throw entry.failure
     }
@@ -247,7 +246,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const last = lastFull(org)
       if (last) return last
       const entry = entries.get(org)
-      throw entry ? (entry.failure ?? loadFailure(null)) : notConnected()
+      throw entry ? (entry.failure ?? loadFailure(null, PRS_LOAD_FAILED)) : notConnected()
     },
 
     async reloadFresh(org) {
@@ -295,27 +294,6 @@ function capPrSnapshot(snapshot: PrSnapshot): PrSnapshot {
 
 function offMessage({ off }: FullLoad): string | undefined {
   return joinMessages(off.workItems ? PRS_WORK_ITEMS_NEED_ACCESS : undefined, off.checks ? PRS_CHECKS_NEED_ACCESS : undefined)
-}
-
-function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const stop = () => reject(signal.reason)
-    if (signal.aborted) stop()
-    signal.addEventListener('abort', stop, { once: true })
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
-  })
-}
-
-function isSignedIn(status: OrgStatus): status is SignedInStatus {
-  return status.state === 'connected' && status.account !== null
-}
-
-function notConnected(): AdoError {
-  return new AdoError('unauthorized', 401, NOT_CONNECTED)
-}
-
-function loadFailure(error: unknown): AdoError {
-  return error instanceof AdoError ? error : new AdoError('server', 500, PRS_LOAD_FAILED)
 }
 
 export function samePr(pr: PrKey, key: PrKey): boolean {
