@@ -78,6 +78,6 @@ function newestPrFirst(a: PrSummary, b: PrSummary): number {
   return b.createdAt - a.createdAt || b.prId - a.prId
 }
 
-function sameId(a: string, b: string): boolean {
+export function sameId(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase()
 }

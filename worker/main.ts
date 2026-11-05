@@ -8,6 +8,7 @@ import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { registerOrgHandlers } from './org-handlers'
 import { createScheduler, realClock } from './poll/scheduler'
+import { createPrActions } from './prs/actions'
 import { registerPrHandlers } from './prs/handlers'
 import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
@@ -75,6 +76,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     counts: (org, count) => bar.setCount(org, 'toReview', count),
     now: Date.now
   })
+  const prActions = createPrActions({ http: connections.http, prs, orgs: () => connections.list(), settings: prSettings })
   stopPolling = () => {
     scheduler.dispose()
     prs.dispose()
@@ -86,7 +88,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
-  registerPrHandlers(orca, { prs })
+  registerPrHandlers(orca, { prs, actions: prActions })
   registerVisibilityHandler(orca, { boards, prs })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
   const orgs = await connections.list()

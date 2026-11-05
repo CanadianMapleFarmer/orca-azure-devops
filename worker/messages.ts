@@ -29,6 +29,13 @@ export const PRS_NEED_CODE_READ = 'Pull requests need Code (Read) access.'
 export const PRS_LOAD_FAILED = "Couldn't load pull requests."
 export const PRS_WORK_ITEMS_NEED_ACCESS = 'Linked work items need more access, so sets are grouped by branch only.'
 export const PRS_CHECKS_NEED_ACCESS = 'Build and policy status need more access.'
+export const PR_SKIPPED_COMPLETED = "Skipped: it's completed."
+export const PR_SKIPPED_ABANDONED = "Skipped: it's abandoned."
+export const PR_SKIPPED_DRAFT = "Skipped: it's a draft. Publish it first."
+export const PR_ALREADY_APPROVED = 'Already approved.'
+export const PR_APPROVED = 'Approved.'
+export const PR_ALREADY_AUTO_COMPLETE = 'Already set to auto-complete.'
+export const PR_AUTO_COMPLETE_SET = 'Auto-complete set.'
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
@@ -44,6 +51,10 @@ export function noBoardNamed(name: string): string {
 
 export function showingNewest(count: number): string {
   return `Showing the ${count.toLocaleString('en-US')} most recently changed items.`
+}
+
+export function keptBranch(prId: number): string {
+  return `${PR_AUTO_COMPLETE_SET} Source branch kept: Pull Request ${prId} also uses it.`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

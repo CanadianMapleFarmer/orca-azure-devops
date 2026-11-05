@@ -320,6 +320,6 @@ function loadFailure(error: unknown): AdoError {
   return error instanceof AdoError ? error : new AdoError('server', 500, PRS_LOAD_FAILED)
 }
 
-function samePr(pr: PrKey, key: PrKey): boolean {
+export function samePr(pr: PrKey, key: PrKey): boolean {
   return pr.projectId === key.projectId && pr.repoId === key.repoId && pr.prId === key.prId
 }

@@ -7,7 +7,7 @@ import type { PrSnapshot } from '../src/shared/prs'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
-import { BOARDS, fakeAdo, isWiql, json as reply, ORG_URL, PROJECT, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
+import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
@@ -615,6 +615,39 @@ test('prs.snapshot answers through the handler', async () => {
       const refreshed = await w.request('prs.refresh', { org: 'contoso' })
       assert.deepEqual(refreshed.sets.map(set => set.key), snapshot.sets.map(set => set.key))
       await assert.rejects(w.request('prs.snapshot', { org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('prs.approve answers through the handler', async () => {
+  const ado = fakePrs()
+  ado.on(call => call.method === 'PUT' && call.path.includes('/reviewers/'), call => reply(200, call.body))
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const key = { projectId: PROJECT, repoId: REPO, prId: 4102 }
+      assert.deepEqual(await w.request('prs.approve', { org: 'contoso', prs: [key] }), { results: [{ prId: 4102, ok: true, message: 'Approved.' }] })
+      const [vote] = ado.calls.filter(call => call.method === 'PUT')
+      assert.equal(vote.path, `/contoso/${PROJECT}/_apis/git/repositories/${REPO}/pullRequests/4102/reviewers/${ME}`)
+      assert.deepEqual(vote.body, { vote: 10, isRequired: false })
+      await assert.rejects(w.request('prs.approve', { org: 'fabrikam', prs: [key] }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('prs.autoComplete answers through the handler with the saved options', async () => {
+  const ado = fakePrs()
+  ado.on(isPatch, call => reply(200, { pullRequestId: Number(call.path.split('/').pop()) }))
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const key = { projectId: PROJECT, repoId: REPO, prId: 4102 }
+      assert.deepEqual(await w.request('prs.autoComplete', { org: 'contoso', prs: [key] }), { results: [{ prId: 4102, ok: true, message: 'Auto-complete set.' }] })
+      const [patch] = ado.calls.filter(isPatch)
+      assert.deepEqual(patch.body, {
+        autoCompleteSetBy: { id: ME },
+        completionOptions: { mergeStrategy: 'noFastForward', deleteSourceBranch: false, transitionWorkItems: false, bypassPolicy: false }
+      })
       assert.equal(w.refusals.length, 0)
     })
   })

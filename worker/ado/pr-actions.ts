@@ -4,7 +4,7 @@ import type { AdoHttp } from './http'
 import { toReviewer, type RawReviewer } from './pullrequests'
 import { expectList, shaped } from './shape'
 
-const APPROVED_VOTE = 10
+export const APPROVED_VOTE = 10
 const NO_VOTE = 0
 
 export async function castVote(http: AdoHttp, org: string, key: PrKey, me: string, isRequired: boolean): Promise<void> {

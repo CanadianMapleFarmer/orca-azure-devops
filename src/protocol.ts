@@ -1,4 +1,4 @@
-import type { PrSnapshot } from './shared/prs'
+import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
 import type { ConnectFailure, ConnectionMethod, OrgStatus } from './shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
@@ -45,6 +45,8 @@ declare module 'orca' {
     }
     'prs.snapshot': { input: { org: string }; output: PrSnapshot }
     'prs.refresh': { input: { org: string }; output: PrSnapshot }
+    'prs.approve': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
+    'prs.autoComplete': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
   }
   interface PluginPanelEvents {
     'orgs.changed': { orgs: OrgStatus[] }
