@@ -145,6 +145,13 @@ test('decide says how many approvals are still missing', async () => {
   assert.deepEqual(await h.decide(APPROVAL_4531), { ok: true, warn: true, message: 'Approved. It still needs 1 more approval.' })
   assert.deepEqual(await h.decide(APPROVAL_4520), { ok: true, warn: true, message: 'Approved. It still needs 2 more approvals.' })
   assert.equal(h.approvalPatches().length, 2)
+
+  h.ado.on(isApprovalPatch, () => {
+    const answer = structuredClone(approvalOf(h.ado, APPROVAL_4531))
+    for (const step of answer.steps ?? []) step.status = 'approved'
+    return json(200, { count: 1, value: [answer] })
+  })
+  assert.deepEqual(await h.decide(APPROVAL_4531), { ok: true, warn: true, message: 'Approved.' }, 'a count ADO did not give is not claimed')
 })
 
 test('decide reports a refusal as the row and writes once', async () => {

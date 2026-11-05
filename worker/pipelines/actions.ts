@@ -107,7 +107,8 @@ function outcomeOf(decision: Decision, minRequired: number, answer: RawApproval)
   if (answer.status === decision) return { ok: true, message: DECIDED[decision] }
   if (answer.status !== PENDING) return refused(APPROVAL_NOT_PENDING)
   if (decision === 'rejected') return refused(MALFORMED.approval)
-  return { ok: true, warn: true, message: approvedNeedsMore(Math.max(1, minRequired - approvedSteps(answer))) }
+  const missing = minRequired - approvedSteps(answer)
+  return { ok: true, warn: true, message: missing > 0 ? approvedNeedsMore(missing) : APPROVED }
 }
 
 function approvedSteps({ steps }: RawApproval): number {
