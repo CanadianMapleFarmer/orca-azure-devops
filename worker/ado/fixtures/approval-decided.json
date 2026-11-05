@@ -1,0 +1,63 @@
+{
+  "count": 1,
+  "value": [
+    {
+      "id": "9e5f6a7b-7003-4e6f-9a7b-8c9d0e1f2a33",
+      "steps": [
+        {
+          "assignedApprover": {
+            "displayName": "Alex Contoso",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "uniqueName": "alex@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+          },
+          "actualApprover": {
+            "displayName": "Alex Contoso",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "uniqueName": "alex@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+          },
+          "status": "approved",
+          "order": 1,
+          "comment": "Smoke tests are green.",
+          "initiatedOn": "2026-11-05T09:47:30.0000000Z",
+          "lastModifiedOn": "2026-11-05T09:55:12.4000000Z",
+          "lastModifiedBy": {
+            "displayName": "Alex Contoso",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "uniqueName": "alex@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+          }
+        }
+      ],
+      "status": "approved",
+      "createdOn": "2026-11-05T09:47:30.0000000Z",
+      "lastModifiedOn": "2026-11-05T09:55:12.4000000Z",
+      "executionOrder": "anyOrder",
+      "minRequiredApprovers": 1,
+      "instructions": "Check the smoke tests on staging before approving.",
+      "blockedApprovers": [],
+      "pipeline": {
+        "id": 12,
+        "name": "web-app-cd",
+        "owner": {
+          "id": 4531,
+          "name": "20261105.4",
+          "_links": {
+            "web": {
+              "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4531"
+            }
+          }
+        }
+      },
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/pipelines/approvals/9e5f6a7b-7003-4e6f-9a7b-8c9d0e1f2a33"
+        }
+      }
+    }
+  ]
+}

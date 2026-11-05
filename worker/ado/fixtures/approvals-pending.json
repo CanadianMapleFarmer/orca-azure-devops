@@ -1,0 +1,95 @@
+{
+  "count": 2,
+  "value": [
+    {
+      "id": "8d4e5f6a-7002-4d5e-8f6a-7b8c9d0e1f22",
+      "steps": [
+        {
+          "assignedApprover": {
+            "displayName": "[Fabrikam Web]\\Release Approvers",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/d4e5f6a7-5555-4d9e-9f0a-2b3c4d5e6f70",
+            "id": "d4e5f6a7-5555-4d9e-9f0a-2b3c4d5e6f70",
+            "uniqueName": "vstfs:///Classification/TeamProject/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d\\Release Approvers",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.d4e5f6a7-5555-4d9e-9f0a-2b3c4d5e6f70",
+            "isContainer": true
+          },
+          "status": "pending",
+          "order": 1,
+          "comment": "",
+          "initiatedOn": "2026-11-05T09:38:57.2000000Z",
+          "lastModifiedOn": "2026-11-05T09:38:57.2000000Z"
+        }
+      ],
+      "status": "pending",
+      "createdOn": "2026-11-05T09:38:57.2000000Z",
+      "lastModifiedOn": "2026-11-05T09:38:57.2000000Z",
+      "executionOrder": "anyOrder",
+      "minRequiredApprovers": 1,
+      "blockedApprovers": [],
+      "permissions": 1,
+      "pipeline": {
+        "id": 12,
+        "name": "web-app-cd",
+        "owner": {
+          "id": 4520,
+          "name": "20261105.3",
+          "_links": {
+            "web": {
+              "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4520"
+            }
+          }
+        }
+      },
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/pipelines/approvals/8d4e5f6a-7002-4d5e-8f6a-7b8c9d0e1f22"
+        }
+      }
+    },
+    {
+      "id": "9e5f6a7b-7003-4e6f-9a7b-8c9d0e1f2a33",
+      "steps": [
+        {
+          "assignedApprover": {
+            "displayName": "Alex Contoso",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "uniqueName": "alex@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+          },
+          "status": "pending",
+          "order": 1,
+          "comment": "",
+          "initiatedOn": "2026-11-05T09:47:30.0000000Z",
+          "lastModifiedOn": "2026-11-05T09:47:30.0000000Z"
+        }
+      ],
+      "status": "pending",
+      "createdOn": "2026-11-05T09:47:30.0000000Z",
+      "lastModifiedOn": "2026-11-05T09:47:30.0000000Z",
+      "executionOrder": "anyOrder",
+      "minRequiredApprovers": 1,
+      "instructions": "Check the smoke tests on staging before approving.",
+      "blockedApprovers": [],
+      "permissions": 3,
+      "pipeline": {
+        "id": 12,
+        "name": "web-app-cd",
+        "owner": {
+          "id": 4531,
+          "name": "20261105.4",
+          "_links": {
+            "web": {
+              "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4531"
+            }
+          }
+        }
+      },
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/pipelines/approvals/9e5f6a7b-7003-4e6f-9a7b-8c9d0e1f2a33"
+        }
+      }
+    }
+  ]
+}
