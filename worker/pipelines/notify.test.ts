@@ -154,6 +154,13 @@ test('exactly three notify without a summary, and every collapsed key counts as 
   })
 })
 
+test('four failures fold one run into a singular summary', async () => {
+  await withNotifier({}, async h => {
+    const shown = await observe(h, [1, 2, 3, 4].map(id => failed(id)))
+    assert.equal(shown[3]?.title, '1 more pipeline update')
+  })
+})
+
 test('a failed run says where it failed when its stages are loaded', async () => {
   await withNotifier({}, async h => {
     const stages = chips(['Build', 'succeeded'], ['Image', 'failed'], ['Deploy production', 'failed'])

@@ -151,7 +151,7 @@ export function waitingAt(place: string): string {
 }
 
 export function moreRunUpdates(count: number): string {
-  return `${count} more pipeline updates`
+  return `${count} more pipeline ${count === 1 ? 'update' : 'updates'}`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {
