@@ -63,13 +63,17 @@ export const SHARE_PREFS_NOT_SAVED = "Couldn't save the share choices."
 export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams channel that failed to save."
 export const UNKNOWN_SHARE_KIND = "That can't be shared."
 
+export const ALL_JOBS_STAGE = 'All jobs'
+
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
   pullRequest: 'Azure DevOps returned an unexpected pull request response.',
   comment: 'Azure DevOps returned an unexpected comment response.',
   boardConfig: 'Azure DevOps returned an unexpected board configuration.',
   identity: 'Azure DevOps returned an unexpected identity response.',
-  build: 'Azure DevOps returned an unexpected pipeline run response.'
+  build: 'Azure DevOps returned an unexpected pipeline run response.',
+  timeline: 'Azure DevOps returned an unexpected run timeline.',
+  log: 'Azure DevOps returned an unexpected log response.'
 } as const
 
 export function noBoardNamed(name: string): string {

@@ -1,0 +1,85 @@
+{
+  "count": 10,
+  "value": [
+    {
+      "lineCount": 14,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 1,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/1"
+    },
+    {
+      "lineCount": 38,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 2,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/2"
+    },
+    {
+      "lineCount": 61,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 3,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/3"
+    },
+    {
+      "lineCount": 112,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 4,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/4"
+    },
+    {
+      "lineCount": 22,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 5,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/5"
+    },
+    {
+      "lineCount": 18,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 6,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/6"
+    },
+    {
+      "lineCount": 41,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 7,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/7"
+    },
+    {
+      "lineCount": 29,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 8,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/8"
+    },
+    {
+      "lineCount": 240,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 9,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/9"
+    },
+    {
+      "lineCount": 24,
+      "createdOn": "2026-11-05T08:04:25.1000000Z",
+      "lastChangedOn": "2026-11-05T08:09:44.0000000Z",
+      "id": 10,
+      "type": "Container",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs/10"
+    }
+  ]
+}

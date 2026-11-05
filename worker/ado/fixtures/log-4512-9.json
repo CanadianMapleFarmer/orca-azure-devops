@@ -1,0 +1,18 @@
+{
+  "count": 13,
+  "value": [
+    "2026-11-05T08:06:30.1010000Z ##[section]Starting: Build and push image",
+    "2026-11-05T08:06:30.1260000Z ==============================================================================",
+    "2026-11-05T08:06:30.1270000Z Task         : Command line",
+    "2026-11-05T08:06:30.1280000Z ==============================================================================",
+    "2026-11-05T08:06:30.2150000Z Generating script.",
+    "2026-11-05T08:06:30.2160000Z ========================== Starting Command Output ===========================",
+    "2026-11-05T08:06:30.2190000Z ##[command]/usr/bin/bash --noprofile --norc /home/vsts/work/_temp/9f1c2a7e-3b64-4d58-a2c1-5e7d8b9a0c34.sh",
+    "2026-11-05T08:06:31.0480000Z #1 [internal] load build definition from Dockerfile",
+    "2026-11-05T08:09:38.7710000Z #9 ERROR: process \"/bin/sh -c dotnet publish -c Release -o /app\" did not complete successfully: exit code: 1",
+    "2026-11-05T08:09:38.8120000Z ERROR: failed to solve: process \"/bin/sh -c dotnet publish -c Release -o /app\" did not complete successfully: exit code: 1",
+    "2026-11-05T08:09:39.9000000Z /home/vsts/work/1/s/src/Api/Program.cs(42,17): error CS1002: ; expected [/home/vsts/work/1/s/src/Api/Api.csproj]",
+    "2026-11-05T08:09:40.0000000Z ##[error]Bash exited with code '1'.",
+    "2026-11-05T08:09:40.0300000Z ##[section]Finishing: Build and push image"
+  ]
+}

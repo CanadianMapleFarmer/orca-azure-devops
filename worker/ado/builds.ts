@@ -190,7 +190,7 @@ function expectId(value: unknown): number {
   return value
 }
 
-function optionalTimestamp(value: unknown): number | null {
+export function optionalTimestamp(value: unknown): number | null {
   const ms = typeof value === 'string' ? Date.parse(value) : Number.NaN
   return Number.isNaN(ms) ? null : ms
 }
