@@ -74,6 +74,14 @@ export const APPROVAL_ENVIRONMENTS_UNREAD = "Some approval environments couldn't
 export const TOO_MANY_WATCHED = 'You can watch up to 20 runs.'
 export const RUN_ALREADY_FINISHED = 'This run has already finished.'
 export const RUN_GONE = "That run no longer exists, or you can't see it."
+export const COMMENT_TOO_LONG = 'Keep the comment under 1,000 characters.'
+export const APPROVAL_NOT_PENDING = 'This approval is no longer pending.'
+export const APPROVED = 'Approved.'
+export const REJECTED = 'Rejected.'
+export const STAGE_GONE = "That stage isn't in this run any more."
+export const STAGE_NOT_RETRYABLE = 'Only a failed or canceled stage of a finished run can be rerun.'
+export const RUN_ALREADY_CANCELLING = 'The run is already cancelling.'
+export const RUN_CANCELLING = 'Cancelling the run.'
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -161,6 +169,14 @@ export function waitingAt(place: string): string {
 
 export function moreRunUpdates(count: number): string {
   return `${count} more pipeline ${count === 1 ? 'update' : 'updates'}`
+}
+
+export function approvedNeedsMore(count: number): string {
+  return `${APPROVED} It still needs ${count} more ${count === 1 ? 'approval' : 'approvals'}.`
+}
+
+export function rerunning(stage: string): string {
+  return `Rerunning ${stage}.`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

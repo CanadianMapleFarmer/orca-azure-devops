@@ -8,6 +8,7 @@ import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { registerOrgHandlers } from './org-handlers'
+import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier } from './pipelines/notify'
 import { createPressure } from './pipelines/pressure'
@@ -111,6 +112,11 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
+  const runActions = createRunActions({
+    http: connections.http,
+    me: org => pipelines.me(org),
+    after: org => void pipelines.reloadFresh(org).catch(() => {})
+  })
   const clipboard = createClipboard({
     platform: process.platform,
     env: process.env,
@@ -146,7 +152,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
-  registerPipelineHandlers(orca, { pipelines })
+  registerPipelineHandlers(orca, { pipelines, actions: runActions })
   registerShareHandlers(orca, share)
   registerVisibilityHandler(orca, { boards, prs, pipelines })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))

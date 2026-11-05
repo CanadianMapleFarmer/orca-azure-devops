@@ -1,4 +1,4 @@
-import type { RunsSnapshot } from './shared/pipelines'
+import type { RunActionResult, RunsSnapshot } from './shared/pipelines'
 import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
@@ -52,6 +52,12 @@ declare module 'orca' {
     'runs.snapshot': { input: { org: string }; output: RunsSnapshot }
     'runs.refresh': { input: { org: string }; output: RunsSnapshot }
     'runs.watch': { input: { org: string; projectId: string; buildId: number; watched: boolean }; output: RunsSnapshot }
+    'runs.decide': {
+      input: { org: string; projectId: string; approvalId: string; decision: 'approved' | 'rejected'; comment: string }
+      output: RunActionResult
+    }
+    'runs.retryStage': { input: { org: string; projectId: string; buildId: number; stageId: string }; output: RunActionResult }
+    'runs.cancel': { input: { org: string; projectId: string; buildId: number }; output: RunActionResult }
     'share.prefs': { input: { org: string; kind: ShareKind }; output: SharePrefsView }
     'share.send': { input: ShareRequest; output: { results: ShareResult[] } }
     'share.people': { input: { org: string; query: string; groups: boolean }; output: Identity[] }

@@ -10,7 +10,7 @@ import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
-import { fakePipelines, isMineRuns, isRunningRuns, type FakePipelines } from './pipelines/fake-pipelines'
+import { APPROVAL_4531, fakePipelines, isApprovalPatch, isBuildPatch, isMineRuns, isRunningRuns, isStagePatch, type FakePipelines } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
 
@@ -955,6 +955,56 @@ test('a failed run after activation shows a desktop notification with no refusal
       assert.equal(host.callsOf('notifications.show').length, 1, 'each finish notifies once')
       assert.equal(w.refusals.length, 0)
       assert.ok(!w.logs.includes("Couldn't show a desktop notification."))
+    })
+  })
+})
+
+test('runs.decide answers through the handler and refreshes the runs', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      const before = await w.request('runs.snapshot', { org: 'contoso' })
+      assert.equal(before.counts.approvals, 2)
+      assert.deepEqual(before.runs.find(run => run.buildId === 4531)?.approvals.map(approval => approval.approvalId), [APPROVAL_4531])
+      const posted = runsChanged(w.posts).length
+
+      const decision = { org: 'contoso', projectId: PROJECT, approvalId: APPROVAL_4531, decision: 'approved' as const, comment: 'Smoke tests are green.' }
+      assert.deepEqual(await w.request('runs.decide', decision), { ok: true, message: 'Approved.' })
+      assert.deepEqual(ado.calls.filter(isApprovalPatch).map(call => call.body), [[{ approvalId: APPROVAL_4531, status: 'approved', comment: 'Smoke tests are green.' }]])
+      const wroteAt = ado.calls.findIndex(isApprovalPatch)
+      assert.ok(await until(() => ado.calls.slice(wroteAt).some(isRunningRuns)), 'a full load read the runs after the write')
+      assert.ok(await until(() => runsChanged(w.posts).length > posted), 'and the refreshed runs were posted')
+      for (const refreshed of runsChanged(w.posts).slice(posted)) {
+        assert.equal(refreshed.counts.approvals, 1)
+        assert.ok(refreshed.runs.every(run => run.approvals.every(approval => approval.approvalId !== APPROVAL_4531)))
+      }
+
+      await assert.rejects(w.request('runs.decide', { ...decision, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      await assert.rejects(w.request('runs.decide', { ...decision, comment: 'x'.repeat(1001) }), adoErrorWith('bad_request', 400, 'Keep the comment under 1,000 characters.'))
+      assert.equal(ado.calls.filter(isApprovalPatch).length, 1, 'neither refusal reached Azure DevOps')
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('runs.retryStage and runs.cancel answer through the handlers', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      const retry = { org: 'contoso', projectId: PROJECT, buildId: 4512, stageId: '9a2b3c4d-6108-4b3c-8d4e-5f6a7b8c9e08' }
+      assert.deepEqual(await w.request('runs.retryStage', retry), { ok: true, message: 'Rerunning Image.' })
+      assert.deepEqual(ado.calls.filter(isStagePatch).map(call => [call.path, call.body]), [
+        [`/contoso/${PROJECT}/_apis/build/builds/4512/stages/Image`, { state: 'retry', forceRetryAllJobs: false }]
+      ])
+
+      const cancel = { org: 'contoso', projectId: PROJECT, buildId: 4531 }
+      assert.deepEqual(await w.request('runs.cancel', cancel), { ok: true, message: 'Cancelling the run.' })
+      assert.deepEqual(await w.request('runs.cancel', cancel), { ok: false, message: 'The run is already cancelling.' })
+      assert.deepEqual(ado.calls.filter(isBuildPatch).map(call => call.body), [{ status: 'cancelling' }])
+
+      await assert.rejects(w.request('runs.retryStage', { ...retry, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      await assert.rejects(w.request('runs.cancel', { ...cancel, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      assert.equal(w.refusals.length, 0)
     })
   })
 })
