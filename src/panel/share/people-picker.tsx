@@ -6,6 +6,7 @@ import { findPeople, searchOf, setQuery } from './state'
 
 const MAX_RESULTS = 20
 const MAX_SUGGESTIONS = 10
+const CHOOSE_SOMEONE = 'Choose at least one person.'
 
 interface PeoplePickerProps {
   org: string
@@ -74,6 +75,11 @@ export function PeoplePicker({ org, label, groups, required, people, suggestions
           />
         </Row>
       ))}
+      {people.length === 0 ? (
+        <Text size="sm" muted>
+          {CHOOSE_SOMEONE}
+        </Text>
+      ) : null}
       {full ? (
         <Text size="sm" muted>
           {TOO_MANY_PEOPLE}
