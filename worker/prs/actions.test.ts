@@ -344,6 +344,27 @@ test('an already-set sibling that will delete the shared branch is flagged, neve
   assert.deepEqual(deletes(h.patches()), [[5132, false]], 'only the new PR is patched, and it keeps the branch')
 })
 
+test('rows that warn about a branch being deleted carry warn, and the others do not', async () => {
+  const h = harness(SAVED)
+  h.add(pull(5135, { ...onBranch('feature/warned'), ...setToComplete(true) }), pull(5136, onBranch('feature/warned')), pull(5137))
+
+  const { results } = await h.actions.autoCompleteAll({ org: ORG, prs: [5135, 5136, 5137].map(keyOf) })
+
+  assert.deepEqual(results.map(result => [result.prId, result.warn === true]), [[5135, true], [5136, true], [5137, false]])
+})
+
+test('a deleting sibling read in this call still counts when the branch query returns it without completion options', async () => {
+  const h = harness(SAVED)
+  h.add(pull(5138, { ...onBranch('feature/partial'), ...setToComplete(true) }), pull(5139, onBranch('feature/partial')))
+  h.ado.on(isBranchQuery, () =>
+    json(200, { value: [5138, 5139].map(id => pull(id, { ...onBranch('feature/partial'), autoCompleteSetBy: undefined, completionOptions: undefined })) })
+  )
+
+  const { results } = await h.actions.autoCompleteAll({ org: ORG, prs: [5138, 5139].map(keyOf) })
+
+  assert.equal(results.find(result => result.prId === 5139)?.message, 'Auto-complete set. Pull Request 5138 will delete the shared source branch when it completes.')
+})
+
 test('an already-set PR the call does not list still warns the PR that is auto-completed beside it', async () => {
   const h = harness(SAVED)
   h.add(pull(5141, { ...onBranch('feature/shared'), ...setToComplete(true), createdBy: GRACE }), pull(5142, onBranch('feature/shared')))

@@ -71,4 +71,5 @@ export interface RowResult {
   prId: number
   ok: boolean
   message: string
+  warn?: true
 }

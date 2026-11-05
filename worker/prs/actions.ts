@@ -106,11 +106,12 @@ export function createPrActions({ http, prs, settings }: PrActionsDeps): PrActio
     if (skip) return ok(pr, skip)
     const found = branches.get(branchKey(pr))
     const others = othersOn(item, [...call.seen, ...(found ?? [])])
-    if (pr.autoComplete) return ok(pr, item.deletesBranch && others[0] ? alreadySetWillDelete(others[0].pr.prId) : PR_ALREADY_AUTO_COMPLETE)
+    if (pr.autoComplete) return item.deletesBranch && others[0] ? warning(pr, alreadySetWillDelete(others[0].pr.prId)) : ok(pr, PR_ALREADY_AUTO_COMPLETE)
     const checked = found !== undefined && found !== null
     const keep = options.deleteSourceBranch && (others.length > 0 || !checked)
     await setAutoComplete(http, call.org, pr, call.me, keep ? { ...options, deleteSourceBranch: false } : options)
-    return ok(pr, setMessage(options, others, checked))
+    const deleting = options.deleteSourceBranch ? others.find(other => other.deletesBranch) : undefined
+    return deleting ? warning(pr, siblingWillDelete(deleting.pr.prId)) : ok(pr, setMessage(options, others, checked))
   }
 
   return {
@@ -128,8 +129,6 @@ export function createPrActions({ http, prs, settings }: PrActionsDeps): PrActio
 
 function setMessage(options: AutoCompleteOptions, others: Seen[], checked: boolean): string {
   if (!options.deleteSourceBranch) return PR_AUTO_COMPLETE_SET
-  const deleting = others.find(other => other.deletesBranch)
-  if (deleting) return siblingWillDelete(deleting.pr.prId)
   if (others[0]) return keptBranch(others[0].pr.prId)
   return checked ? PR_AUTO_COMPLETE_SET : PR_BRANCH_KEPT_UNCHECKED
 }
@@ -142,7 +141,9 @@ function needsBranchCheck(item: Seen, options: AutoCompleteOptions): boolean {
 function othersOn(item: Seen, known: Seen[]): Seen[] {
   const active = new Map<number, Seen>()
   for (const other of known) {
-    if (other.pr.status === 'active' && other.pr.repoId === item.pr.repoId && other.pr.source === item.pr.source) active.set(other.pr.prId, other)
+    if (other.pr.status !== 'active' || other.pr.repoId !== item.pr.repoId || other.pr.source !== item.pr.source) continue
+    const known = active.get(other.pr.prId)
+    active.set(other.pr.prId, known?.deletesBranch ? { ...other, deletesBranch: true } : other)
   }
   return [...active.values()].filter(other => !samePr(other.pr, item.pr)).sort((a, b) => a.pr.prId - b.pr.prId)
 }
@@ -179,6 +180,10 @@ function skipMessage(pr: PrSummary): string | null {
 
 function ok(pr: PrSummary, message: string): RowResult {
   return { prId: pr.prId, ok: true, message }
+}
+
+function warning(pr: PrSummary, message: string): RowResult {
+  return { ...ok(pr, message), warn: true }
 }
 
 function failure(prId: number, error: unknown): RowResult {

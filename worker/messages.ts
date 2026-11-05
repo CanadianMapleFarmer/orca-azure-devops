@@ -36,7 +36,7 @@ export const PR_ALREADY_APPROVED = 'Already approved.'
 export const PR_APPROVED = 'Approved.'
 export const PR_ALREADY_AUTO_COMPLETE = 'Already set to auto-complete.'
 export const PR_AUTO_COMPLETE_SET = 'Auto-complete set.'
-export const PR_BRANCH_KEPT_UNCHECKED = "Auto-complete set. Source branch kept: couldn't check for other pull requests."
+export const PR_BRANCH_KEPT_UNCHECKED = `${PR_AUTO_COMPLETE_SET} Source branch kept: couldn't check for other pull requests.`
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
