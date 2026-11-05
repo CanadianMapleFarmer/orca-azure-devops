@@ -75,6 +75,7 @@ function depsOf(call: HostCall, remotesAt: Record<string, AdoRemote[]> = {}) {
   const inside = fileInside(fs)
   const deps: OpenFileDeps = {
     call,
+    gitAvailable: true,
     remotes: async root => remotesAt[root] ?? [],
     isFileInside: async (root, relative) => {
       roots.push(root)
@@ -280,7 +281,12 @@ test('without git the focused workspace is used', async () => {
     const web = workspace('ws-web', dir('web'), 'main')
     const bare = workspace('ws-bare', dir('bare'), 'main')
     const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 7 }
-    const withoutGit = (call: HostCall): OpenFileDeps => ({ call, remotes: gitRemotes(neverRun, null, Date.now), isFileInside: fileInside(fs) })
+    const withoutGit = (call: HostCall): OpenFileDeps => ({
+      call,
+      gitAvailable: false,
+      remotes: gitRemotes(neverRun, null, Date.now),
+      isFileInside: fileInside(fs)
+    })
 
     const focused = host([other, web], web)
     assert.deepEqual(await openRunFile(withoutGit(focused.call), request), { opened: true, path: 'src/Api/Program.cs', line: 7 })
@@ -298,6 +304,69 @@ test('without git the focused workspace is used', async () => {
   })
 })
 
+test('with git, a focused workspace of another repository is never searched', async () => {
+  await withTempDir(async base => {
+    const dir = (name: string) => path.join(base, name)
+    await write(dir('notes'), 'Program.cs')
+    await write(dir('folder'), 'Program.cs')
+    await write(dir('api'), 'Program.cs')
+    const notes = workspace('ws-notes', dir('notes'), 'main')
+    const folder = workspace('ws-folder', dir('folder'), 'main')
+    const api = workspace('ws-api', dir('api'), 'main')
+    const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 42 }
+    const message = 'Open a local workspace of web-app first.'
+
+    const github = host([notes], notes)
+    assert.deepEqual(await openRunFile(depsOf(github.call, { [dir('notes')]: [] }).deps, request), { opened: false, message }, 'a GitHub-hosted workspace reads as no Azure DevOps remotes')
+
+    const plain = host([folder], folder)
+    assert.deepEqual(await openRunFile(depsOf(plain.call).deps, request), { opened: false, message }, 'a folder that is not a repository')
+
+    const another = host([api, notes], notes)
+    assert.deepEqual(await openRunFile(depsOf(another.call, { [dir('api')]: [API] }).deps, request), { opened: false, message })
+
+    for (const answered of [github, plain, another]) assert.deepEqual(answered.opened(), [])
+  })
+})
+
+test('a remote that names no project matches a run of any project in its organization', async () => {
+  await withTempDir(async base => {
+    await write(base, 'src/Api/Program.cs')
+    const web = workspace('ws-web', base, 'main')
+    const { call, opened } = host([web], web)
+    const noProject = { org: 'Contoso', project: '', repo: 'WEB-APP' }
+    const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 1 }
+
+    assert.deepEqual(await openRunFile(depsOf(call, { [base]: [noProject] }).deps, request), { opened: true, path: 'src/Api/Program.cs', line: 1 })
+    assert.deepEqual(opened(), [{ workspaceId: 'ws-web', path: 'src/Api/Program.cs' }])
+
+    const otherOrg = { opened: false, message: 'Open a local workspace of web-app first.' }
+    assert.deepEqual(await openRunFile(depsOf(call, { [base]: [{ ...noProject, org: 'fabrikam' }] }).deps, request), otherOrg)
+    assert.equal(opened().length, 1)
+  })
+})
+
+test('among workspaces on the run branch the focused one wins whatever the list order', async () => {
+  await withTempDir(async base => {
+    const dir = (name: string) => path.join(base, name)
+    for (const name of ['first', 'second', 'third']) await write(dir(name), 'src/Api/Program.cs')
+    const first = workspace('ws-first', dir('first'), 'main')
+    const second = workspace('ws-second', dir('second'), 'main')
+    const third = workspace('ws-third', dir('third'), 'develop')
+    const remotesAt = { [dir('first')]: [WEB], [dir('second')]: [WEB], [dir('third')]: [WEB] }
+    const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 1 }
+    const openedIn = async (entries: WorkspaceEntry[], focused: WorkspaceEntry) => {
+      const { call, opened } = host(entries, focused)
+      assert.equal((await openRunFile(depsOf(call, remotesAt).deps, request)).opened, true)
+      return (opened().at(-1) as { workspaceId: string }).workspaceId
+    }
+
+    assert.equal(await openedIn([first, second, third], second), 'ws-second')
+    assert.equal(await openedIn([second, first, third], first), 'ws-first')
+    assert.equal(await openedIn([first, second, third], third), 'ws-first', 'the run branch still beats focus')
+  })
+})
+
 test('a run without an Azure Repos repository uses the focused local workspace only', async () => {
   await withTempDir(async base => {
     const dir = (name: string) => path.join(base, name)
@@ -311,7 +380,7 @@ test('a run without an Azure Repos repository uses the focused local workspace o
     const bare = workspace('ws-bare', dir('bare'), 'main')
     const remote = workspace('ws-remote', dir('web'), 'main', 'ssh:build-box')
     const unread: OpenFileDeps['remotes'] = async () => assert.fail('remotes are not read')
-    const depsFor = (call: HostCall): OpenFileDeps => ({ call, remotes: unread, isFileInside: fileInside(fs) })
+    const depsFor = (call: HostCall): OpenFileDeps => ({ call, gitAvailable: true, remotes: unread, isFileInside: fileInside(fs) })
 
     const focused = host([github, web], web)
     assert.deepEqual(await openRunFile(depsFor(focused.call), request), { opened: true, path: 'src/app.ts', line: 2 })
@@ -323,7 +392,7 @@ test('a run without an Azure Repos repository uses the focused local workspace o
       message: "Couldn't find app.ts in your local workspaces of ws-bare."
     })
 
-    const noFocus = { opened: false, message: 'Open a local workspace first; runs open in a tab there.' }
+    const noFocus = { opened: false, message: 'Open a local workspace first.' }
     const unfocused = host([github, web], null)
     assert.deepEqual(await openRunFile(depsFor(unfocused.call), request), noFocus)
     const remoteFocus = host([remote], remote)

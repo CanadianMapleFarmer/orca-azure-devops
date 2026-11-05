@@ -12,7 +12,7 @@ const LEGACY_DEFAULT_COLLECTION = 'defaultcollection'
 const GIT_SEGMENT = '_git'
 const SSH_HOSTS: ReadonlySet<string> = new Set(['ssh.dev.azure.com', 'vs-ssh.visualstudio.com'])
 const SSH_REMOTE = /^[^@\s/:]+@([^@\s/:]+):v3\/(.+)$/i
-const REMOTE_LINE = /^\S+\s+(\S+)\s+\((?:fetch|push)\)$/
+const REMOTE_LINE = /^\S+\s+(\S+)\s+\((?:fetch|push)\)(?:\s+\[[^\]]*\])?$/
 
 export function parseAdoRemote(url: string): AdoRemote | null {
   const text = url.trim()
@@ -49,15 +49,25 @@ function httpsRemote(text: string): AdoRemote | null {
 }
 
 function gitRemoteOf(org: string, rest: string[]): AdoRemote | null {
+  if (rest.length === 2 && rest[0].toLowerCase() === GIT_SEGMENT) return defaultProjectRemoteOf(org, rest[1])
   if (rest.length !== 3 || rest[1].toLowerCase() !== GIT_SEGMENT) return null
   return remoteOf([org, rest[0], rest[2]])
 }
 
 function remoteOf(segments: string[]): AdoRemote | null {
-  if (segments.length !== 3) return null
+  const values = segments.length === 3 ? decoded(segments) : null
+  return values && { org: values[0], project: values[1], repo: values[2] }
+}
+
+function defaultProjectRemoteOf(org: string, repo: string): AdoRemote | null {
+  const values = decoded([org, repo])
+  return values && { org: values[0], project: '', repo: values[1] }
+}
+
+function decoded(segments: string[]): string[] | null {
   try {
-    const [org, project, repo] = segments.map(decodeURIComponent)
-    return org && project && repo ? { org, project, repo } : null
+    const values = segments.map(decodeURIComponent)
+    return values.every(Boolean) ? values : null
   } catch {
     return null
   }

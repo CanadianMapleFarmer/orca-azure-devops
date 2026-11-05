@@ -165,9 +165,11 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   await connections.resetInterrupted()
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
+  const gitPath = findExecutable('git', { pathEnv: process.env.PATH })
   const openFileDeps: OpenFileDeps = {
     call,
-    remotes: gitRemotes(runCommand, findExecutable('git', { pathEnv: process.env.PATH }), Date.now),
+    gitAvailable: gitPath !== null,
+    remotes: gitRemotes(runCommand, gitPath, Date.now),
     isFileInside: fileInside(fs)
   }
   await registerWorkspaceHandlers(orca, { boards, store, call })

@@ -12,6 +12,24 @@ test('parseAdoRemote reads every Azure DevOps remote form', () => {
   assert.deepEqual(parseAdoRemote('contoso@vs-ssh.visualstudio.com:v3/contoso/Fabrikam%20Web/web-app'), WEB)
 })
 
+test('parseAdoRemote reads the default-repository forms that name no project', () => {
+  const noProject = { org: 'contoso', project: '', repo: 'web-app' }
+  assert.deepEqual(parseAdoRemote('https://dev.azure.com/contoso/_git/web-app'), noProject)
+  assert.deepEqual(parseAdoRemote('https://ada@dev.azure.com/contoso/_git/web%2Dapp'), noProject)
+  assert.deepEqual(parseAdoRemote('https://contoso.visualstudio.com/_git/web-app'), noProject)
+  assert.deepEqual(parseAdoRemote('https://contoso.visualstudio.com/DefaultCollection/_git/web-app'), noProject)
+  for (const url of [
+    'https://dev.azure.com/_git/web-app',
+    'https://dev.azure.com/contoso/_git/',
+    'https://dev.azure.com/contoso/_git/web-app/extra',
+    'https://contoso.visualstudio.com/_git',
+    'git@ssh.dev.azure.com:v3/contoso//web-app',
+    'git@ssh.dev.azure.com:v3//Fabrikam%20Web/web-app'
+  ]) {
+    assert.equal(parseAdoRemote(url), null, url)
+  }
+})
+
 test('parseAdoRemote percent-decodes segments and keeps their case for comparing', () => {
   assert.deepEqual(parseAdoRemote('https://DEV.Azure.com/Contoso/Fabrikam%20Web/_GIT/Web%2DApp'), { org: 'Contoso', project: 'Fabrikam Web', repo: 'Web-App' })
   assert.deepEqual(parseAdoRemote('https://dev.azure.com/contoso/Caf%C3%A9/_git/r%C3%A9sum%C3%A9'), { org: 'contoso', project: 'Café', repo: 'résumé' })
@@ -33,7 +51,6 @@ test('parseAdoRemote ignores GitHub and other hosts', () => {
     'https://dev.azure.com/contoso/Fabrikam%20Web/_apis/git/repositories/web-app',
     'https://dev.azure.com/contoso/Fabrikam%20Web/_git',
     'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/extra',
-    'https://dev.azure.com/contoso/_git/web-app',
     'git@ssh.dev.azure.com:v3/contoso/web-app',
     'git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app/extra',
     'git@ssh.dev.azure.com:v2/contoso/Fabrikam%20Web/web-app',
@@ -56,9 +73,11 @@ test('remotesOf reads git remote -v output', () => {
     'api\tgit@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/api (fetch)',
     'api\tgit@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/api (push)',
     'mirror\thttps://contoso.visualstudio.com/Fabrikam%20Web/_git/web-app (push)',
+    'lazy\thttps://dev.azure.com/contoso/Fabrikam%20Web/_git/lazy (fetch) [blob:none]',
+    'lazy\tno_push (push)',
     ''
   ].join('\n')
-  assert.deepEqual(remotesOf(output), [WEB, { org: 'contoso', project: 'Fabrikam Web', repo: 'api' }])
+  assert.deepEqual(remotesOf(output), [WEB, { org: 'contoso', project: 'Fabrikam Web', repo: 'api' }, { org: 'contoso', project: 'Fabrikam Web', repo: 'lazy' }])
 })
 
 test('remotesOf copes with CRLF, blank lines, junk and no remotes', () => {

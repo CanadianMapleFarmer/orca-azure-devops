@@ -2,13 +2,14 @@ import * as path from 'node:path'
 import { pathCandidates } from '../../src/shared/file-ref'
 import type { RunSummary } from '../../src/shared/pipelines'
 import { mapLimit } from '../ado/limit'
-import { fileNotFound, NO_LOCAL_WORKSPACE_RUN, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
+import { fileNotFound, NO_LOCAL_WORKSPACE_FILE, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
 import type { RunCommand } from '../sys/run'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import { remotesOf, type AdoRemote } from './remote'
 
 export interface OpenFileDeps {
   call: HostCall
+  gitAvailable: boolean
   remotes: (workspacePath: string) => Promise<AdoRemote[]>
   isFileInside: (root: string, relative: string) => Promise<boolean>
 }
@@ -43,7 +44,7 @@ export async function openRunFile(deps: OpenFileDeps, input: OpenFileInput): Pro
   const focusedLocal = local.find(entry => entry.id === focused?.id) ?? null
   const repo = run.repository?.name ?? focusedLocal?.name ?? ''
   const pool = run.repository ? await repositoryWorkspaces(deps, run, local, focusedLocal) : focusedLocal ? [focusedLocal] : []
-  if (pool.length === 0) return { opened: false, message: run.repository ? noRepoWorkspace(repo) : NO_LOCAL_WORKSPACE_RUN }
+  if (pool.length === 0) return { opened: false, message: run.repository ? noRepoWorkspace(repo) : NO_LOCAL_WORKSPACE_FILE }
 
   for (const candidate of candidates) {
     for (const workspace of pool) {
@@ -89,11 +90,12 @@ async function repositoryWorkspaces(
   local: WorkspaceEntry[],
   focusedLocal: WorkspaceEntry | null
 ): Promise<WorkspaceEntry[]> {
+  if (!deps.gitAvailable) return focusedLocal ? [focusedLocal] : []
   const known = await mapLimit(local, REMOTE_LOOKUPS, async workspace => ({ workspace, remotes: await deps.remotes(workspace.path) }))
-  const matching = known.filter(({ remotes }) => remotes.some(remote => isRunsRepository(run, remote))).map(({ workspace }) => workspace)
-  if (matching.length > 0) return matching.sort((a, b) => rank(a, run, focusedLocal) - rank(b, run, focusedLocal))
-  const focusedWithoutRemotes = known.some(({ workspace, remotes }) => workspace.id === focusedLocal?.id && remotes.length === 0)
-  return focusedLocal && focusedWithoutRemotes ? [focusedLocal] : []
+  return known
+    .filter(({ remotes }) => remotes.some(remote => isRunsRepository(run, remote)))
+    .map(({ workspace }) => workspace)
+    .sort((a, b) => rank(a, run, focusedLocal) - rank(b, run, focusedLocal))
 }
 
 function isRunsRepository(run: RunSummary, remote: AdoRemote): boolean {
@@ -109,6 +111,5 @@ function sameName(a: string, b: string): boolean {
 }
 
 function rank(workspace: WorkspaceEntry, run: RunSummary, focusedLocal: WorkspaceEntry | null): number {
-  if (workspace.branch === run.branch) return 0
-  return workspace.id === focusedLocal?.id ? 1 : 2
+  return (workspace.branch === run.branch ? 0 : 2) + (workspace.id === focusedLocal?.id ? 0 : 1)
 }
