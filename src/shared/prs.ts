@@ -41,6 +41,13 @@ export interface PrSummary extends PrKey {
 
 export type MergeStrategy = 'noFastForward' | 'squash' | 'rebase' | 'rebaseMerge'
 
+export const MERGE_STRATEGY_LABELS: Record<MergeStrategy, string> = {
+  noFastForward: 'Merge (no fast-forward)',
+  squash: 'Squash commit',
+  rebase: 'Rebase and fast-forward',
+  rebaseMerge: 'Semi-linear merge'
+}
+
 export interface AutoCompleteOptions {
   mergeStrategy: MergeStrategy
   deleteSourceBranch: boolean

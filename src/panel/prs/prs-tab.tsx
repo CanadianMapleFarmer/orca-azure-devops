@@ -1,26 +1,16 @@
-import { Box, Button, Callout, Collapsible, EmptyState, IconButton, List, ListItem, read, RelativeTime, Row, shell, Skeleton, Stack, Text, type OrcaNode } from 'orca'
-import type { AutoCompleteOptions, MergeStrategy, PrSnapshot, ReleaseSet } from '../../shared/prs'
+import { Box, Callout, Collapsible, EmptyState, IconButton, List, ListItem, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type PrSnapshot, type ReleaseSet } from '../../shared/prs'
 import type { OrgStatus } from '../../shared/types'
+import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
 import { ReleaseSetCard } from './release-set'
-import { load, notice, refresh, refreshing, retryLoad, snapshot } from './state'
+import { load, notice, openPr, refresh, refreshing, retryLoad, setToReviewOpen, snapshot, toReviewOpen } from './state'
 
 const MAX_SETS = 30
 const MAX_ROWS = 150
 const MAX_TO_REVIEW = 50
 
-const MERGE_LABELS: Record<MergeStrategy, string> = {
-  noFastForward: 'Merge (no fast-forward)',
-  squash: 'Squash commit',
-  rebase: 'Rebase and fast-forward',
-  rebaseMerge: 'Semi-linear merge'
-}
-
 const optionsLine = (options: AutoCompleteOptions): string =>
-  `Auto-complete uses ${MERGE_LABELS[options.mergeStrategy]}, ${options.deleteSourceBranch ? 'deletes' : 'keeps'} the source branch, ${options.transitionWorkItems ? 'completes linked work items' : 'leaves work items alone'}. Change this in Settings → Azure DevOps.`
-
-const openPr = (url: string): void => {
-  shell.openExternal(url).catch(() => {})
-}
+  `Auto-complete uses ${MERGE_STRATEGY_LABELS[options.mergeStrategy]}, ${options.deleteSourceBranch ? 'deletes' : 'keeps'} the source branch, ${options.transitionWorkItems ? 'completes linked work items' : 'leaves work items alone'}. Change this in Settings → Azure DevOps.`
 
 function Header({ org, current }: { org: string; current: PrSnapshot }): OrcaNode {
   return (
@@ -33,27 +23,24 @@ function Header({ org, current }: { org: string; current: PrSnapshot }): OrcaNod
         </Box>
         <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
       </Row>
-      {current.message && current.stale ? (
-        <Text size="sm" tone="warning">
-          {current.message}
-        </Text>
-      ) : null}
-      {current.message && !current.stale ? (
-        <Text size="sm" muted>
-          {current.message}
-        </Text>
-      ) : null}
+      <SnapshotMessage message={current.message} stale={current.stale} />
     </Stack>
   )
 }
 
-function setsToShow(sets: readonly ReleaseSet[]): ReleaseSet[] {
-  const shown: ReleaseSet[] = []
-  let rows = 0
+interface Shown {
+  set: ReleaseSet
+  limit: number
+}
+
+function setsToShow(sets: readonly ReleaseSet[]): Shown[] {
+  const shown: Shown[] = []
+  let room = MAX_ROWS
   for (const set of sets.slice(0, MAX_SETS)) {
-    if (shown.length > 0 && rows + set.prs.length > MAX_ROWS) break
-    shown.push(set)
-    rows += set.prs.length
+    if (shown.length > 0 && set.prs.length > room) break
+    const limit = Math.min(set.prs.length, room)
+    shown.push({ set, limit })
+    room -= limit
   }
   return shown
 }
@@ -68,8 +55,8 @@ function Sets({ org, current }: { org: string; current: PrSnapshot }): OrcaNode 
       <Text size="sm" muted>
         {optionsLine(current.autoComplete)}
       </Text>
-      {shown.map(set => (
-        <ReleaseSetCard key={set.key} org={org} set={set} />
+      {shown.map(({ set, limit }) => (
+        <ReleaseSetCard key={set.key} org={org} set={set} limit={limit} />
       ))}
       {shown.length < current.sets.length ? (
         <Text size="sm" muted>
@@ -84,7 +71,7 @@ function ToReview({ current }: { current: PrSnapshot }): OrcaNode {
   if (current.toReviewCount === 0 && current.toReview.length === 0) return null
   const shown = current.toReview.slice(0, MAX_TO_REVIEW)
   return (
-    <Collapsible title={`To review (${current.toReviewCount})`}>
+    <Collapsible title={`To review (${current.toReviewCount})`} open={read(toReviewOpen)} onChange={setToReviewOpen}>
       <Stack gap="sm">
         <List label="To review">
           {shown.map(pr => (
@@ -107,14 +94,7 @@ export function PrsTab({ org }: { org: OrgStatus }): OrcaNode {
   const status = read(load)
   if (!current) {
     if (status.status !== 'failed') return <Skeleton lines={3} label="Loading pull requests" />
-    return (
-      <Stack gap="sm">
-        <Callout tone="danger">{status.message}</Callout>
-        <Row gap="sm">
-          <Button onPress={retryLoad}>Try again</Button>
-        </Row>
-      </Stack>
-    )
+    return <LoadFailure message={status.message} onRetry={retryLoad} />
   }
   const failure = read(notice)
   return (

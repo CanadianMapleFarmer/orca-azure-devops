@@ -774,6 +774,41 @@ test('switching organization closes an open details view', async () => {
   assert.deepEqual(titles(), ['Story 101'])
 })
 
+test('leaving the Work tab and coming back keeps the open item, its draft and the collapsed sections', async () => {
+  const host = await open(snapshotOf({ mine: [item(101), item(102, { column: 'New' })] }), { 'work.details': detailsOf() })
+  const calls = () => inputsTo(host, 'ui.visibility').map(input => input as { surface: string; visible: boolean })
+  const since = (count: number) => calls().slice(count).sort((a, b) => a.surface.localeCompare(b.surface))
+  const column = (title: string) => panel.find({ type: 'Collapsible', label: title })
+  await panel.toggle({ type: 'Collapsible', label: 'New (1)' })
+  assert.equal(column('New (1)')?.props.open, false)
+  await panel.press({ type: 'Button', text: 'Details' })
+  await panel.toggle({ type: 'Collapsible', label: 'Acceptance criteria' })
+  await panel.type({ label: 'Add a comment' }, 'Half-written reply')
+
+  const before = calls().length
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.deepEqual(since(before), [
+    { surface: 'prs', org: 'contoso', visible: true },
+    { surface: 'work', org: 'contoso', visible: false }
+  ])
+  assert.equal(panel.find({ type: 'Heading' }), null)
+
+  const afterSwitch = calls().length
+  await panel.select({ type: 'Tabs' }, 'work')
+  assert.deepEqual(since(afterSwitch), [
+    { surface: 'prs', org: 'contoso', visible: false },
+    { surface: 'work', org: 'contoso', visible: true }
+  ])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Fix login redirect')
+  assert.equal(panel.valueOf({ label: 'Add a comment' }), 'Half-written reply')
+  assert.equal(panel.find({ type: 'Collapsible', label: 'Acceptance criteria' })?.props.open, false)
+  assert.equal(requestsTo(host, 'work.details').length, 1)
+
+  await panel.press({ label: 'Back' })
+  assert.equal(column('New (1)')?.props.open, false)
+  assert.equal(column('Active (1)')?.props.open, true)
+})
+
 test('visibility changes call ui.visibility', async () => {
   const host = await open(input => snapshotOf({ org: input.org }), {}, { orgs: [org('contoso'), org('fabrikam')] })
   const calls = () => inputsTo(host, 'ui.visibility')

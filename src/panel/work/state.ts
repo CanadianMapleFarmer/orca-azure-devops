@@ -15,6 +15,7 @@ export const notice = atom<Notice | null>(null)
 export const refreshing = atom(false)
 export const openItem = atom<{ org: string; id: number } | null>(null)
 export const moveResets = atom(0)
+export const closedGroups = atom<string[]>([])
 const source = atom<Source | null>(null)
 const visibility = surfaceVisibility('work')
 
@@ -37,6 +38,7 @@ function align(wanted: Source | null, visibleOrg: string | null): void {
     set(source, wanted)
     set(snapshot, null)
     set(openItem, null)
+    set(closedGroups, [])
     set(notice, null)
     set(refreshing, false)
     if (wanted) void loadSnapshot(wanted)
@@ -53,6 +55,10 @@ export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
     : null
   const visibleOrg = connected && onScreen && hostIsVisible() && read(tab) === 'work' ? connected.org : null
   void Promise.resolve().then(() => align(wanted, visibleOrg))
+}
+
+export function setGroupOpen(key: string, open: boolean): void {
+  update(closedGroups, keys => (open ? keys.filter(closed => closed !== key) : keys.includes(key) ? keys : [...keys, key]))
 }
 
 export function acceptChange(next: WorkSnapshot): void {

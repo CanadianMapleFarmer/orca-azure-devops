@@ -38,6 +38,21 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const KEPT = 'Azure DevOps is unreachable. Showing the last results.'
 
+const OPEN_UNAVAILABLE = "Orca couldn't ask to open the link. Bring its window to the front and try again."
+
+const maxChips: Partial<PrSummary> = {
+  autoComplete: true,
+  checks: { build: 'failed', policies: 'rejected' },
+  isDraft: true,
+  mergeStatus: 'conflicts',
+  reviewers: [
+    reviewerOf('Grace Hopper', 10),
+    reviewerOf('Margaret Hamilton', -10),
+    reviewerOf('Edsger Dijkstra', 0, { isRequired: true }),
+    reviewerOf('Barbara Liskov', 0, { isRequired: true })
+  ]
+}
+
 const mixedSet = () =>
   setOf(
     [
@@ -333,19 +348,7 @@ test('only the selected tab is drawn, so the tabs never add up past the node lim
 })
 
 test('rows are capped so the render stays within the node limit', async () => {
-  const everything: Partial<PrSummary> = {
-    autoComplete: true,
-    checks: { build: 'failed', policies: 'rejected' },
-    isDraft: true,
-    mergeStatus: 'conflicts',
-    reviewers: [
-      reviewerOf('Grace Hopper', 10),
-      reviewerOf('Margaret Hamilton', -10),
-      reviewerOf('Edsger Dijkstra', 0, { isRequired: true }),
-      reviewerOf('Barbara Liskov', 0, { isRequired: true })
-    ]
-  }
-  const sets = Array.from({ length: 30 }, (_, index) => setOf(Array.from({ length: 12 }, (_, row) => prOf(1000 + index * 100 + row, everything)), { key: `contoso:${index}` }))
+  const sets = Array.from({ length: 30 }, (_, index) => setOf(Array.from({ length: 12 }, (_, row) => prOf(1000 + index * 100 + row, maxChips)), { key: `contoso:${index}` }))
   const toReview = Array.from({ length: 100 }, (_, index) => prOf(9000 + index))
   await open(snapshotOf({ sets, toReview, toReviewCount: 100 }))
   await panel.toggle({ type: 'Collapsible' })
@@ -356,12 +359,83 @@ test('rows are capped so the render stays within the node limit', async () => {
   assert.equal(panel.findAll({ type: 'ListItem' }).length, 50)
 })
 
-test('the first set is always shown, however many PRs it holds', async () => {
-  const prs = Array.from({ length: 160 }, (_, index) => prOf(300 + index))
-  await open(snapshotOf({ sets: [setOf(prs), setOf([prOf(900)])] }))
+test('one set of 300 PRs shows 150 rows, says so, and still acts on every active PR', async () => {
+  const prs = Array.from({ length: 300 }, (_, index) => prOf(300 + index, maxChips))
+  const host = await open(snapshotOf({ sets: [setOf(prs), setOf([prOf(900)])] }), {
+    'prs.approve': { results: prs.map(pr => ({ prId: pr.prId, ok: true, message: 'Approved.' })) }
+  })
+  assert.deepEqual(panel.errors, [])
   assert.equal(titles().length, 1)
-  assert.equal(panel.findAll({ type: 'Link' }).length, 160)
+  assert.equal(panel.findAll({ type: 'Link' }).length, 150)
+  assert.equal(panel.find({ type: 'Text', text: 'Showing 150 of 300 pull requests in this set.' })?.props.muted, true)
   assert.equal(panel.find({ type: 'Text', text: 'Showing 1 of 2 sets.' })?.props.muted, true)
+  await panel.press({ type: 'Button', text: 'Approve all' })
+  assert.deepEqual(panel.errors, [])
+  assert.equal((inputsTo(host, 'prs.approve')[0] as { prs: unknown[] }).prs.length, 300)
+  assert.equal(panel.findAll({ type: 'Text', text: /^Pull Request \d+: / }).length, 300)
+})
+
+test('a set that fits shows no pull request note', async () => {
+  await open(snapshotOf({ sets: [setOf(Array.from({ length: 150 }, (_, index) => prOf(300 + index)))] }))
+  assert.equal(panel.findAll({ type: 'Link' }).length, 150)
+  assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
+})
+
+async function pressReview(answer: unknown) {
+  const host = await open(snapshotOf({ toReview: [prOf(80, { title: 'Cache the lookups' })], toReviewCount: 1 }))
+  host.respond('shell.openExternal', answer)
+  await panel.toggle({ type: 'Collapsible' })
+  await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
+  return host
+}
+
+test('a link Orca refuses to open shows the error message and the next press clears it', async () => {
+  const host = await pressReview(() => {
+    throw hostError('action_failed', 'Orca could not open the link.')
+  })
+  assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
+  assert.equal(panel.find({ type: 'Callout' })?.text, 'Orca could not open the link.')
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(host.callsOf('shell.openExternal').length, 2)
+})
+
+test('a link Orca could not ask about shows a fixed message', async () => {
+  await pressReview({ opened: false, reason: 'consent-unavailable' })
+  assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
+  assert.equal(panel.find({ type: 'Callout' })?.text, OPEN_UNAVAILABLE)
+})
+
+test('a link the person declined to open stays silent', async () => {
+  const host = await pressReview({ opened: false, reason: 'cancelled' })
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(host.callsOf('shell.openExternal').length, 1)
+})
+
+test('To review stays open when the tab is left and shown again', async () => {
+  await open(snapshotOf({ toReview: [prOf(80, { title: 'Cache the lookups' })], toReviewCount: 1 }))
+  await panel.toggle({ type: 'Collapsible' })
+  assert.ok(panel.find({ type: 'ListItem' }))
+  await panel.select({ type: 'Tabs' }, 'work')
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.ok(panel.find({ type: 'ListItem' }))
+})
+
+test('a second press before the buttons redraw sends nothing', async () => {
+  let release: (value: { results: RowResult[] }) => void = () => {}
+  const held = new Promise<{ results: RowResult[] }>(resolve => {
+    release = resolve
+  })
+  const host = await open(snapshotOf({ sets: [setOf([prOf(55)])] }), { 'prs.approve': () => held, 'prs.autoComplete': () => held })
+  const approve = panel.find({ type: 'Button', text: 'Approve all' })
+  const complete = panel.find({ type: 'Button', text: 'Auto-complete all' })
+  const presses = [panel.press(approve as NonNullable<typeof approve>), panel.press(approve as NonNullable<typeof approve>), panel.press(complete as NonNullable<typeof complete>)]
+  await pause(10)
+  release({ results: [{ prId: 55, ok: true, message: 'Approved.' }] })
+  await Promise.all(presses)
+  assert.equal(requestsTo(host, 'prs.approve').length, 1)
+  assert.equal(requestsTo(host, 'prs.autoComplete').length, 0)
 })
 
 test('visibility changes call ui.visibility with surface prs', async () => {

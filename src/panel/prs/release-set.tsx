@@ -86,16 +86,22 @@ function describe(set: ReleaseSet): string {
   return [set.sources.join(', '), repos].filter(part => part !== '').join(' · ')
 }
 
-export function ReleaseSetCard({ org, set }: { org: string; set: ReleaseSet }): OrcaNode {
+export function ReleaseSetCard({ org, set, limit = set.prs.length }: { org: string; set: ReleaseSet; limit?: number }): OrcaNode {
+  const shown = set.prs.slice(0, limit)
   const active = set.prs.filter(pr => pr.status === 'active')
   const ids = set.prs.map(pr => pr.prId)
   const idle = active.length > 0 && !isActing(ids)
   const outcome = outcomeOf(ids)
   return (
     <Card title={set.title} description={describe(set)}>
-      {set.prs.map(pr => (
+      {shown.map(pr => (
         <PrRow key={pr.prId} pr={pr} />
       ))}
+      {shown.length < set.prs.length ? (
+        <Text size="sm" muted>
+          {`Showing ${shown.length} of ${set.prs.length} pull requests in this set.`}
+        </Text>
+      ) : null}
       <Row gap="sm" wrap>
         <Button size="sm" disabled={!idle} onPress={() => act('prs.approve', org, active)}>
           Approve all

@@ -1,6 +1,7 @@
 import { assert, hostError, mockHost, test } from 'orca/testing'
 import type { OrcaWorkerApi } from 'orca/worker'
 import manifest from '../../orca-plugin.json' with { type: 'json' }
+import { MERGE_STRATEGY_LABELS } from '../../src/shared/prs'
 import { drain, withWorker } from '../test-support'
 import { watchPrSettings, type PrSettings } from './settings'
 
@@ -48,8 +49,8 @@ test('the auto-complete settings are declared with their defaults and labels', (
     key: 'autoCompleteMergeStrategy',
     title: 'Auto-complete merge type',
     type: 'string',
-    enum: ['noFastForward', 'squash', 'rebase', 'rebaseMerge'],
-    enumLabels: ['Merge (no fast-forward)', 'Squash commit', 'Rebase and fast-forward', 'Semi-linear merge'],
+    enum: Object.keys(MERGE_STRATEGY_LABELS),
+    enumLabels: Object.values(MERGE_STRATEGY_LABELS),
     default: 'noFastForward'
   })
   assert.deepEqual(declared.autoCompleteDeleteSourceBranch, {

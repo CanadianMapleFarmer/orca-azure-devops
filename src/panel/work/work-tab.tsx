@@ -2,10 +2,11 @@ import { Badge, Box, Button, Callout, Collapsible, EmptyState, IconButton, read,
 import type { OrgStatus } from '../../shared/types'
 import type { WorkItemSummary, WorkSnapshot } from '../../shared/work'
 import { openSettings } from '../org-settings'
+import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
 import { ItemCard } from './item-card'
 import { ItemDetails } from './item-details'
 import { NO_BOARDS } from '../../shared/messages'
-import { dismiss, load, move, notice, openBoard, openItem, refresh, refreshing, retryLoad, snapshot } from './state'
+import { closedGroups, dismiss, load, move, notice, openBoard, openItem, refresh, refreshing, retryLoad, setGroupOpen, snapshot } from './state'
 
 const MAX_CARDS = 300
 const MAX_NUDGES = 10
@@ -39,16 +40,7 @@ function Header({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
           <IconButton icon="open-external" label="Open board" variant="ghost" size="sm" onPress={() => openBoard(org)} />
         </Row>
       </Row>
-      {current.message && current.stale ? (
-        <Text size="sm" tone="warning">
-          {current.message}
-        </Text>
-      ) : null}
-      {current.message && !current.stale ? (
-        <Text size="sm" muted>
-          {current.message}
-        </Text>
-      ) : null}
+      <SnapshotMessage message={current.message} stale={current.stale} />
     </Stack>
   )
 }
@@ -94,6 +86,7 @@ function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
   if (total === 0) return <EmptyState title="Nothing assigned to you on this board" />
   const groups = columnGroups(current).map(group => ({ key: `column:${group.name}`, ...group }))
   if (current.other.length > 0) groups.push({ key: 'other', name: 'Other', items: current.other })
+  const closed = read(closedGroups)
   let room = MAX_CARDS
   const shown = groups.map(group => {
     const items = group.items.slice(0, room)
@@ -103,7 +96,7 @@ function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
   return (
     <Stack gap="sm">
       {shown.map(group => (
-        <Collapsible key={group.key} title={`${group.name} (${group.count})`} defaultOpen>
+        <Collapsible key={group.key} title={`${group.name} (${group.count})`} open={!closed.includes(group.key)} onChange={open => setGroupOpen(group.key, open)}>
           <Stack gap="sm">
             {group.items.map(item => (
               <ItemCard key={item.id} org={org} item={item} />
@@ -135,14 +128,7 @@ export function WorkTab({ org }: { org: OrgStatus }): OrcaNode {
   const status = read(load)
   if (!current) {
     if (status.status !== 'failed') return <Skeleton lines={3} label="Loading work items" />
-    return (
-      <Stack gap="sm">
-        <Callout tone="danger">{status.message}</Callout>
-        <Row gap="sm">
-          <Button onPress={retryLoad}>Try again</Button>
-        </Row>
-      </Stack>
-    )
+    return <LoadFailure message={status.message} onRetry={retryLoad} />
   }
   const shown = read(notice)
   return (

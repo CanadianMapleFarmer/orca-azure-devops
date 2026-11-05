@@ -1,5 +1,5 @@
-import { atom, plugin, read, set, update } from 'orca'
-import { messageOf } from '../../shared/messages'
+import { atom, plugin, read, set, shell, update } from 'orca'
+import { messageOf, OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
 import type { PrSnapshot, PrSummary, RowResult } from '../../shared/prs'
 import type { OrgStatus } from '../../shared/types'
 import { LONG_WAIT, tab } from '../state'
@@ -13,8 +13,9 @@ export const snapshot = atom<PrSnapshot | null>(null)
 export const load = atom<Load>({ status: 'idle' })
 export const notice = atom<string | null>(null)
 export const refreshing = atom(false)
-export const outcomes = atom<Outcome[]>([])
-export const acting = atom<number[]>([])
+export const toReviewOpen = atom(false)
+const outcomes = atom<Outcome[]>([])
+const acting = atom<number[]>([])
 const source = atom<string | null>(null)
 const visibility = surfaceVisibility('prs')
 
@@ -48,6 +49,7 @@ function align(org: string | null, visibleOrg: string | null): void {
     set(snapshot, null)
     set(outcomes, [])
     set(acting, [])
+    set(toReviewOpen, false)
     set(notice, null)
     set(refreshing, false)
     set(load, { status: 'idle' })
@@ -85,8 +87,26 @@ export async function refresh(org: string): Promise<void> {
   if (read(source) === org) set(refreshing, false)
 }
 
+export const setToReviewOpen = (open: boolean): void => set(toReviewOpen, open)
+
+export function openPr(url: string): void {
+  const org = read(source)
+  const opening = shell.openExternal(url)
+  set(notice, null)
+  const show = (text: string): void => {
+    if (read(source) === org) set(notice, text)
+  }
+  opening.then(
+    result => {
+      if (!result.opened && result.reason === 'consent-unavailable') show(OPEN_LINK_UNAVAILABLE)
+    },
+    error => show(messageOf(error))
+  )
+}
+
 export async function act(request: ActionRequest, org: string, prs: PrSummary[]): Promise<void> {
   const ids = prs.map(pr => pr.prId)
+  if (isActing(ids)) return
   const keys = prs.map(({ projectId, repoId, prId }) => ({ projectId, repoId, prId }))
   update(outcomes, list => list.filter(outcome => !sharesPr(outcome.prIds, ids)))
   update(acting, list => [...list, ...ids])

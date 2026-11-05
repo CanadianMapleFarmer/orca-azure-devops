@@ -31,6 +31,7 @@ import { openItem } from './state'
 
 type Loaded = { status: 'loading' } | { status: 'ready'; details: WorkItemDetails } | { status: 'failed'; message: string }
 type Section = 'comment' | 'link' | 'start'
+type Fold = 'acceptance' | 'comments'
 type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string; cancellable?: boolean }
 
 const LINK_KINDS = [
@@ -45,6 +46,12 @@ const commentDraft = atom('')
 const linkDraft = atom('')
 const working = atom<Section | null>(null)
 const sectionNotice = atom<SectionNotice | null>(null)
+const closedFolds = atom<Fold[]>([])
+
+const foldOpen = (fold: Fold): boolean => !read(closedFolds).includes(fold)
+
+const setFoldOpen = (fold: Fold, open: boolean): void =>
+  update(closedFolds, folds => (open ? folds.filter(closed => closed !== fold) : folds.includes(fold) ? folds : [...folds, fold]))
 
 const isOpen = (org: string, id: number): boolean => {
   const open = read(openItem)
@@ -58,6 +65,7 @@ export function openDetails(org: string, id: number): void {
   set(linkDraft, '')
   set(working, null)
   set(sectionNotice, null)
+  set(closedFolds, [])
   void fetchDetails(org, id)
 }
 
@@ -183,7 +191,7 @@ function Comments({ org, details }: { org: string; details: WorkItemDetails }): 
   const busy = read(working) !== null
   const draft = read(commentDraft)
   return (
-    <Collapsible title={`Comments (${details.comments.length})`} defaultOpen>
+    <Collapsible title={`Comments (${details.comments.length})`} open={foldOpen('comments')} onChange={open => setFoldOpen('comments', open)}>
       <Stack gap="sm">
         {details.comments.map(comment => (
           <Stack key={comment.id} gap="xs">
@@ -236,7 +244,7 @@ function Body({ org, details }: { org: string; details: WorkItemDetails }): Orca
       ) : null}
       {details.descriptionMd ? <Markdown content={details.descriptionMd} /> : null}
       {details.acceptanceMd ? (
-        <Collapsible title="Acceptance criteria" defaultOpen>
+        <Collapsible title="Acceptance criteria" open={foldOpen('acceptance')} onChange={open => setFoldOpen('acceptance', open)}>
           <Markdown content={details.acceptanceMd} />
         </Collapsible>
       ) : null}
