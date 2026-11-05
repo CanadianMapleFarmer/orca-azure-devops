@@ -15,9 +15,19 @@ export const STEP_GLYPH: Record<StepState, string> = {
 
 const ACTIVE_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling'])
 const REPLACING_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling', 'succeeded', 'warning'])
+const COMPLETED_STATUS = 'completed'
+const CANCELLING_STATUS = 'cancelling'
 
 export function isActive(run: RunSummary): boolean {
   return ACTIVE_STATES.has(run.state)
+}
+
+export function finishedStatus(status: string): boolean {
+  return status === COMPLETED_STATUS
+}
+
+export function cancellableStatus(status: string): boolean {
+  return !finishedStatus(status) && status !== CANCELLING_STATUS
 }
 
 export function orderRuns(runs: readonly RunSummary[]): RunSummary[] {

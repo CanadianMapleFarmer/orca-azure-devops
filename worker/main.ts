@@ -12,6 +12,8 @@ import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier } from './pipelines/notify'
 import { createPressure } from './pipelines/pressure'
+import { openRun } from './pipelines/run-file'
+import { createRunViews } from './pipelines/run-views'
 import { createPipelinesService } from './pipelines/service'
 import { watchPipelineSettings } from './pipelines/settings'
 import { createRunSignals } from './pipelines/signals'
@@ -72,6 +74,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       boards.onOrgs(orgs)
       prs.onOrgs(orgs)
       pipelines.onOrgs(orgs)
+      runViews.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
     now: Date.now
@@ -101,21 +104,34 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     since: activatedAt,
     log
   })
+  const pressure = createPressure(Date.now)
   const pipelines = createPipelinesService({
     http: connections.http,
     orgs: () => connections.list(),
     scheduler,
     watchList: createWatchList(store),
-    pressure: createPressure(Date.now),
+    pressure,
     signals: createRunSignals({ bar, notifier, now: Date.now }),
     post: snapshot => orca.panels.post('runs.changed', snapshot),
+    now: Date.now
+  })
+  const runViews = createRunViews({
+    http: connections.http,
+    orgs: () => connections.list(),
+    scheduler,
+    pressure,
+    watched: (org, buildId) => pipelines.isWatched(org, buildId),
+    changed: change => orca.panels.post('runs.viewChanged', change),
     now: Date.now
   })
   const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
   const runActions = createRunActions({
     http: connections.http,
     me: org => pipelines.me(org),
-    after: org => void pipelines.reloadFresh(org).catch(() => {})
+    after: (org, buildId) => {
+      void pipelines.reloadFresh(org).catch(() => {})
+      runViews.refreshNow(org, buildId)
+    }
   })
   const clipboard = createClipboard({
     platform: process.platform,
@@ -152,13 +168,14 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
-  registerPipelineHandlers(orca, { pipelines, actions: runActions })
+  registerPipelineHandlers(orca, { pipelines, actions: runActions, views: runViews, openRun: input => openRun({ call, fs, now: Date.now }, input) })
   registerShareHandlers(orca, share)
-  registerVisibilityHandler(orca, { boards, prs, pipelines })
+  registerVisibilityHandler(orca, { boards, prs, pipelines, runViews })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
   prs.onOrgs(orgs)
   pipelines.onOrgs(orgs)
+  runViews.onOrgs(orgs)
   bar.setOrgs(orgs)
 }

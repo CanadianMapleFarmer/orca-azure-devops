@@ -38,7 +38,7 @@ interface Pending {
 
 type Gap = 'permanent' | 'transient'
 
-interface Place {
+export interface ApprovalPlace {
   stage: string | null
   environment: string | null
   gap: Gap | null
@@ -54,7 +54,7 @@ type Kind = 'full' | 'background'
 
 export function createRunSource(http: AdoHttp, org: string, now: () => number): RunSource {
   const finishedChips = new Map<string, StageChip[] | null>()
-  let places = new Map<string, Place>()
+  let places = new Map<string, ApprovalPlace>()
   let lastFull = new Map<number, RunSummary>()
   let approvalsOffUntil = -Infinity
 
@@ -106,8 +106,7 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
   }
 
   function placeIsOpen(approvalId: string): boolean {
-    const place = places.get(placeKey(approvalId))
-    return place === undefined || place.gap === 'transient'
+    return placeIsUnsettled(places.get(placeKey(approvalId)))
   }
 
   async function placeAll(scoped: AdoHttp, pending: Pending[], runs: ReadonlyMap<number, RunSummary>, timelines: Map<number, RawTimeline | null>): Promise<void> {
@@ -119,20 +118,8 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     }
     for (const [buildId, timeline] of await timelinesOf(scoped, [...unread.values()])) timelines.set(buildId, timeline)
     await mapLimit(unplaced, IN_FLIGHT, async ({ projectId, raw }) => {
-      places.set(placeKey(raw.id), await placeOf(scoped, projectId, raw.id, timelines.get(runIdOf(raw)) ?? null))
+      places.set(placeKey(raw.id), await placeApproval(scoped, org, projectId, raw.id, timelines.get(runIdOf(raw)) ?? null))
     })
-  }
-
-  async function placeOf(scoped: AdoHttp, projectId: string, approvalId: string, timeline: RawTimeline | null): Promise<Place> {
-    const place = timeline ? approvalPlaceOf(timeline, approvalId) : null
-    const stage = place?.stage ?? null
-    if (!place?.checkSuiteId) return { stage, environment: null, gap: null }
-    try {
-      return { stage, environment: await checkSuiteEnvironment(scoped, org, projectId, place.checkSuiteId), gap: null }
-    } catch (error) {
-      if (!(error instanceof AdoError)) throw error
-      return { stage, environment: null, gap: permanent(error) ? 'permanent' : 'transient' }
-    }
   }
 
   function chipTargets(runs: RunSummary[]): { active: RunSummary[]; finished: RunSummary[] } {
@@ -230,13 +217,35 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
       const run = toRunSummary(build, org, me)
       const known = places.get(placeKey(raw.id))
       const timeline = known ? null : await getTimeline(scoped, org, key.projectId, run.buildId)
-      const place = known ?? (await placeOf(scoped, key.projectId, raw.id, timeline))
+      const place = known ?? (await placeApproval(scoped, org, key.projectId, raw.id, timeline))
       places.set(placeKey(raw.id), place)
       const approval = toApprovalSummary(raw, { projectId: key.projectId, me, stage: place.stage, environment: place.environment })
       const approvals = [approval]
       return { run: { ...run, approvals, state: waitingIf(run.state, approvals), stages: chipsFrom(timeline) }, approval }
     }
   }
+}
+
+export async function placeApproval(
+  http: AdoHttp,
+  org: string,
+  projectId: string,
+  approvalId: string,
+  timeline: RawTimeline | null
+): Promise<ApprovalPlace> {
+  const place = timeline ? approvalPlaceOf(timeline, approvalId) : null
+  const stage = place?.stage ?? null
+  if (!place?.checkSuiteId) return { stage, environment: null, gap: null }
+  try {
+    return { stage, environment: await checkSuiteEnvironment(http, org, projectId, place.checkSuiteId), gap: null }
+  } catch (error) {
+    if (!(error instanceof AdoError)) throw error
+    return { stage, environment: null, gap: permanent(error) ? 'permanent' : 'transient' }
+  }
+}
+
+export function placeIsUnsettled(place: ApprovalPlace | undefined): boolean {
+  return place === undefined || place.gap === 'transient'
 }
 
 export function carriedChips(previous: RunSummary | undefined, next: RunSummary): StageChip[] | null {

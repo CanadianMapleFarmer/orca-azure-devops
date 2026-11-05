@@ -1,5 +1,6 @@
 import { messageOf } from '../../src/shared/messages'
 import type { RunActionResult } from '../../src/shared/pipelines'
+import { cancellableStatus, finishedStatus } from '../../src/shared/runs'
 import { decideApproval, getApprovals, toApprovalSummary, type RawApproval } from '../ado/approvals'
 import { cancelBuild, retryStage } from '../ado/build-actions'
 import { getBuild } from '../ado/builds'
@@ -39,8 +40,6 @@ export interface RunActionsDeps {
 
 const PENDING = 'pending'
 const APPROVED_STEP = 'approved'
-const COMPLETED = 'completed'
-const CANCELLING = 'cancelling'
 const DECIDED: Record<Decision, string> = { approved: APPROVED, rejected: REJECTED }
 const NO_LOG_LINES: ReadonlyMap<number, number> = new Map()
 const NO_TIMELINE: RawTimeline = { changeId: 0, records: [] }
@@ -81,7 +80,7 @@ export function createRunActions({ http, me, after }: RunActionsDeps): RunAction
       return attempt(org, async reached => {
         reached(buildId)
         const [build, timeline] = await Promise.all([getBuild(http, org, projectId, buildId), getTimeline(http, org, projectId, buildId)])
-        const stage = runStages(timeline ?? NO_TIMELINE, NO_LOG_LINES, build.status !== COMPLETED).find(item => item.id === stageId)
+        const stage = runStages(timeline ?? NO_TIMELINE, NO_LOG_LINES, !finishedStatus(build.status)).find(item => item.id === stageId)
         if (!stage) return refused(STAGE_GONE)
         if (!stage.canRetry || stage.identifier === null) return refused(STAGE_NOT_RETRYABLE)
         await retryStage(http, org, projectId, buildId, stage.identifier)
@@ -94,8 +93,8 @@ export function createRunActions({ http, me, after }: RunActionsDeps): RunAction
       return attempt(org, async reached => {
         reached(buildId)
         const { status } = await getBuild(http, org, projectId, buildId)
-        if (status === COMPLETED) return refused(RUN_ALREADY_FINISHED)
-        if (status === CANCELLING) return refused(RUN_ALREADY_CANCELLING)
+        if (finishedStatus(status)) return refused(RUN_ALREADY_FINISHED)
+        if (!cancellableStatus(status)) return refused(RUN_ALREADY_CANCELLING)
         await cancelBuild(http, org, projectId, buildId)
         return { ok: true, message: RUN_CANCELLING }
       })

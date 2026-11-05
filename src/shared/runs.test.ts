@@ -2,8 +2,10 @@ import { assert, test } from 'orca/testing'
 import type { ApprovalSummary, RunFilter, RunState, RunSummary, StepState } from './pipelines'
 import {
   approvalsNeedingMe,
+  cancellableStatus,
   FAILED_WINDOW_MS,
   failedRuns,
+  finishedStatus,
   isActive,
   needsMe,
   orderRuns,
@@ -74,6 +76,12 @@ test('isActive is true for queued, running, waiting and cancelling runs only', (
     ['canceled', false]
   ]
   for (const [state, active] of states) assert.equal(isActive(run(1, { state })), active, state)
+})
+
+test('finishedStatus and cancellableStatus read the raw run status, so an unknown one is neither finished nor refused', () => {
+  const statuses = ['notStarted', 'postponed', 'inProgress', 'cancelling', 'completed', 'somethingNew']
+  assert.deepEqual(statuses.map(status => finishedStatus(status)), [false, false, false, false, true, false])
+  assert.deepEqual(statuses.map(status => cancellableStatus(status)), [true, true, true, false, false, true])
 })
 
 test('orderRuns puts active runs first, newest first', () => {

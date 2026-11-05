@@ -82,6 +82,9 @@ export const STAGE_GONE = "That stage isn't in this run any more."
 export const STAGE_NOT_RETRYABLE = 'Only a failed or canceled stage of a finished run can be rerun.'
 export const RUN_ALREADY_CANCELLING = 'The run is already cancelling.'
 export const RUN_CANCELLING = 'Cancelling the run.'
+export const BAD_RUN = "That run can't be opened."
+export const NO_LOCAL_WORKSPACE_RUN = 'Open a local workspace first; runs open in a tab there.'
+export const RUN_TRIMMED = 'Some issue details were left out to keep this run view small.'
 
 export const ALL_JOBS_STAGE = 'All jobs'
 

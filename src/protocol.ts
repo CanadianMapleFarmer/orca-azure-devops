@@ -1,4 +1,4 @@
-import type { RunActionResult, RunsSnapshot } from './shared/pipelines'
+import type { LogChunk, RunActionResult, RunKey, RunsSnapshot, RunView } from './shared/pipelines'
 import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
@@ -42,7 +42,13 @@ declare module 'orca' {
     'work.cancelWorkspace': { input: {}; output: { ok: true } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
-      input: { surface: 'work' | 'board' | 'prs' | 'pipelines'; org: string; visible: boolean; board?: { teamId: string; boardId: string } }
+      input: {
+        surface: 'work' | 'board' | 'prs' | 'pipelines' | 'run'
+        org: string
+        visible: boolean
+        board?: { teamId: string; boardId: string }
+        run?: RunKey
+      }
       output: { ok: true }
     }
     'prs.snapshot': { input: { org: string }; output: PrSnapshot }
@@ -58,6 +64,9 @@ declare module 'orca' {
     }
     'runs.retryStage': { input: { org: string; projectId: string; buildId: number; stageId: string }; output: RunActionResult }
     'runs.cancel': { input: { org: string; projectId: string; buildId: number }; output: RunActionResult }
+    'runs.open': { input: { org: string; projectId: string; buildId: number }; output: { opened: boolean; message?: string } }
+    'runs.view': { input: { org: string; projectId: string; buildId: number }; output: RunView }
+    'runs.log': { input: { org: string; projectId: string; buildId: number; logId: number; first?: number }; output: LogChunk }
     'share.prefs': { input: { org: string; kind: ShareKind }; output: SharePrefsView }
     'share.send': { input: ShareRequest; output: { results: ShareResult[] } }
     'share.people': { input: { org: string; query: string; groups: boolean }; output: Identity[] }
@@ -74,5 +83,6 @@ declare module 'orca' {
     'work.boardChanged': { org: string; teamId: string; boardId: string }
     'prs.changed': PrSnapshot
     'runs.changed': RunsSnapshot
+    'runs.viewChanged': { org: string; buildId: number }
   }
 }

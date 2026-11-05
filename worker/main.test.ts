@@ -10,7 +10,18 @@ import { AdoError } from './ado/http'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
-import { APPROVAL_4531, fakePipelines, isApprovalPatch, isBuildPatch, isMineRuns, isRunningRuns, isStagePatch, type FakePipelines } from './pipelines/fake-pipelines'
+import {
+  APPROVAL_4531,
+  buildIdOf,
+  fakePipelines,
+  isApprovalPatch,
+  isBuildPatch,
+  isMineRuns,
+  isOneBuild,
+  isRunningRuns,
+  isStagePatch,
+  type FakePipelines
+} from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { withWorker } from './test-support'
 
@@ -1004,6 +1015,90 @@ test('runs.retryStage and runs.cancel answer through the handlers', async () => 
 
       await assert.rejects(w.request('runs.retryStage', { ...retry, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
       await assert.rejects(w.request('runs.cancel', { ...cancel, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+function runTabHost(dir: string) {
+  return mockHost({
+    capabilities: [...CAPABILITIES, 'notifications:show', 'workspace:read', 'workspace:write'],
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards: BOARDS }] },
+    secrets: { 'pat:contoso': PAT },
+    results: {
+      'notifications.show': { delivered: true },
+      'workspace.readContext': () => FOCUSED,
+      'workspace.list': () => workspaceAt(dir),
+      'editor.open': { opened: true }
+    }
+  })
+}
+
+function viewsChanged(posts: readonly { event: string; payload?: unknown }[]): { org: string; buildId: number }[] {
+  return posts.filter(post => post.event === 'runs.viewChanged').map(post => post.payload as { org: string; buildId: number })
+}
+
+const RUN_4520 = { projectId: PROJECT, buildId: 4520 }
+
+test('runs.open and runs.view answer through the handlers', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await withFetch(signedIn(ado), async () => {
+      const host = runTabHost(dir)
+      await withWorker(worker, { host }, async w => {
+        assert.deepEqual(await w.request('runs.open', { org: 'contoso', projectId: PROJECT, buildId: 4512 }), { opened: true })
+        assert.deepEqual(host.callsOf('editor.open'), [{ workspaceId: 'ws-web', path: '.orca-ado/contoso.4512.adorun' }])
+        const written = JSON.parse(await fs.readFile(path.join(dir, '.orca-ado', 'contoso.4512.adorun'), 'utf8'))
+        assert.deepEqual(written, { org: 'contoso', projectId: PROJECT, buildId: 4512 })
+
+        const view = await w.request('runs.view', { org: 'contoso', projectId: PROJECT, buildId: 4512 })
+        assert.deepEqual([view.org, view.run.buildId, view.run.state, view.canCancel], ['contoso', 4512, 'failed', false])
+        assert.deepEqual(view.failures.map(failure => [failure.path, failure.logId]), [['Image › Build image › Build and push image', 9]])
+        const chunk = await w.request('runs.log', { org: 'contoso', projectId: PROJECT, buildId: 4512, logId: 9 })
+        assert.deepEqual([chunk.logId, chunk.first, chunk.total], [9, 1, 240])
+        assert.match(chunk.lines.at(-1) ?? '', /Finishing: Build and push image$/)
+
+        await assert.rejects(w.request('runs.open', { org: '../x', projectId: PROJECT, buildId: 4512 }), adoErrorWith('bad_request', 400, "That run can't be opened."))
+        await assert.rejects(
+          w.request('runs.view', { org: 'contoso', projectId: PROJECT, buildId: 9999 }),
+          adoErrorWith('not_found', 404, "That run no longer exists, or you can't see it.")
+        )
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ui.visibility routes run to the run views', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'run', org: 'contoso', visible: true, run: RUN_4520 }), { ok: true })
+      assert.ok(await until(() => viewsChanged(w.posts).length > 0), 'the run view loaded and told its tab')
+      assert.deepEqual(viewsChanged(w.posts), [{ org: 'contoso', buildId: 4520 }])
+      assert.ok(ado.calls.some(call => isOneBuild(call) && buildIdOf(call) === 4520))
+      assert.equal(ado.count(isRunningRuns), 0, 'the Pipelines tab stays in the background')
+      assert.deepEqual(await w.request('ui.visibility', { surface: 'run', org: 'contoso', visible: false, run: RUN_4520 }), { ok: true })
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('a run action reloads the open run view at once', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: pipelinesHost() }, async w => {
+      await w.request('ui.visibility', { surface: 'run', org: 'contoso', visible: true, run: RUN_4520 })
+      assert.ok(await until(() => viewsChanged(w.posts).length === 1), 'the run view loaded')
+      assert.equal((await w.request('runs.view', { org: 'contoso', ...RUN_4520 })).canCancel, true)
+
+      assert.deepEqual(await w.request('runs.cancel', { org: 'contoso', ...RUN_4520 }), { ok: true, message: 'Cancelling the run.' })
+      assert.ok(await until(() => viewsChanged(w.posts).length === 2), 'the cancel reloaded the view and told its tab')
+      const view = await w.request('runs.view', { org: 'contoso', ...RUN_4520 })
+      assert.deepEqual([view.run.state, view.canCancel], ['cancelling', false])
       assert.equal(w.refusals.length, 0)
     })
   })

@@ -2,12 +2,12 @@ import * as path from 'node:path'
 import { NO_BOARDS } from '../../src/shared/messages'
 import { isValidOrgName } from '../ado/org'
 import { BAD_BOARD, badRequest, NO_LOCAL_WORKSPACE } from '../messages'
+import { TAB_FOLDER, writeTabFile, type TabFileFs } from '../tab-files'
 import { focusedWorkspace, type HostCall } from '../workspace/focused'
 
-export type BoardFileFs = Pick<typeof import('node:fs/promises'), 'mkdir' | 'writeFile' | 'readFile'>
+export type BoardFileFs = TabFileFs
 export interface BoardFileContent { org: string; projectId: string; teamId: string; boardId: string }
 
-const FOLDER = '.orca-ado'
 const TEAM_ID = /^[A-Za-z0-9-]{1,64}$/
 
 function fileName(org: string, teamId: string): string {
@@ -16,20 +16,12 @@ function fileName(org: string, teamId: string): string {
 }
 
 export function boardFilePath(workspacePath: string, org: string, teamId: string): string {
-  return path.join(workspacePath, FOLDER, fileName(org, teamId))
+  return path.join(workspacePath, TAB_FOLDER, fileName(org, teamId))
 }
 
 export async function writeBoardFile(fs: BoardFileFs, workspacePath: string, content: BoardFileContent): Promise<string> {
-  const file = boardFilePath(workspacePath, content.org, content.teamId)
-  const folder = path.dirname(file)
-  await fs.mkdir(folder, { recursive: true })
-  await fs.writeFile(path.join(folder, '.gitignore'), '*\n', { flag: 'wx' }).catch(error => {
-    if (error?.code !== 'EEXIST') throw error
-  })
   const text = `${JSON.stringify({ org: content.org, projectId: content.projectId, teamId: content.teamId, boardId: content.boardId }, null, 2)}\n`
-  const current = await fs.readFile(file, 'utf8').catch(() => null)
-  if (current !== text) await fs.writeFile(file, text)
-  return file
+  return writeTabFile(fs, workspacePath, fileName(content.org, content.teamId), text)
 }
 
 export async function openBoard(
@@ -41,6 +33,6 @@ export async function openBoard(
   const board = await deps.boardOf(org)
   if (!board) return { opened: false, message: NO_BOARDS }
   await writeBoardFile(deps.fs, workspace.path, { org, ...board })
-  await deps.call('editor.open', { workspaceId: workspace.id, path: `${FOLDER}/${fileName(org, board.teamId)}` })
+  await deps.call('editor.open', { workspaceId: workspace.id, path: `${TAB_FOLDER}/${fileName(org, board.teamId)}` })
   return { opened: true }
 }
