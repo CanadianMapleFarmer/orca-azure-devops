@@ -9,6 +9,11 @@ const PYTHON_FRAME = /File "([^"]+)", line (\d{1,9})/
 const SEPARATOR = /[\\/]/
 const EXTENSION = /\.[A-Za-z][\w+-]*$/
 const DOCKERFILE = /^Dockerfile/
+const BACKSLASH = /\\/g
+const DRIVE = /^[A-Za-z]:/
+const LEADING_SEPARATORS = /^(?:\.?\/)+/
+
+export const MAX_CANDIDATES = 12
 
 export function fileRefOf(text: string): FileRef | null {
   const line = text
@@ -49,4 +54,10 @@ function ref(path: string, line: string, column: string | undefined): FileRef {
 function positive(digits: string | undefined): number | null {
   const value = Number(digits)
   return value > 0 ? value : null
+}
+
+export function pathCandidates(path: string, max = MAX_CANDIDATES): string[] {
+  const segments = path.replace(BACKSLASH, '/').replace(DRIVE, '').replace(LEADING_SEPARATORS, '').split('/')
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return []
+  return Array.from({ length: Math.min(segments.length, max) }, (_, start) => segments.slice(start).join('/'))
 }

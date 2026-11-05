@@ -1092,6 +1092,71 @@ test('runs.open and runs.view answer through the handlers', async () => {
   }
 })
 
+function openFileHost(entries: ReturnType<typeof workspaceAt>['workspaces']) {
+  return mockHost({
+    capabilities: [...CAPABILITIES, 'notifications:show', 'workspace:read', 'workspace:write'],
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards: BOARDS }] },
+    secrets: { 'pat:contoso': PAT },
+    results: {
+      'notifications.show': { delivered: true },
+      'workspace.readContext': () => FOCUSED,
+      'workspace.list': () => ({ workspaces: entries, truncated: false }),
+      'editor.open': { opened: true }
+    }
+  })
+}
+
+async function repositoryAt(dir: string, remoteUrl: string): Promise<void> {
+  await fs.mkdir(path.join(dir, 'src', 'Api'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'src', 'Api', 'Program.cs'), 'class Program {}\n')
+  for (const args of [['init', '-q'], ['remote', 'add', 'origin', remoteUrl]]) {
+    const result = spawnSync('git', ['-C', dir, ...args])
+    assert.equal(result.status, 0, String(result.stderr))
+  }
+}
+
+test('runs.openFile answers through the handler', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  const web = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  const docs = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await repositoryAt(web, 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/api')
+    await repositoryAt(docs, 'https://ada@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app')
+    const entries = [
+      { ...workspaceAt(web).workspaces[0] },
+      { id: 'ws-docs', kind: 'worktree', name: 'docs', path: docs, branch: 'main', hostId: null }
+    ]
+    await withFetch(signedIn(ado), async () => {
+      const host = openFileHost(entries)
+      await withWorker(worker, { host }, async w => {
+        const input = { org: 'contoso', projectId: PROJECT, buildId: 4512, path: '/home/vsts/work/1/s/src/Api/Program.cs', line: 42 }
+        assert.deepEqual(await w.request('runs.openFile', input), { opened: true, path: 'src/Api/Program.cs', line: 42 })
+        assert.deepEqual(host.callsOf('editor.open'), [{ workspaceId: 'ws-docs', path: 'src/Api/Program.cs' }], "the workspace of the run's repository, not the focused one")
+        assert.equal(ado.count(isOneBuild), 1, 'a run no snapshot holds is read once')
+
+        await w.request('runs.snapshot', { org: 'contoso' })
+        assert.deepEqual(await w.request('runs.openFile', { ...input, buildId: 4520, line: null }), { opened: true, path: 'src/Api/Program.cs', line: null })
+        assert.equal(ado.count(isOneBuild), 1, 'a run the snapshot holds is not read again')
+
+        const refused = { opened: false, message: "That isn't a file path Orca can open." }
+        assert.deepEqual(await w.request('runs.openFile', { ...input, path: '../../etc/passwd' }), refused)
+        assert.deepEqual(await w.request('runs.openFile', { ...input, path: 'C:\\Windows\\win.ini' }), {
+          opened: false,
+          message: "Couldn't find win.ini in your local workspaces of web-app."
+        })
+        assert.equal(host.callsOf('editor.open').length, 2, 'nothing else was opened')
+
+        await assert.rejects(w.request('runs.openFile', { ...input, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+        await assert.rejects(w.request('runs.openFile', { ...input, buildId: 9999 }), adoErrorWith('not_found', 404, "That run no longer exists, or you can't see it."))
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(web, { recursive: true, force: true })
+    await fs.rm(docs, { recursive: true, force: true })
+  }
+})
+
 test('ui.visibility routes run to the run views', async () => {
   const ado = pipelinesAt(Date.now() - 60_000)
   await withFetch(signedIn(ado), async () => {

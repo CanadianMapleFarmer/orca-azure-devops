@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { FileRef } from './pipelines'
-import { fileRefOf } from './file-ref'
+import { fileRefOf, MAX_CANDIDATES, pathCandidates } from './file-ref'
 
 const ref = (path: string, line: number | null, column: number | null = null): FileRef => ({ path, line, column })
 
@@ -101,4 +101,72 @@ test('fileRefOf stays fast on a very long line', () => {
   assert.equal(fileRefOf('a('.repeat(150_000)), null)
   assert.equal(fileRefOf('x'.repeat(300_000)), null)
   assert.equal(fileRefOf(`${'y '.repeat(150_000)}src/a.ts:3`), null)
+})
+
+test('pathCandidates gives suffixes longest first for Linux and Windows agent paths', () => {
+  assert.deepEqual(pathCandidates('/home/vsts/work/1/s/src/Api/Program.cs'), [
+    'home/vsts/work/1/s/src/Api/Program.cs',
+    'vsts/work/1/s/src/Api/Program.cs',
+    'work/1/s/src/Api/Program.cs',
+    '1/s/src/Api/Program.cs',
+    's/src/Api/Program.cs',
+    'src/Api/Program.cs',
+    'Api/Program.cs',
+    'Program.cs'
+  ])
+  assert.deepEqual(pathCandidates('D:\\a\\1\\s\\src\\Api\\Program.cs'), [
+    'a/1/s/src/Api/Program.cs',
+    '1/s/src/Api/Program.cs',
+    's/src/Api/Program.cs',
+    'src/Api/Program.cs',
+    'Api/Program.cs',
+    'Program.cs'
+  ])
+})
+
+test('pathCandidates drops a drive letter, a leading ./ and leading separators', () => {
+  assert.deepEqual(pathCandidates('./src/app.ts'), ['src/app.ts', 'app.ts'])
+  assert.deepEqual(pathCandidates('.\\src\\app.ts'), ['src/app.ts', 'app.ts'])
+  assert.deepEqual(pathCandidates('c:/src/app.ts'), ['src/app.ts', 'app.ts'])
+  assert.deepEqual(pathCandidates('C:\\Windows\\win.ini'), ['Windows/win.ini', 'win.ini'])
+  assert.deepEqual(pathCandidates('/etc/hosts'), ['etc/hosts', 'hosts'])
+  assert.deepEqual(pathCandidates('\\\\build\\share\\a.cs'), ['build/share/a.cs', 'share/a.cs', 'a.cs'])
+  assert.deepEqual(pathCandidates('Dockerfile'), ['Dockerfile'])
+  assert.deepEqual(pathCandidates('src\\a/b\\c.go'), ['src/a/b/c.go', 'a/b/c.go', 'b/c.go', 'c.go'])
+})
+
+test('pathCandidates refuses a path with an empty, dot or parent segment', () => {
+  const refused = [
+    '',
+    '/',
+    'C:',
+    '..',
+    '../../etc/passwd',
+    '..\\..\\Windows\\win.ini',
+    'src/../../etc/passwd',
+    'src\\..\\a.ts',
+    './../a.ts',
+    'C:\\..\\a.ts',
+    '/home/vsts/s/../../../etc/passwd',
+    'src//a.ts',
+    'src\\\\a.ts',
+    'src/',
+    'src\\',
+    'src/./a.ts',
+    '.'
+  ]
+  for (const path of refused) assert.deepEqual(pathCandidates(path), [], path)
+  assert.deepEqual(pathCandidates('src/..a/.b/...c'), ['src/..a/.b/...c', '..a/.b/...c', '.b/...c', '...c'])
+})
+
+test('pathCandidates keeps at most max suffixes, longest first', () => {
+  assert.equal(MAX_CANDIDATES, 12)
+  assert.deepEqual(pathCandidates('a/b/c/d', 2), ['a/b/c/d', 'b/c/d'])
+  assert.deepEqual(pathCandidates('a/b/c/d', 0), [])
+  const deep = Array.from({ length: 30 }, (_, index) => `d${index}`).join('/')
+  const candidates = pathCandidates(deep)
+  assert.equal(candidates.length, MAX_CANDIDATES)
+  assert.equal(candidates[0], deep)
+  assert.equal(candidates[1], deep.slice(deep.indexOf('/') + 1))
+  assert.equal(pathCandidates('x/'.repeat(100_000) + 'y').length, MAX_CANDIDATES)
 })

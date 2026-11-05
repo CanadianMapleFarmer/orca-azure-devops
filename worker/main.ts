@@ -11,6 +11,7 @@ import { registerOrgHandlers } from './org-handlers'
 import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier } from './pipelines/notify'
+import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './pipelines/open-file'
 import { createPressure } from './pipelines/pressure'
 import { openRun } from './pipelines/run-file'
 import { createRunViews } from './pipelines/run-views'
@@ -164,12 +165,23 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   await connections.resetInterrupted()
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
+  const openFileDeps: OpenFileDeps = {
+    call,
+    remotes: gitRemotes(runCommand, findExecutable('git', { pathEnv: process.env.PATH }), Date.now),
+    isFileInside: fileInside(fs)
+  }
   await registerWorkspaceHandlers(orca, { boards, store, call })
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
-  registerPipelineHandlers(orca, { pipelines, actions: runActions, views: runViews, openRun: input => openRun({ call, fs, now: Date.now }, input) })
+  registerPipelineHandlers(orca, {
+    pipelines,
+    actions: runActions,
+    views: runViews,
+    openRun: input => openRun({ call, fs, now: Date.now }, input),
+    openFile: input => openRunFile(openFileDeps, input)
+  })
   registerShareHandlers(orca, share)
   registerVisibilityHandler(orca, { boards, prs, pipelines, runViews })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))

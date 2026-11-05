@@ -67,6 +67,10 @@ declare module 'orca' {
     'runs.open': { input: { org: string; projectId: string; buildId: number }; output: { opened: boolean; message?: string } }
     'runs.view': { input: { org: string; projectId: string; buildId: number }; output: RunView }
     'runs.log': { input: { org: string; projectId: string; buildId: number; logId: number; first?: number }; output: LogChunk }
+    'runs.openFile': {
+      input: { org: string; projectId: string; buildId: number; path: string; line: number | null }
+      output: { opened: boolean; path?: string; line?: number | null; message?: string }
+    }
     'share.prefs': { input: { org: string; kind: ShareKind }; output: SharePrefsView }
     'share.send': { input: ShareRequest; output: { results: ShareResult[] } }
     'share.people': { input: { org: string; query: string; groups: boolean }; output: Identity[] }

@@ -86,6 +86,7 @@ export const BAD_RUN = "That run can't be opened."
 export const NO_LOCAL_WORKSPACE_RUN = 'Open a local workspace first; runs open in a tab there.'
 export const RUN_TRIMMED = 'Some issue details were left out to keep this run view small.'
 export const RUN_CUT = 'Some steps were left out to keep this run view small.'
+export const NOT_A_FILE_PATH = "That isn't a file path Orca can open."
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -181,6 +182,14 @@ export function approvedNeedsMore(count: number): string {
 
 export function rerunning(stage: string): string {
   return `Rerunning ${stage}.`
+}
+
+export function noRepoWorkspace(repo: string): string {
+  return `Open a local workspace of ${repo} first.`
+}
+
+export function fileNotFound(path: string, repo: string): string {
+  return `Couldn't find ${path} in your local workspaces of ${repo}.`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {
