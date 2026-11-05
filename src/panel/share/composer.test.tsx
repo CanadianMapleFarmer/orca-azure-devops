@@ -1,6 +1,6 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { ReleaseSet } from '../../shared/prs'
-import { MAX_INTRO } from '../../shared/share/message'
+import { MAX_INTRO } from '../../shared/share/limits'
 import { teamsChatUrl } from '../../shared/share/teams'
 import { PR_TEMPLATE } from '../../shared/share/template'
 import type { Channel, SharePrefsView, ShareRequest, ShareResult } from '../../shared/share/types'

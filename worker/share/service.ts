@@ -1,7 +1,7 @@
 import { messageOf } from '../../src/shared/messages'
 import type { PrKey } from '../../src/shared/prs'
-import { MAX_SHARE_PEOPLE } from '../../src/shared/share/limits'
-import { buildMessage, MAX_SHARE_ITEMS } from '../../src/shared/share/message'
+import { MAX_SHARE_ITEMS, MAX_SHARE_PEOPLE } from '../../src/shared/share/limits'
+import { buildMessage } from '../../src/shared/share/message'
 import { parseTemplate } from '../../src/shared/share/template'
 import type {
   Channel,

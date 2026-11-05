@@ -1,8 +1,6 @@
+import { MAX_INTRO, MAX_SHARE_ITEMS } from './limits'
 import { fillLine, isWebUrl, parseTemplate } from './template'
 import type { Segment, ShareItem, ShareMessage } from './types'
-
-export const MAX_SHARE_ITEMS = 50
-export const MAX_INTRO = 2000
 
 const HTML_ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const MARKDOWN_SPECIALS = /[\\`*_[\]()<>#|~&]/g

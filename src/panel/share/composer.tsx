@@ -1,6 +1,6 @@
 import { Button, Callout, Checkbox, CodeView, Heading, Markdown, read, Row, Skeleton, Stack, Text, Textarea, type OrcaNode } from 'orca'
-import { TOO_MANY_ITEMS } from '../../shared/share/limits'
-import { MAX_INTRO, toMarkdown } from '../../shared/share/message'
+import { MAX_INTRO, TOO_MANY_ITEMS } from '../../shared/share/limits'
+import { toMarkdown } from '../../shared/share/message'
 import type { ShareResult } from '../../shared/share/types'
 import { LoadFailure } from '../snapshot-parts'
 import { openChannels } from './channels'

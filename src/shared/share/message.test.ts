@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
-import { MAX_INTRO, MAX_SHARE_ITEMS, buildMessage, toHtml, toMarkdown, toPlain } from './message'
+import { MAX_INTRO, MAX_SHARE_ITEMS } from './limits'
+import { buildMessage, toHtml, toMarkdown, toPlain } from './message'
 import { PR_TEMPLATE, PR_VARS } from './template'
 import type { ShareItem } from './types'
 

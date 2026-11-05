@@ -154,7 +154,7 @@ test('channel names are trimmed and at most 100 characters', async () => {
   const { storage, secretData, channels } = setup()
   const longest = 'R'.repeat(100)
   assert.equal((await channels.add(`  ${longest}\t`, WEBHOOK)).name, longest)
-  await assert.rejects(channels.add(`${'Q'.repeat(101)}`, ROTATED), failsWith('Keep the channel name under 100 characters.'))
+  await assert.rejects(channels.add(`${'Q'.repeat(101)}`, ROTATED), failsWith('Keep the channel name to 100 characters or fewer.'))
   assert.equal((storage['share:channels'] as unknown[]).length, 1)
   assert.equal(Object.keys(secretData).length, 1)
 })

@@ -89,7 +89,7 @@ test("a channel name over 100 characters can't be added", async () => {
   await panel.type({ label: 'Channel name' }, 'Q'.repeat(101))
   await panel.type({ label: 'Webhook URL' }, SECRET)
   assert.equal(panel.find({ type: 'Button', text: 'Add channel' })?.disabled, true)
-  assert.equal(panel.find({ type: 'Text', text: 'Keep the channel name under 100 characters.' })?.props.tone, 'danger')
+  assert.equal(panel.find({ type: 'Text', text: 'Keep the channel name to 100 characters or fewer.' })?.props.tone, 'danger')
   await panel.submit({ label: 'Webhook URL' })
   assert.deepEqual(inputsTo(host, 'share.addChannel'), [])
   await panel.press({ type: 'Button', text: 'Back' })
