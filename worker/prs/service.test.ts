@@ -256,10 +256,7 @@ test('the snapshot holds release sets, to-review PRs and the saved auto-complete
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4101 }), search.prs[0])
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4110 }), snapshot.toReview[0])
   assert.equal(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 9999 }), null)
-  assert.deepEqual(h.service.activeMine(ORG).map(pr => pr.prId), [4101, 4102, 4103, 4104, 4105])
-
-  const source = await h.service.source(ORG)
-  assert.equal((await source.one({ projectId: PROJECT, repoId: REPO, prId: 4110 })).title, 'Harden the login redirect')
+  assert.equal(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4105 })?.status, 'active')
   assert.deepEqual(await rejection(h.service.snapshot('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
 })
 
@@ -370,7 +367,7 @@ test('jobs and counts follow org status', async () => {
 
   h.setOrgs([])
   assert.deepEqual(h.counts.at(-1), [ORG, null])
-  assert.deepEqual(h.service.activeMine(ORG), [])
+  assert.equal(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4101 }), null)
 
   h.setOrgs([status({ account: null })])
   const idle = h.ado.calls.length
@@ -433,7 +430,7 @@ test('a load finishing after sign-out posts nothing', async () => {
     await loading
     assert.deepEqual(h.posts, [], JSON.stringify(after))
     assert.ok(h.counts.every(([, count]) => count === null), 'no count is set')
-    assert.deepEqual(h.service.activeMine(ORG), [])
+    assert.equal(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4101 }), null)
   }
 })
 

@@ -34,8 +34,6 @@ export interface PrsService {
   reloadFresh(org: string): Promise<PrSnapshot>
   me(org: string): Promise<string>
   cached(org: string, key: PrKey): PrSummary | null
-  activeMine(org: string): PrSummary[]
-  source(org: string): Promise<PrSource>
   visibility(input: { org: string; visible: boolean }): { ok: true }
   dispose(): void
 }
@@ -264,15 +262,6 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     cached(org, key) {
       const entry = entries.get(org)
       return [...(entry?.mine ?? []), ...(entry?.review ?? [])].find(pr => samePr(pr, key)) ?? null
-    },
-
-    activeMine(org) {
-      return (entries.get(org)?.mine ?? []).filter(pr => pr.status === 'active')
-    },
-
-    async source(org) {
-      await statusOf(org)
-      return entryOf(org).source
     },
 
     visibility({ org, visible: shown }) {

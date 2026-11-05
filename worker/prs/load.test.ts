@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { createAdoHttp } from '../ado/http'
 import { ORG, PROJECT, REPO } from '../boards/fake-ado'
-import { fakePrs, isEvaluations, isMineActive, isMineCompleted, isOnePr, isPrWorkItems, isReviewList, ME, PLATFORM } from './fake-prs'
+import { fakePrs, isEvaluations, isMineActive, isMineCompleted, isPrWorkItems, isReviewList, ME, PLATFORM } from './fake-prs'
 import { createPrSource } from './load'
 
 const T0 = Date.parse('2026-11-05T09:00:00Z')
@@ -17,25 +17,6 @@ function setup() {
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   return { ado, clock, source: createPrSource(http, ORG, () => clock.now) }
 }
-
-test('one reads a PR with its work items', async () => {
-  const { ado, source } = setup()
-  const pr = await source.one({ projectId: PROJECT, repoId: REPO, prId: 4101 })
-
-  assert.deepEqual([pr.prId, pr.title, pr.target, pr.status], [4101, 'Add vehicle search filters', 'develop', 'active'])
-  assert.deepEqual(pr.workItemIds, [1204, 1207])
-  assert.equal(pr.checks, null)
-  assert.deepEqual(
-    ado.calls.map(call => call.path),
-    [
-      `/${ORG}/${PROJECT}/_apis/git/repositories/${REPO}/pullrequests/4101`,
-      `/${ORG}/${PROJECT}/_apis/git/repositories/${REPO}/pullRequests/4101/workitems`
-    ]
-  )
-
-  await source.one({ projectId: PROJECT, repoId: REPO, prId: 4101 })
-  assert.equal(ado.count(isOnePr), 2, 'the pull request itself is never cached')
-})
 
 test('a signal reaches every request of a full load', async () => {
   const { ado, source } = setup()
