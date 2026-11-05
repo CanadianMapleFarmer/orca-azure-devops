@@ -5,6 +5,7 @@ import type { Channel } from '../../shared/share/types'
 import { LoadFailure } from '../snapshot-parts'
 import { addToChannels, dropChannel, leaveChannels, setChannels, showChannels, shownChannels } from './state'
 
+const REPLACED = 'Webhook URL replaced.'
 const HELP =
   'In Teams, open the channel\'s ⋯ menu → Workflows → "Send webhook alerts to a channel", then paste the URL it gives you. Posts come from the Workflows bot.'
 
@@ -92,6 +93,7 @@ async function saveReplace(id: string): Promise<void> {
   try {
     await plugin.request('share.replaceChannel', { id, url })
     set(replacing, null)
+    set(notice, { id, ok: true, text: REPLACED })
   } catch (error) {
     set(notice, { id, ok: false, text: messageOf(error) })
   }

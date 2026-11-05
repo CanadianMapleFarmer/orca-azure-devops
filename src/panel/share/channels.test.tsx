@@ -131,6 +131,10 @@ test('Replace URL reveals a password field, saves the new URL and clears it', as
   await panel.press({ type: 'Button', text: 'Save' })
   assert.deepEqual(inputsTo(host, 'share.replaceChannel'), [{ id: 'c-releases', url: ROTATED }])
   assert.equal(panel.find({ label: 'New webhook URL' }), null)
+  assert.deepEqual(
+    panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]),
+    [['success', 'Webhook URL replaced.']]
+  )
   assert.equal(leaks('SECRET-SIG'), false)
 
   await panel.press(panel.findAll({ type: 'Button', text: 'Replace URL' })[0])
