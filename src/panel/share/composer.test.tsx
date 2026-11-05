@@ -106,6 +106,17 @@ test("Share opens the composer with the set's active PRs checked and the referen
   assert.equal(panel.find({ type: 'Button', text: 'Back' })?.props.variant, 'ghost')
 })
 
+test('suggestions leave out the person sharing, whatever the case of their id', async () => {
+  const mine = reviewerOf('Ada Lovelace', 10, { id: 'U-CONTOSO' })
+  await share({}, { sets: [setOf([prOf(55, { reviewers: [mine, reviewerOf('Grace Hopper', 0)] }), prOf(56, { reviewers: [mine] })])] })
+  const offered = () => panel.findAll({ type: 'ListItem' }).map(item => item.label)
+  await panel.toggle({ type: 'Checkbox', label: 'Message in Teams' })
+  assert.deepEqual(offered(), ['Grace Hopper'])
+  await panel.toggle({ type: 'Checkbox', label: 'Message in Teams' })
+  await panel.toggle({ type: 'Checkbox', label: 'Add as reviewers' })
+  assert.deepEqual(offered(), ['Grace Hopper'])
+})
+
 test('unchecking a PR removes it from the preview and from share.send keys', async () => {
   const host = await share({ 'share.send': { results: [COPIED] } })
   await panel.toggle({ type: 'Checkbox', label: 'Pull Request 56 → qa' })

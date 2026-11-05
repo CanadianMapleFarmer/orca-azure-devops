@@ -62,7 +62,7 @@ function Sets({ org, current }: { org: string; current: PrSnapshot }): OrcaNode 
         {optionsLine(current.autoComplete)}
       </Text>
       {shown.map(({ set, limit }) => (
-        <ReleaseSetCard key={set.key} org={org} set={set} limit={limit} />
+        <ReleaseSetCard key={set.key} org={org} me={current.me} set={set} limit={limit} />
       ))}
       {shown.length < current.sets.length ? (
         <Text size="sm" muted>
