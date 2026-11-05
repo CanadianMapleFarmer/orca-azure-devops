@@ -31,11 +31,14 @@ export interface RawPullRequest {
   repository: { id: string; name: string; webUrl?: string; project: { id: string; name: string } }
   reviewers?: RawReviewer[]
   autoCompleteSetBy?: { id: string }
+  completionOptions?: { deleteSourceBranch?: boolean }
 }
 
 export interface PrCriteria {
   creatorId?: string
   reviewerId?: string
+  repositoryId?: string
+  sourceBranch?: string
   status: 'active' | 'completed'
   closedSince?: number
   top: number
@@ -60,6 +63,8 @@ export async function listPullRequests(
     query: {
       'searchCriteria.creatorId': criteria.creatorId,
       'searchCriteria.reviewerId': criteria.reviewerId,
+      'searchCriteria.repositoryId': criteria.repositoryId,
+      'searchCriteria.sourceRefName': criteria.sourceBranch === undefined ? undefined : `refs/heads/${criteria.sourceBranch}`,
       'searchCriteria.status': criteria.status,
       'searchCriteria.queryTimeRangeType': closedSince ? 'closed' : undefined,
       'searchCriteria.minTime': closedSince?.toISOString(),
@@ -97,6 +102,10 @@ export async function codeProjects(http: AdoHttp, org: string, setting: OrgStatu
     if (error instanceof AdoError && (error.code === 'not_found' || error.code === 'bad_request')) return listProjects(http, org)
     throw error
   }
+}
+
+export function deletesSourceBranch(raw: RawPullRequest): boolean {
+  return Boolean(raw.autoCompleteSetBy) && raw.completionOptions?.deleteSourceBranch === true
 }
 
 export function toReviewer(raw: RawReviewer): PrReviewer {

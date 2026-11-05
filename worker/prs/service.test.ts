@@ -514,3 +514,38 @@ test('a removed job aborts its in-flight PR requests', async () => {
   assert.deepEqual(h.posts, [])
   assert.deepEqual(h.counts, [[ORG, null]])
 })
+
+test('me answers the pinned account, and refuses an org that is not signed in or whose list cannot be read', async () => {
+  const h = harness()
+  assert.equal(await h.service.me(ORG), ME)
+  assert.deepEqual(await rejection(h.service.me('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
+
+  h.failing.orgs = true
+  assert.equal((await rejection(h.service.me(ORG))).message, LOAD_FAILED)
+  h.failing.orgs = false
+  h.setOrgs([status({ account: null })])
+  assert.deepEqual(await rejection(h.service.me(ORG)), new AdoError('unauthorized', 401, NOT_CONNECTED))
+  assert.equal(h.ado.calls.length, 0)
+})
+
+test('reloadFresh waits for the load in flight and then runs a full load of its own', async () => {
+  const alone = harness()
+  const snapshot = await alone.service.reloadFresh(ORG)
+  assert.equal(snapshot.sets.length, 3)
+  assert.equal(alone.ado.count(isMineActive), 2)
+
+  const h = harness()
+  const held = h.ado.hold(isMineActive)
+  const first = h.service.snapshot(ORG)
+  await drain()
+  const fresh = h.service.reloadFresh(ORG)
+  await drain()
+  assert.equal(h.ado.count(isMineActive), 2, 'it is waiting, not joining or starting a second load')
+
+  held.release()
+  await first
+  await fresh
+  assert.equal(h.ado.count(isMineActive), 4)
+  assert.equal(h.posts.length, 2)
+  assert.deepEqual(await rejection(h.service.reloadFresh('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})

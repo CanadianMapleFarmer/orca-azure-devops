@@ -36,6 +36,7 @@ export const PR_ALREADY_APPROVED = 'Already approved.'
 export const PR_APPROVED = 'Approved.'
 export const PR_ALREADY_AUTO_COMPLETE = 'Already set to auto-complete.'
 export const PR_AUTO_COMPLETE_SET = 'Auto-complete set.'
+export const PR_BRANCH_KEPT_UNCHECKED = "Auto-complete set. Source branch kept: couldn't check for other pull requests."
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
@@ -55,6 +56,14 @@ export function showingNewest(count: number): string {
 
 export function keptBranch(prId: number): string {
   return `${PR_AUTO_COMPLETE_SET} Source branch kept: Pull Request ${prId} also uses it.`
+}
+
+export function alreadySetWillDelete(prId: number): string {
+  return `${PR_ALREADY_AUTO_COMPLETE} It will delete the source branch Pull Request ${prId} also uses; turn that off in Azure DevOps.`
+}
+
+export function siblingWillDelete(prId: number): string {
+  return `${PR_AUTO_COMPLETE_SET} Pull Request ${prId} will delete the shared source branch when it completes.`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

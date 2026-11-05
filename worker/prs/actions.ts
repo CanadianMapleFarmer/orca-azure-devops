@@ -1,26 +1,28 @@
 import { messageOf } from '../../src/shared/messages'
 import type { AutoCompleteOptions, PrKey, PrSummary, RowResult } from '../../src/shared/prs'
-import type { OrgStatus } from '../../src/shared/types'
-import { AdoError, type AdoHttp } from '../ado/http'
+import type { AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { APPROVED_VOTE, castVote, setAutoComplete } from '../ado/pr-actions'
+import { deletesSourceBranch, getPullRequest, listPullRequests, toPrSummary, type RawPullRequest } from '../ado/pullrequests'
 import {
+  alreadySetWillDelete,
   keptBranch,
-  NOT_CONNECTED,
   PR_ALREADY_APPROVED,
   PR_ALREADY_AUTO_COMPLETE,
   PR_APPROVED,
   PR_AUTO_COMPLETE_SET,
+  PR_BRANCH_KEPT_UNCHECKED,
   PR_SKIPPED_ABANDONED,
   PR_SKIPPED_COMPLETED,
-  PR_SKIPPED_DRAFT
+  PR_SKIPPED_DRAFT,
+  siblingWillDelete
 } from '../messages'
-import type { PrSource } from './load'
 import { sameId } from './release-sets'
 import { samePr, type PrsService } from './service'
 import type { PrSettings } from './settings'
 
 const AT_A_TIME = 3
+const ON_BRANCH_TOP = 100
 
 export interface PrActionsInput {
   org: string
@@ -35,39 +37,61 @@ export interface PrActions {
 export interface PrActionsDeps {
   http: AdoHttp
   prs: PrsService
-  orgs: () => Promise<OrgStatus[]>
   settings: PrSettings
+}
+
+interface Seen {
+  pr: PrSummary
+  deletesBranch: boolean
 }
 
 interface Call {
   org: string
   me: string
-  read: PrSummary[]
+  seen: Seen[]
 }
 
-type Read = { pr: PrSummary } | { failed: RowResult }
+type Read = { seen: Seen } | { failed: RowResult }
+type OnBranch = Map<string, Seen[] | null>
 
-export function createPrActions({ http, prs, orgs, settings }: PrActionsDeps): PrActions {
-  async function meOf(org: string): Promise<string> {
-    const status = (await orgs()).find(item => item.org === org)
-    if (status?.state !== 'connected' || !status.account) throw new AdoError('unauthorized', 401, NOT_CONNECTED)
-    return status.account.adoId
-  }
-
+export function createPrActions({ http, prs, settings }: PrActionsDeps): PrActions {
   async function perform(
     { org, prs: keys }: PrActionsInput,
-    act: (call: Call) => (pr: PrSummary) => Promise<RowResult>
+    prepare: (call: Call) => Promise<(item: Seen) => Promise<RowResult>>
   ): Promise<{ results: RowResult[] }> {
-    const me = await meOf(org)
-    const source = await prs.source(org)
-    const reads = await mapLimit(keys, AT_A_TIME, key => read(source, key))
-    const forEach = act({ org, me, read: reads.flatMap(item => ('pr' in item ? [item.pr] : [])) })
-    const results = await mapLimit(reads, AT_A_TIME, async item => ('pr' in item ? attempt(item.pr.prId, () => forEach(item.pr)) : item.failed))
-    void prs.refresh(org).catch(() => {})
+    const me = await prs.me(org)
+    const reads = await mapLimit(distinct(keys), AT_A_TIME, key => read(org, key))
+    const act = await prepare({ org, me, seen: reads.flatMap(item => ('seen' in item ? [item.seen] : [])) })
+    const results = await mapLimit(reads, AT_A_TIME, async item => ('seen' in item ? attempt(item.seen.pr.prId, () => act(item.seen)) : item.failed))
+    void prs.reloadFresh(org).catch(() => {})
     return { results }
   }
 
-  async function approve(pr: PrSummary, org: string, me: string): Promise<RowResult> {
+  async function read(org: string, key: PrKey): Promise<Read> {
+    try {
+      return { seen: seenOf(await getPullRequest(http, org, key), org) }
+    } catch (error) {
+      return { failed: failure(key.prId, error) }
+    }
+  }
+
+  async function activeOnBranch(org: string, pr: PrSummary): Promise<Seen[] | null> {
+    try {
+      const criteria = { repositoryId: pr.repoId, sourceBranch: pr.source, status: 'active', top: ON_BRANCH_TOP } as const
+      return (await listPullRequests(http, org, pr.projectId, criteria)).map(raw => seenOf(raw, org))
+    } catch {
+      return null
+    }
+  }
+
+  async function lookUpBranches(org: string, options: AutoCompleteOptions, seen: Seen[]): Promise<OnBranch> {
+    const wanted = distinctBy(seen.filter(item => needsBranchCheck(item, options)), item => branchKey(item.pr))
+    const found = await mapLimit(wanted, AT_A_TIME, async item => [branchKey(item.pr), await activeOnBranch(org, item.pr)] as const)
+    return new Map(found)
+  }
+
+  async function approve(item: Seen, org: string, me: string): Promise<RowResult> {
+    const { pr } = item
     const skip = skipMessage(pr)
     if (skip) return ok(pr, skip)
     const mine = pr.reviewers.find(reviewer => sameId(reviewer.id, me))
@@ -76,39 +100,67 @@ export function createPrActions({ http, prs, orgs, settings }: PrActionsDeps): P
     return ok(pr, PR_APPROVED)
   }
 
-  async function autoComplete(pr: PrSummary, org: string, me: string, options: AutoCompleteOptions, active: PrSummary[]): Promise<RowResult> {
+  async function autoComplete(item: Seen, call: Call, options: AutoCompleteOptions, branches: OnBranch): Promise<RowResult> {
+    const { pr } = item
     const skip = skipMessage(pr)
     if (skip) return ok(pr, skip)
-    if (pr.autoComplete) return ok(pr, PR_ALREADY_AUTO_COMPLETE)
-    const sibling = options.deleteSourceBranch ? sharingBranch(pr, active) : undefined
-    await setAutoComplete(http, org, pr, me, sibling ? { ...options, deleteSourceBranch: false } : options)
-    return ok(pr, sibling ? keptBranch(sibling.prId) : PR_AUTO_COMPLETE_SET)
-  }
-
-  function activeAmong(org: string, read: PrSummary[]): PrSummary[] {
-    const cached = prs.activeMine(org).filter(pr => !read.some(fresh => samePr(fresh, pr)))
-    return [...cached, ...read.filter(pr => pr.status === 'active')]
+    const found = branches.get(branchKey(pr))
+    const others = othersOn(item, [...call.seen, ...(found ?? [])])
+    if (pr.autoComplete) return ok(pr, item.deletesBranch && others[0] ? alreadySetWillDelete(others[0].pr.prId) : PR_ALREADY_AUTO_COMPLETE)
+    const checked = found !== undefined && found !== null
+    const keep = options.deleteSourceBranch && (others.length > 0 || !checked)
+    await setAutoComplete(http, call.org, pr, call.me, keep ? { ...options, deleteSourceBranch: false } : options)
+    return ok(pr, setMessage(options, others, checked))
   }
 
   return {
-    approveAll: input => perform(input, ({ org, me }) => pr => approve(pr, org, me)),
+    approveAll: input => perform(input, async ({ org, me }) => item => approve(item, org, me)),
 
     autoCompleteAll(input) {
       const options = settings.autoComplete()
-      return perform(input, ({ org, me, read }) => {
-        const active = activeAmong(org, read)
-        return pr => autoComplete(pr, org, me, options, active)
+      return perform(input, async call => {
+        const branches = await lookUpBranches(call.org, options, call.seen)
+        return item => autoComplete(item, call, options, branches)
       })
     }
   }
 }
 
-async function read(source: PrSource, key: PrKey): Promise<Read> {
-  try {
-    return { pr: await source.one(key) }
-  } catch (error) {
-    return { failed: failure(key.prId, error) }
+function setMessage(options: AutoCompleteOptions, others: Seen[], checked: boolean): string {
+  if (!options.deleteSourceBranch) return PR_AUTO_COMPLETE_SET
+  const deleting = others.find(other => other.deletesBranch)
+  if (deleting) return siblingWillDelete(deleting.pr.prId)
+  if (others[0]) return keptBranch(others[0].pr.prId)
+  return checked ? PR_AUTO_COMPLETE_SET : PR_BRANCH_KEPT_UNCHECKED
+}
+
+function needsBranchCheck(item: Seen, options: AutoCompleteOptions): boolean {
+  if (skipMessage(item.pr)) return false
+  return item.pr.autoComplete ? item.deletesBranch : options.deleteSourceBranch
+}
+
+function othersOn(item: Seen, known: Seen[]): Seen[] {
+  const active = new Map<number, Seen>()
+  for (const other of known) {
+    if (other.pr.status === 'active' && other.pr.repoId === item.pr.repoId && other.pr.source === item.pr.source) active.set(other.pr.prId, other)
   }
+  return [...active.values()].filter(other => !samePr(other.pr, item.pr)).sort((a, b) => a.pr.prId - b.pr.prId)
+}
+
+function seenOf(raw: RawPullRequest, org: string): Seen {
+  return { pr: toPrSummary(raw, org), deletesBranch: deletesSourceBranch(raw) }
+}
+
+function branchKey(pr: PrSummary): string {
+  return `${pr.projectId}:${pr.repoId}:${pr.source}`
+}
+
+function distinct(keys: PrKey[]): PrKey[] {
+  return keys.filter((key, index) => keys.findIndex(other => samePr(other, key)) === index)
+}
+
+function distinctBy<T>(items: T[], keyOf: (item: T) => string): T[] {
+  return items.filter((item, index) => items.findIndex(other => keyOf(other) === keyOf(item)) === index)
 }
 
 async function attempt(prId: number, work: () => Promise<RowResult>): Promise<RowResult> {
@@ -123,12 +175,6 @@ function skipMessage(pr: PrSummary): string | null {
   if (pr.status === 'completed') return PR_SKIPPED_COMPLETED
   if (pr.status === 'abandoned') return PR_SKIPPED_ABANDONED
   return pr.isDraft ? PR_SKIPPED_DRAFT : null
-}
-
-function sharingBranch(pr: PrSummary, active: PrSummary[]): PrSummary | undefined {
-  return active
-    .filter(other => other.repoId === pr.repoId && other.source === pr.source && !samePr(other, pr))
-    .sort((a, b) => a.prId - b.prId)[0]
 }
 
 function ok(pr: PrSummary, message: string): RowResult {

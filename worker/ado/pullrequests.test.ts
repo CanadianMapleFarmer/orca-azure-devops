@@ -5,6 +5,7 @@ import { MALFORMED } from '../messages'
 import { AdoError, createAdoHttp } from './http'
 import {
   codeProjects,
+  deletesSourceBranch,
   getPullRequest,
   listPullRequests,
   pullRequestWorkItems,
@@ -170,6 +171,26 @@ test('listPullRequests filters by reviewer when asked and stops when its signal 
   controller.abort()
   await assert.rejects(listPullRequests(http, ORG, PROJECT, { creatorId: 'u1', status: 'active', top: 100 }, controller.signal))
   assert.equal(ado.calls.length, 1)
+})
+
+test('listPullRequests can ask for the active PRs of one repository and source branch', async () => {
+  const { ado, http } = setup()
+  ado.on(isPullRequests, () => json(200, fixture('pull-requests-mine')))
+  await listPullRequests(http, ORG, PROJECT, { repositoryId: REPO, sourceBranch: 'feature/1204-vehicle-search', status: 'active', top: 100 })
+  const [call] = ado.calls
+  assert.equal(call.query.get('searchCriteria.repositoryId'), REPO)
+  assert.equal(call.query.get('searchCriteria.sourceRefName'), 'refs/heads/feature/1204-vehicle-search')
+  assert.equal(call.query.get('searchCriteria.status'), 'active')
+  assert.equal(call.query.has('searchCriteria.creatorId'), false)
+})
+
+test('deletesSourceBranch is true only for a PR set to auto-complete with that option on', () => {
+  const set = (deleteSourceBranch: boolean | undefined) => ({ ...mine(0), autoCompleteSetBy: { id: ALEX }, completionOptions: { deleteSourceBranch } })
+  assert.equal(deletesSourceBranch(set(true)), true)
+  assert.equal(deletesSourceBranch(set(false)), false)
+  assert.equal(deletesSourceBranch(set(undefined)), false)
+  assert.equal(deletesSourceBranch({ ...mine(0), autoCompleteSetBy: undefined, completionOptions: { deleteSourceBranch: true } }), false)
+  assert.equal(deletesSourceBranch({ ...mine(0), autoCompleteSetBy: { id: ALEX }, completionOptions: undefined }), false)
 })
 
 test('getPullRequest reads one PR through its repository path', async () => {

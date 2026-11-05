@@ -31,6 +31,8 @@ export interface PrsService {
   onOrgs(orgs: OrgStatus[]): void
   snapshot(org: string): Promise<PrSnapshot>
   refresh(org: string): Promise<PrSnapshot>
+  reloadFresh(org: string): Promise<PrSnapshot>
+  me(org: string): Promise<string>
   cached(org: string, key: PrKey): PrSummary | null
   activeMine(org: string): PrSummary[]
   source(org: string): Promise<PrSource>
@@ -247,6 +249,16 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       if (last) return last
       const entry = entries.get(org)
       throw entry ? (entry.failure ?? loadFailure(null)) : notConnected()
+    },
+
+    async reloadFresh(org) {
+      await statusOf(org)
+      await entryOf(org).loading?.promise.catch(() => {})
+      return load(org, 'full')
+    },
+
+    async me(org) {
+      return (await statusOf(org)).account.adoId
     },
 
     cached(org, key) {

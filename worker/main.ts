@@ -76,7 +76,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     counts: (org, count) => bar.setCount(org, 'toReview', count),
     now: Date.now
   })
-  const prActions = createPrActions({ http: connections.http, prs, orgs: () => connections.list(), settings: prSettings })
+  const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
   stopPolling = () => {
     scheduler.dispose()
     prs.dispose()
