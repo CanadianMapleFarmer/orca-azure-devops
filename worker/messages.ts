@@ -37,6 +37,8 @@ export const PR_APPROVED = 'Approved.'
 export const PR_ALREADY_AUTO_COMPLETE = 'Already set to auto-complete.'
 export const PR_AUTO_COMPLETE_SET = 'Auto-complete set.'
 export const PR_BRANCH_KEPT_UNCHECKED = `${PR_AUTO_COMPLETE_SET} Source branch kept: couldn't check for other pull requests.`
+export const COPY_NEEDS_TOOL = 'Copying needs wl-clipboard or xclip.'
+export const COPY_FAILED = "Couldn't copy to the clipboard."
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
