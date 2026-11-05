@@ -82,7 +82,7 @@ export function pullRequestUrl(
     : `${base}/pullrequest/${prId}`
 }
 
-function parsedHref(url: string): string | undefined {
+export function parsedHref(url: string): string | undefined {
   try {
     return new URL(url).href
   } catch {

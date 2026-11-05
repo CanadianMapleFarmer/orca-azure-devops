@@ -1,0 +1,520 @@
+{
+  "count": 5,
+  "value": [
+    {
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4520"
+        },
+        "web": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4520"
+        },
+        "sourceVersionDisplayUri": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4520/sources"
+        },
+        "timeline": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4520/Timeline"
+        }
+      },
+      "properties": {},
+      "tags": [],
+      "validationResults": [],
+      "triggerInfo": {},
+      "id": 4520,
+      "buildNumber": "20261105.3",
+      "status": "inProgress",
+      "queueTime": "2026-11-05T09:30:41.0233333Z",
+      "startTime": "2026-11-05T09:31:00.8466667Z",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4520",
+      "definition": {
+        "drafts": [],
+        "id": 12,
+        "name": "web-app-cd",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Definitions/12?revision=3",
+        "uri": "vstfs:///Build/Definition/12",
+        "path": "\\",
+        "type": "build",
+        "queueStatus": "enabled",
+        "revision": 3,
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "state": "wellFormed",
+          "revision": 18,
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        }
+      },
+      "buildNumberRevision": 3,
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "state": "wellFormed",
+        "revision": 18,
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "uri": "vstfs:///Build/Build/4520",
+      "sourceBranch": "refs/heads/main",
+      "sourceVersion": "3f9a1c7e5b2d4806a1b3c5d7e9f0a2b4c6d8e0f1",
+      "priority": "normal",
+      "reason": "individualCI",
+      "requestedFor": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "requestedBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "lastChangedDate": "2026-11-05T09:31:00.8466667Z",
+      "lastChangedBy": {
+        "displayName": "Microsoft.VisualStudio.Services.TFS",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "uniqueName": "00000000-0000-0000-0000-000000000000"
+      },
+      "orchestrationPlan": {
+        "planId": "5a1b2c3d-6001-4a2b-8c3d-4e5f6a7b8c9d"
+      },
+      "logs": {
+        "id": 0,
+        "type": "Container",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4520/logs"
+      },
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "type": "TfsGit",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "clean": null,
+        "checkoutSubmodules": false
+      },
+      "keepForever": false,
+      "retainedByRelease": false,
+      "triggeredByBuild": null
+    },
+    {
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4512"
+        },
+        "web": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4512"
+        },
+        "sourceVersionDisplayUri": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/sources"
+        },
+        "timeline": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/Timeline"
+        }
+      },
+      "properties": {},
+      "tags": [],
+      "validationResults": [],
+      "triggerInfo": {
+        "pr.number": "4101",
+        "pr.isFork": "False",
+        "pr.triggerRepository": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "pr.sourceBranch": "refs/heads/feature/1204-vehicle-search",
+        "pr.sourceSha": "d5f7b9c1e3a5b7d9f1c3e5a7b9d1f3c5e7a9b1d3",
+        "pr.targetBranch": "refs/heads/develop"
+      },
+      "id": 4512,
+      "buildNumber": "20261105.1",
+      "status": "completed",
+      "result": "failed",
+      "queueTime": "2026-11-05T08:04:12.3100000Z",
+      "startTime": "2026-11-05T08:04:21.0100000Z",
+      "finishTime": "2026-11-05T08:09:47.5000000Z",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4512",
+      "definition": {
+        "drafts": [],
+        "id": 8,
+        "name": "web-app-ci",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Definitions/8?revision=3",
+        "uri": "vstfs:///Build/Definition/8",
+        "path": "\\",
+        "type": "build",
+        "queueStatus": "enabled",
+        "revision": 3,
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "state": "wellFormed",
+          "revision": 18,
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        }
+      },
+      "buildNumberRevision": 1,
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "state": "wellFormed",
+        "revision": 18,
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "uri": "vstfs:///Build/Build/4512",
+      "sourceBranch": "refs/pull/4101/merge",
+      "sourceVersion": "c4e6a8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2",
+      "priority": "normal",
+      "reason": "pullRequest",
+      "requestedFor": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "requestedBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "lastChangedDate": "2026-11-05T08:09:47.5000000Z",
+      "lastChangedBy": {
+        "displayName": "Microsoft.VisualStudio.Services.TFS",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "uniqueName": "00000000-0000-0000-0000-000000000000"
+      },
+      "orchestrationPlan": {
+        "planId": "5a1b2c3d-6002-4a2b-8c3d-4e5f6a7b8c9d"
+      },
+      "logs": {
+        "id": 0,
+        "type": "Container",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4512/logs"
+      },
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "type": "TfsGit",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "clean": null,
+        "checkoutSubmodules": false
+      },
+      "keepForever": false,
+      "retainedByRelease": false,
+      "triggeredByBuild": null
+    },
+    {
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4505"
+        },
+        "web": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4505"
+        },
+        "sourceVersionDisplayUri": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4505/sources"
+        },
+        "timeline": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4505/Timeline"
+        }
+      },
+      "properties": {},
+      "tags": [],
+      "validationResults": [],
+      "triggerInfo": {},
+      "id": 4505,
+      "buildNumber": "20261104.2",
+      "status": "completed",
+      "result": "succeeded",
+      "queueTime": "2026-11-04T15:20:05.1200000Z",
+      "startTime": "2026-11-04T15:20:12.4400000Z",
+      "finishTime": "2026-11-04T15:27:31.2200000Z",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4505",
+      "definition": {
+        "drafts": [],
+        "id": 8,
+        "name": "web-app-ci",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Definitions/8?revision=3",
+        "uri": "vstfs:///Build/Definition/8",
+        "path": "\\",
+        "type": "build",
+        "queueStatus": "enabled",
+        "revision": 3,
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "state": "wellFormed",
+          "revision": 18,
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        }
+      },
+      "buildNumberRevision": 2,
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "state": "wellFormed",
+        "revision": 18,
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "uri": "vstfs:///Build/Build/4505",
+      "sourceBranch": "refs/heads/develop",
+      "sourceVersion": "e6a8c0d2f4b6d8a0c2e4f6b8d0a2c4e6f8b0d2a4",
+      "priority": "normal",
+      "reason": "individualCI",
+      "requestedFor": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "requestedBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "lastChangedDate": "2026-11-04T15:27:31.2200000Z",
+      "lastChangedBy": {
+        "displayName": "Microsoft.VisualStudio.Services.TFS",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "uniqueName": "00000000-0000-0000-0000-000000000000"
+      },
+      "orchestrationPlan": {
+        "planId": "5a1b2c3d-6004-4a2b-8c3d-4e5f6a7b8c9d"
+      },
+      "logs": {
+        "id": 0,
+        "type": "Container",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4505/logs"
+      },
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "type": "TfsGit",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "clean": null,
+        "checkoutSubmodules": false
+      },
+      "keepForever": false,
+      "retainedByRelease": false,
+      "triggeredByBuild": null
+    },
+    {
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4498"
+        },
+        "web": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4498"
+        },
+        "sourceVersionDisplayUri": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4498/sources"
+        },
+        "timeline": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4498/Timeline"
+        }
+      },
+      "properties": {},
+      "tags": [],
+      "validationResults": [],
+      "triggerInfo": {},
+      "id": 4498,
+      "buildNumber": "20261104.1",
+      "status": "completed",
+      "result": "succeeded",
+      "queueTime": "2026-11-04T09:10:00.2200000Z",
+      "startTime": "2026-11-04T09:10:06.8800000Z",
+      "finishTime": "2026-11-04T09:14:20.9000000Z",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4498",
+      "definition": {
+        "drafts": [],
+        "id": 9,
+        "name": "api-ci",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Definitions/9?revision=3",
+        "uri": "vstfs:///Build/Definition/9",
+        "path": "\\",
+        "type": "build",
+        "queueStatus": "enabled",
+        "revision": 3,
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "state": "wellFormed",
+          "revision": 18,
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        }
+      },
+      "buildNumberRevision": 1,
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "state": "wellFormed",
+        "revision": 18,
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "uri": "vstfs:///Build/Build/4498",
+      "sourceBranch": "refs/heads/develop",
+      "sourceVersion": "f7b9d1e3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5",
+      "priority": "normal",
+      "reason": "individualCI",
+      "requestedFor": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "requestedBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "lastChangedDate": "2026-11-04T09:14:20.9000000Z",
+      "lastChangedBy": {
+        "displayName": "Microsoft.VisualStudio.Services.TFS",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "uniqueName": "00000000-0000-0000-0000-000000000000"
+      },
+      "orchestrationPlan": {
+        "planId": "5a1b2c3d-6005-4a2b-8c3d-4e5f6a7b8c9d"
+      },
+      "logs": {
+        "id": 0,
+        "type": "Container",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4498/logs"
+      },
+      "repository": {
+        "id": "8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+        "type": "TfsGit",
+        "name": "api",
+        "url": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/api",
+        "clean": null,
+        "checkoutSubmodules": false
+      },
+      "keepForever": false,
+      "retainedByRelease": false,
+      "triggeredByBuild": null
+    },
+    {
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4490"
+        },
+        "web": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_build/results?buildId=4490"
+        },
+        "sourceVersionDisplayUri": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4490/sources"
+        },
+        "timeline": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4490/Timeline"
+        }
+      },
+      "properties": {},
+      "tags": [],
+      "validationResults": [],
+      "triggerInfo": {},
+      "id": 4490,
+      "buildNumber": "20261103.1",
+      "status": "completed",
+      "result": "failed",
+      "queueTime": "2026-11-03T14:02:10.4400000Z",
+      "startTime": "2026-11-03T14:02:18.1500000Z",
+      "finishTime": "2026-11-03T14:08:55.7000000Z",
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Builds/4490",
+      "definition": {
+        "drafts": [],
+        "id": 8,
+        "name": "web-app-ci",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/Definitions/8?revision=3",
+        "uri": "vstfs:///Build/Definition/8",
+        "path": "\\",
+        "type": "build",
+        "queueStatus": "enabled",
+        "revision": 3,
+        "project": {
+          "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "name": "Fabrikam Web",
+          "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+          "state": "wellFormed",
+          "revision": 18,
+          "visibility": "private",
+          "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+        }
+      },
+      "buildNumberRevision": 1,
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "url": "https://dev.azure.com/contoso/_apis/projects/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "state": "wellFormed",
+        "revision": 18,
+        "visibility": "private",
+        "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+      },
+      "uri": "vstfs:///Build/Build/4490",
+      "sourceBranch": "refs/heads/develop",
+      "sourceVersion": "a8c0e2f4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a6",
+      "priority": "normal",
+      "reason": "individualCI",
+      "requestedFor": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "requestedBy": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "lastChangedDate": "2026-11-03T14:08:55.7000000Z",
+      "lastChangedBy": {
+        "displayName": "Microsoft.VisualStudio.Services.TFS",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "uniqueName": "00000000-0000-0000-0000-000000000000"
+      },
+      "orchestrationPlan": {
+        "planId": "5a1b2c3d-6006-4a2b-8c3d-4e5f6a7b8c9d"
+      },
+      "logs": {
+        "id": 0,
+        "type": "Container",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/build/builds/4490/logs"
+      },
+      "repository": {
+        "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+        "type": "TfsGit",
+        "name": "web-app",
+        "url": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+        "clean": null,
+        "checkoutSubmodules": false
+      },
+      "keepForever": false,
+      "retainedByRelease": false,
+      "triggeredByBuild": null
+    }
+  ]
+}

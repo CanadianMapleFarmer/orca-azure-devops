@@ -68,7 +68,8 @@ export const MALFORMED = {
   pullRequest: 'Azure DevOps returned an unexpected pull request response.',
   comment: 'Azure DevOps returned an unexpected comment response.',
   boardConfig: 'Azure DevOps returned an unexpected board configuration.',
-  identity: 'Azure DevOps returned an unexpected identity response.'
+  identity: 'Azure DevOps returned an unexpected identity response.',
+  build: 'Azure DevOps returned an unexpected pipeline run response.'
 } as const
 
 export function noBoardNamed(name: string): string {
