@@ -167,7 +167,7 @@ function Form({ input }: { input: ComposerInput }): OrcaNode {
       <Destinations input={input} />
       <Row gap="sm">
         <Button disabled={!plan.ready || read(sending)} onPress={share}>
-          Share
+          {read(sending) ? 'Sharing…' : 'Share'}
         </Button>
         <Button variant="ghost" onPress={closeComposer}>
           Back

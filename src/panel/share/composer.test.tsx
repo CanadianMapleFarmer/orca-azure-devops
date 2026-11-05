@@ -68,6 +68,8 @@ const sends = (host: TestHost) => requestsTo(host, 'share.send').map(call => cal
 
 const shareButton = () => panel.find({ type: 'Button', text: 'Share' })
 
+const sharingButton = () => panel.find({ type: 'Button', text: 'Sharing…' })
+
 const results = () =>
   panel.findAll({ type: 'Callout' }).map(callout => {
     const title = callout.props.title as string | undefined
@@ -318,19 +320,49 @@ function held() {
   return { answer, release: (results: ShareResult[]) => release({ results }) }
 }
 
-test('Share is disabled while share.send is pending and a second press posts nothing', async () => {
+test('Share reads Sharing… and is disabled while share.send is pending, and a second press posts nothing', async () => {
   const pending = held()
   const host = await share({ 'share.send': () => pending.answer })
   const first = panel.press({ type: 'Button', text: 'Share' })
   await pause(10)
-  assert.equal(shareButton()?.disabled, true)
-  await assert.rejects(panel.press({ type: 'Button', text: 'Share' }), /disabled/)
+  assert.equal(shareButton(), null)
+  assert.equal(sharingButton()?.disabled, true)
+  await assert.rejects(panel.press({ type: 'Button', text: 'Sharing…' }), /disabled/)
   assert.equal(sends(host).length, 1)
   pending.release([COPIED])
   await first
   assert.equal(sends(host).length, 1)
   assert.deepEqual(results(), [['Copy as rich text', 'success', 'Copied as rich text.']])
+  assert.equal(sharingButton(), null)
   assert.equal(shareButton()?.disabled, false)
+})
+
+test('Back and Share… while a share is pending cannot send it again; a new Share works once it settles', async () => {
+  const pending = held()
+  const host = await share({ 'share.send': () => pending.answer })
+  const presses = [panel.press({ type: 'Button', text: 'Share' })]
+  await pause(10)
+  presses.push(panel.press({ type: 'Button', text: 'Back' }))
+  await pause(10)
+  presses.push(panel.press({ type: 'Button', text: 'Share…' }))
+  await pause(10)
+  try {
+    assert.equal(shareButton(), null)
+    assert.equal(sharingButton()?.disabled, true)
+    assert.ok(panel.find({ type: 'Button', text: 'Back' }))
+    await assert.rejects(panel.press({ type: 'Button', text: 'Sharing…' }), /disabled/)
+    assert.equal(sends(host).length, 1)
+  } finally {
+    pending.release([COPIED])
+  }
+  await Promise.all(presses)
+  assert.equal(sends(host).length, 1)
+  assert.deepEqual(results(), [])
+  assert.equal(sharingButton(), null)
+  assert.equal(shareButton()?.disabled, false)
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.equal(sends(host).length, 2)
+  assert.deepEqual(results(), [['Copy as rich text', 'success', 'Copied as rich text.']])
 })
 
 test('a second press before Share redraws as disabled posts nothing', async () => {

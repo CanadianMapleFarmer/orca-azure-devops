@@ -107,7 +107,6 @@ export function openComposer(input: ComposerInput): void {
   set(checked, input.items.filter(item => item.checked).map(item => item.key))
   set(intro, '')
   set(choices, NO_CHOICES)
-  set(sending, false)
   set(sent, null)
   set(chat, null)
   set(chatOpening, false)
@@ -282,7 +281,7 @@ async function settle(run: number, request: Promise<{ results: ShareResult[] }>,
       if (run === opened) set(chat, result)
     })
   ])
-  if (run === opened) set(sending, false)
+  set(sending, false)
 }
 
 export function retryChat(): void {
