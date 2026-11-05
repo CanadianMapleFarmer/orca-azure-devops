@@ -27,11 +27,11 @@ export function orderRuns(runs: readonly RunSummary[]): RunSummary[] {
 }
 
 export function needsMe(run: RunSummary): boolean {
-  return isActive(run) && run.approvals.some(approval => approval.canApprove || run.mine)
+  return isActive(run) && run.approvals.some(approval => approvalNeedsMe(run, approval))
 }
 
 export function approvalsNeedingMe(runs: readonly RunSummary[]): ApprovalSummary[] {
-  return runs.filter(isActive).flatMap(run => run.approvals.filter(approval => approval.canApprove || run.mine))
+  return runs.filter(isActive).flatMap(run => run.approvals.filter(approval => approvalNeedsMe(run, approval)))
 }
 
 export function failedRuns(runs: readonly RunSummary[], now: number): RunSummary[] {
@@ -71,6 +71,10 @@ function matching(filter: RunFilter, runs: readonly RunSummary[], now: number): 
     case 'failed':
       return failedRuns(runs, now)
   }
+}
+
+function approvalNeedsMe(run: RunSummary, approval: ApprovalSummary): boolean {
+  return approval.canApprove || run.mine
 }
 
 function recency(run: RunSummary): number {
