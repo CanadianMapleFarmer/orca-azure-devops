@@ -8,7 +8,7 @@ export function watchVisibility(visible: ReadonlyAtom<boolean>): void {
 
 export const hostIsVisible = (): boolean => hostVisible !== null && read(hostVisible)
 
-export function surfaceVisibility(surface: 'work' | 'prs'): { report(next: string | null): void; hide(): void } {
+export function surfaceVisibility(surface: 'work' | 'prs' | 'pipelines'): { report(next: string | null): void; hide(): void } {
   const shownOrg = atom<string | null>(null)
 
   function tell(org: string, visible: boolean): void {

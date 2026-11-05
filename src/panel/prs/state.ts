@@ -2,8 +2,9 @@ import { atom, plugin, read, set, shell, update } from 'orca'
 import { messageOf, OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
 import type { PrSnapshot, PrSummary, RowResult } from '../../shared/prs'
 import type { OrgStatus } from '../../shared/types'
-import { LONG_WAIT, tab } from '../state'
-import { hostIsVisible, surfaceVisibility } from '../visibility'
+import { LONG_WAIT } from '../state'
+import { syncSurface, type SyncedSurface } from '../surface-sync'
+import { surfaceVisibility } from '../visibility'
 
 type Load = { status: 'idle' | 'loading' | 'ready' } | { status: 'failed'; message: string }
 export type Outcome = { prIds: number[] } & ({ results: RowResult[] } | { error: string })
@@ -44,9 +45,12 @@ async function loadSnapshot(org: string): Promise<void> {
   }
 }
 
-function align(org: string | null, visibleOrg: string | null): void {
-  if (read(source) !== org) {
-    set(source, org)
+const surface: SyncedSurface = {
+  tab: 'prs',
+  source,
+  visibility,
+  isIdle: () => read(load).status === 'idle',
+  reset() {
     set(snapshot, null)
     set(outcomes, [])
     set(acting, [])
@@ -55,16 +59,11 @@ function align(org: string | null, visibleOrg: string | null): void {
     set(reviewNotice, null)
     set(refreshing, false)
     set(load, { status: 'idle' })
-  }
-  if (org !== null && visibleOrg === org && read(load).status === 'idle') void loadSnapshot(org)
-  visibility.report(visibleOrg)
+  },
+  load: org => void loadSnapshot(org)
 }
 
-export function syncPrs(org: OrgStatus | null, onScreen: boolean): void {
-  const connected = org?.state === 'connected' ? org.org : null
-  const visibleOrg = connected && onScreen && hostIsVisible() && read(tab) === 'prs' ? connected : null
-  void Promise.resolve().then(() => align(connected, visibleOrg))
-}
+export const syncPrs = (org: OrgStatus | null, onScreen: boolean): void => syncSurface(surface, org, onScreen)
 
 export function acceptPrs(next: PrSnapshot): void {
   if (read(source) !== next.org) return
