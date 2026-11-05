@@ -2,20 +2,20 @@ import type { EditorDocument } from 'orca/frame'
 import { fileRefOf } from '../shared/file-ref'
 import { messageOf, OPEN_LINK_UNAVAILABLE } from '../shared/messages'
 import type { FileRef, Issue, JobView, RunActionResult, RunState, RunView, StepView } from '../shared/pipelines'
-import { isActive } from '../shared/runs'
+import { isActive, RUN_STATE_TEXT } from '../shared/runs'
 import { plainText } from './ansi'
 import { appendChunk, earlierStart, errorLines, lastLine, nextHit, nextRead, searchHits, visibleIndexes, type LogBuffer } from './log-model'
 import { parseRunRef, type RunRef } from './ref'
 import {
   approvalBlock,
   button,
+  createErrorSummary,
   createLogView,
+  createStageStrip,
   createToolbar,
   el,
-  errorSummary,
   focusMark,
   restoreFocus,
-  stageStrip,
   stepList,
   type Decision,
   type DraftView,
@@ -31,7 +31,6 @@ import {
   logNotice,
   nextSelection,
   openedText,
-  RUN_STATE_TEXT,
   rerunTarget,
   selectedRecord,
   watchedOf,
@@ -85,11 +84,11 @@ const toolbar = createToolbar({ watch: () => void watch(), rerun: () => void rer
 const banner = el('div', 'banner')
 const note = el('p', 'note muted')
 const body = el('main', 'body')
-const stagesSlot = el('div', 'stages-slot')
+const stages = createStageStrip()
 const approvalsSlot = el('div', 'approvals')
 const steps = el('aside', 'steps')
 steps.setAttribute('aria-label', 'Steps')
-const errorsSlot = el('div', 'errors-slot')
+const errors = createErrorSummary()
 const log = createLogView({
   search,
   step: stepHit,
@@ -100,10 +99,10 @@ const log = createLogView({
   leftEnd: stopFollowing
 })
 const detail = el('section', 'detail')
-detail.append(errorsSlot, log.node)
+detail.append(errors.node, log.node)
 const split = el('div', 'split')
 split.append(steps, detail)
-body.append(stagesSlot, approvalsSlot, split)
+body.append(stages.node, approvalsSlot, split)
 
 let state: State | null = null
 let shownText: string | null = null
@@ -122,11 +121,11 @@ function paint(): void {
   note.textContent = view?.message ?? ''
   note.hidden = note.textContent === ''
   if (!view) {
-    toolbar.update({ title: 'Azure DevOps run', subtitle: '', state: '', stateTone: 'neutral', loading: current.loading, watched: false, watchDisabled: true, rerun: false, cancel: 'hidden', busy: current.busy, openable: false })
+    toolbar.update({ title: 'Azure DevOps run', subtitle: '', state: '', stateTone: 'neutral', loading: current.loading, watched: false, watchDisabled: true, rerun: null, cancel: 'hidden', busy: current.busy, openable: false })
     body.replaceChildren(current.failure ? failureNotice(current.failure) : el('p', 'muted pad', LOADING_RUN))
     return
   }
-  if (!body.contains(split)) body.replaceChildren(stagesSlot, approvalsSlot, split)
+  if (!body.contains(split)) body.replaceChildren(stages.node, approvalsSlot, split)
   const run = view.run
   const watched = watchedOf(view, current.watch)
   toolbar.update({
@@ -137,16 +136,16 @@ function paint(): void {
     loading: current.loading,
     watched,
     watchDisabled: !watched && !isActive(run),
-    rerun: rerunTarget(view, current.selection?.stageId ?? null) !== null,
+    rerun: rerunTarget(view, current.selection?.stageId ?? null)?.name ?? null,
     cancel: view.canCancel ? (current.cancelArmed ? 'armed' : 'ready') : 'hidden',
     busy: current.busy,
     openable: orca.shell !== undefined
   })
   const stage = view.stages.find(entry => entry.id === current.selection?.stageId) ?? null
-  stagesSlot.replaceChildren(stageStrip(view.stages, stage?.id ?? null, now, entry => select({ stageId: entry.id, stepId: null })))
+  stages.update(view.stages, stage?.id ?? null, now, entry => select({ stageId: entry.id, stepId: null }))
   approvalsSlot.replaceChildren(...run.approvals.map(approval => approvalBlock(approval, approvalText(approval, view.stages, now), current.drafts.get(approval.approvalId) ?? null, approvalHandlers(approval.approvalId, approval.projectId))))
   steps.replaceChildren(stepList(stage, current.selection?.stepId ?? null, now, record => select({ stageId: stage?.id ?? null, stepId: record.id })))
-  errorsSlot.replaceChildren(...(view.failures.length > 0 ? [errorSummary(failureModels(current, view))] : []))
+  errors.update(failureModels(current, view))
   paintLog(current)
   restoreFocus(root, mark)
 }
@@ -201,7 +200,7 @@ function paintLog(current: State): void {
     earlier: buffer !== null && earlierStart(buffer) !== null,
     busy: current.logBusy,
     info: buffer && buffer.lines.length > 0 ? `Lines ${buffer.first}–${lastLine(buffer)} of ${buffer.total}` : '',
-    notice: buffer ? null : (logNotice(record) ?? LOADING_LOG),
+    notice: buffer ? null : (logNotice(record) ?? (current.logError ? null : LOADING_LOG)),
     error: current.logError
   })
   paintRows()

@@ -13,6 +13,17 @@ export const STEP_GLYPH: Record<StepState, string> = {
   pending: '○'
 }
 
+export const RUN_STATE_TEXT: Record<RunState, string> = {
+  queued: 'queued',
+  running: '● running',
+  waiting: '⏸ waiting for approval',
+  cancelling: 'cancelling',
+  succeeded: '✓ succeeded',
+  warning: '! partially succeeded',
+  failed: '✗ failed',
+  canceled: 'canceled'
+}
+
 const ACTIVE_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling'])
 const REPLACING_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling', 'succeeded', 'warning'])
 const COMPLETED_STATUS = 'completed'

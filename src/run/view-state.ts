@@ -1,6 +1,6 @@
 import { fileRefOf } from '../shared/file-ref'
 import { messageOf } from '../shared/messages'
-import type { ApprovalSummary, FileRef, Issue, JobView, RunState, RunView, StageView, StepView } from '../shared/pipelines'
+import type { ApprovalSummary, FileRef, Issue, JobView, RunView, StageView, StepView } from '../shared/pipelines'
 
 export interface Selection {
   stageId: string | null
@@ -10,17 +10,6 @@ export interface Selection {
 export interface WatchToggle {
   value: boolean
   at: number
-}
-
-export const RUN_STATE_TEXT: Record<RunState, string> = {
-  queued: 'queued',
-  running: '● running',
-  waiting: '⏸ waiting for approval',
-  cancelling: 'cancelling',
-  succeeded: '✓ succeeded',
-  warning: '! partially succeeded',
-  failed: '✗ failed',
-  canceled: 'canceled'
 }
 
 const SELECT_STEP = 'Select a step to see its log.'

@@ -9,7 +9,6 @@ import {
   logNotice,
   nextSelection,
   openedText,
-  RUN_STATE_TEXT,
   rerunTarget,
   selectedRecord,
   watchedOf
@@ -261,17 +260,4 @@ test('issueFile uses the issue file, else a file named in its message', () => {
     column: 17
   })
   assert.equal(issueFile({ type: 'error', message: "Bash exited with code '1'.", file: null }), null)
-})
-
-test('RUN_STATE_TEXT labels every run state', () => {
-  assert.deepEqual(RUN_STATE_TEXT, {
-    queued: 'queued',
-    running: '● running',
-    waiting: '⏸ waiting for approval',
-    cancelling: 'cancelling',
-    succeeded: '✓ succeeded',
-    warning: '! partially succeeded',
-    failed: '✗ failed',
-    canceled: 'canceled'
-  })
 })

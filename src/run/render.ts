@@ -18,7 +18,7 @@ export interface ToolbarModel {
   loading: boolean
   watched: boolean
   watchDisabled: boolean
-  rerun: boolean
+  rerun: string | null
   cancel: 'hidden' | 'ready' | 'armed'
   busy: ReadonlySet<string>
   openable: boolean
@@ -120,7 +120,11 @@ export function createToolbar(handlers: { watch(): void; rerun(): void; cancel()
       watch.textContent = model.watched ? 'Stop watching' : 'Watch'
       watch.setAttribute('aria-pressed', String(model.watched))
       watch.disabled = model.watchDisabled || model.busy.has('watch')
-      rerun.hidden = !model.rerun
+      rerun.hidden = model.rerun === null
+      if (model.rerun !== null) {
+        rerun.title = `Rerun ${model.rerun}`
+        rerun.setAttribute('aria-label', `Rerun failed stage: ${model.rerun}`)
+      }
       rerun.disabled = model.busy.has('rerun')
       cancel.hidden = model.cancel === 'hidden'
       cancel.textContent = model.cancel === 'armed' ? 'Confirm cancel' : 'Cancel run'
@@ -132,16 +136,22 @@ export function createToolbar(handlers: { watch(): void; rerun(): void; cancel()
   }
 }
 
-export function stageStrip(stages: readonly StageView[], selected: string | null, now: number, onSelect: (stage: StageView) => void): HTMLElement {
+export function createStageStrip() {
   const strip = el('nav', 'stages')
   strip.setAttribute('aria-label', 'Stages')
-  for (const stage of stages) {
-    const node = keyed(button('', () => onSelect(stage), `stage state-${stage.state}`), `stage:${stage.id}`)
-    node.setAttribute('aria-pressed', String(stage.id === selected))
-    node.append(glyph(stage.state), el('span', 'name', stage.name), el('span', 'muted', durationText(stage.startedAt, stage.finishedAt, now)))
-    strip.append(node)
+  return {
+    node: strip,
+    update(stages: readonly StageView[], selected: string | null, now: number, onSelect: (stage: StageView) => void): void {
+      strip.replaceChildren(
+        ...stages.map(stage => {
+          const node = keyed(button('', () => onSelect(stage), `stage state-${stage.state}`), `stage:${stage.id}`)
+          node.setAttribute('aria-pressed', String(stage.id === selected))
+          node.append(glyph(stage.state), el('span', 'name', stage.name), el('span', 'muted', durationText(stage.startedAt, stage.finishedAt, now)))
+          return node
+        })
+      )
+    }
   }
-  return strip
 }
 
 export function stepList(stage: StageView | null, selected: string | null, now: number, onSelect: (record: StepView | JobView) => void): HTMLElement {
@@ -170,6 +180,7 @@ function recordButton(record: StepView | JobView, kind: string, selected: string
 
 function glyph(state: StepState): HTMLElement {
   const node = el('span', 'glyph', STEP_GLYPH[state])
+  node.setAttribute('role', 'img')
   node.setAttribute('aria-label', state)
   return node
 }
@@ -212,19 +223,27 @@ export function approvalBlock(
   return block
 }
 
-export function errorSummary(failures: readonly FailureModel[]): HTMLElement {
+export function createErrorSummary() {
   const section = el('section', 'errors')
   section.setAttribute('aria-label', 'Errors')
-  section.append(el('h2', '', 'Errors'))
-  for (const failure of failures) {
-    const block = el('div', 'failure')
-    block.append(keyed(button(failure.path, failure.select, 'link'), `failure:${failure.key}`))
-    const list = el('ul', 'error-rows')
-    list.append(...failure.issues.map(row => errorRow(row, 'issue')), ...failure.lines.map(row => errorRow(row, 'line')))
-    block.append(list)
-    section.append(block)
+  section.hidden = true
+  const heading = el('h2', '', 'Errors')
+  return {
+    node: section,
+    update(failures: readonly FailureModel[]): void {
+      section.hidden = failures.length === 0
+      section.replaceChildren(heading, ...failures.map(failureBlock))
+    }
   }
-  return section
+}
+
+function failureBlock(failure: FailureModel): HTMLElement {
+  const block = el('div', 'failure')
+  block.append(keyed(button(failure.path, failure.select, 'link'), `failure:${failure.key}`))
+  const list = el('ul', 'error-rows')
+  list.append(...failure.issues.map(row => errorRow(row, 'issue')), ...failure.lines.map(row => errorRow(row, 'line')))
+  block.append(list)
+  return block
 }
 
 function errorRow(row: ErrorRow, kind: string): HTMLElement {

@@ -10,6 +10,7 @@ import {
   needsMe,
   orderRuns,
   runCounts,
+  RUN_STATE_TEXT,
   runsFor,
   STEP_GLYPH
 } from './runs'
@@ -239,4 +240,17 @@ test('STEP_GLYPH has one glyph per step state', () => {
     pending: '○'
   }
   assert.deepEqual(STEP_GLYPH, expected)
+})
+
+test('RUN_STATE_TEXT labels every run state', () => {
+  assert.deepEqual(RUN_STATE_TEXT, {
+    queued: 'queued',
+    running: '● running',
+    waiting: '⏸ waiting for approval',
+    cancelling: 'cancelling',
+    succeeded: '✓ succeeded',
+    warning: '! partially succeeded',
+    failed: '✗ failed',
+    canceled: 'canceled'
+  })
 })
