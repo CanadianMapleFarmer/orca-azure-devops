@@ -13,10 +13,10 @@ interface Chip {
 }
 
 const APPROVING_VOTE = 5
+const WAITING_FOR_AUTHOR_VOTE = -5
 const REJECTED_VOTE = -10
 
-const isWaitedFor = (reviewer: PrReviewer): boolean =>
-  reviewer.isRequired && !reviewer.hasDeclined && reviewer.vote > REJECTED_VOTE && reviewer.vote < APPROVING_VOTE
+const isWaitedFor = (reviewer: PrReviewer): boolean => reviewer.isRequired && !reviewer.hasDeclined && reviewer.vote === 0
 
 function statusChips(pr: PrSummary): Chip[] {
   if (pr.status === 'completed') return [{ tone: 'success', text: 'merged ✓' }]
@@ -42,6 +42,8 @@ function voteChips(pr: PrSummary): Chip[] {
   const chips: Chip[] = []
   if (approved > 0) chips.push({ tone: 'success', text: `${approved} approved` })
   if (rejected > 0) chips.push({ tone: 'danger', text: `${rejected} rejected` })
+  const waitingForAuthor = pr.reviewers.filter(reviewer => reviewer.vote === WAITING_FOR_AUTHOR_VOTE).length
+  if (waitingForAuthor > 0) chips.push({ tone: 'warning', text: `${waitingForAuthor} waiting for author` })
   const waiting = pr.reviewers.filter(isWaitedFor).map(reviewer => reviewer.name)
   if (waiting.length > 0) chips.push({ tone: 'warning', text: `waiting for ${waiting.join(', ')}` })
   return chips

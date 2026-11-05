@@ -101,7 +101,7 @@ Each row shows `Pull Request N` as a link, its target branch and chips:
 - `draft`, `conflicts` and `merged ✓`.
 - Build: `● build` while running, `✓ build`, `✗ build`.
 - Policies: `✗ policies`, and `· policies` while some are pending.
-- Votes: `N approved`, `N rejected`, and `waiting for …` for required reviewers who haven't approved or rejected.
+- Votes: `N approved`, `N rejected`, `N waiting for author` for reviewers who voted Waiting for author, and `waiting for …` for required reviewers who haven't voted or declined.
 - `auto-complete` when it is set.
 
 The tab shows the 30 newest sets and up to 150 rows, and says when it leaves some out. **Refresh** (the icon in the header) reloads now.

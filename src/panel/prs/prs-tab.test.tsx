@@ -102,24 +102,40 @@ test('sets show one row per PR with target, checks, votes and auto-complete', as
   assert.equal(panel.findAll({ type: 'Badge', text: 'auto-complete' }).length, 1)
 })
 
-test('only a required reviewer who has not decided counts as waited for', async () => {
+test('only a required reviewer who has not voted and not declined counts as waited for', async () => {
   const pr = prOf(55, {
     reviewers: [
       reviewerOf('Ada Optional', 0),
       reviewerOf('Declined Required', 0, { isRequired: true, hasDeclined: true }),
       reviewerOf('Approved Required', 10, { isRequired: true }),
       reviewerOf('Rejected Required', -10, { isRequired: true }),
-      reviewerOf('Author Required', -5, { isRequired: true })
+      reviewerOf('Pending Required', 0, { isRequired: true })
     ]
   })
   await open(snapshotOf({ sets: [setOf([pr])] }))
-  assert.equal(rowText(55), 'Pull Request 55 → develop 1 approved 1 rejected waiting for Author Required')
+  assert.equal(rowText(55), 'Pull Request 55 → develop 1 approved 1 rejected waiting for Pending Required')
 })
 
 test('several waited-for reviewers share one badge', async () => {
-  const pr = prOf(55, { reviewers: [reviewerOf('Edsger Dijkstra', 0, { isRequired: true }), reviewerOf('Barbara Liskov', -5, { isRequired: true })] })
+  const pr = prOf(55, { reviewers: [reviewerOf('Edsger Dijkstra', 0, { isRequired: true }), reviewerOf('Barbara Liskov', 0, { isRequired: true })] })
   await open(snapshotOf({ sets: [setOf([pr])] }))
   assert.equal(rowText(55), 'Pull Request 55 → develop waiting for Edsger Dijkstra, Barbara Liskov')
+})
+
+test('a reviewer who voted Waiting for author shows a warning chip, required or not, and is not waited for', async () => {
+  const pr = prOf(55, {
+    reviewers: [
+      reviewerOf('Author Required', -5, { isRequired: true }),
+      reviewerOf('Author Optional', -5),
+      reviewerOf('Pending Required', 0, { isRequired: true })
+    ]
+  })
+  await open(snapshotOf({ sets: [setOf([pr, prOf(56, { reviewers: [reviewerOf('Solo Author', -5)] })])] }))
+  assert.equal(rowText(55), 'Pull Request 55 → develop 2 waiting for author waiting for Pending Required')
+  assert.equal(rowText(56), 'Pull Request 56 → develop 1 waiting for author')
+  assert.equal(toneOf('2 waiting for author'), 'warning')
+  assert.equal(toneOf('1 waiting for author'), 'warning')
+  assert.equal(panel.find({ type: 'Badge', text: /^waiting for (Author|Solo)/ }), null)
 })
 
 test('Approve all sends prs.approve with the set\'s active PRs and shows each row\'s result', async () => {
