@@ -32,6 +32,16 @@
         "entry": "src/board/board.html",
         "priority": "default",
         "frame": "isolated"
+      },
+      {
+        "id": "run",
+        "title": "Azure DevOps run",
+        "extensions": [
+          ".adorun"
+        ],
+        "entry": "src/run/run.html",
+        "priority": "default",
+        "frame": "isolated"
       }
     ],
     "newFiles": [
