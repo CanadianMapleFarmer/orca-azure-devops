@@ -2,6 +2,7 @@ import { assert, mockHost, mount, type MockRequests, type TestPanel } from 'orca
 import { PR_TEMPLATE } from '../shared/share/template'
 import type { OrgStatus } from '../shared/types'
 import * as panelModule from './panel'
+import { runsSnapshotOf } from './pipelines/fixtures'
 import { snapshotOf } from './prs/fixtures'
 
 export const SETTINGS = { label: 'Organization settings' }
@@ -39,6 +40,7 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
       'ui.visibility': { ok: true },
       'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
       'prs.snapshot': input => snapshotOf({ org: input.org, updatedAt: 0 }),
+      'runs.snapshot': input => runsSnapshotOf({ org: input.org, updatedAt: 0 }),
       'share.prefs': { template: PR_TEMPLATE, channels: [], prefs: { destinations: [{ kind: 'copy' }] }, tenantId: null },
       ...requests
     }

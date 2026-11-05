@@ -23,6 +23,8 @@ import type { OrgState, OrgStatus } from '../shared/types'
 import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
 import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
+import { PipelinesTab } from './pipelines/pipelines-tab'
+import { acceptRuns, hidePipelines, syncPipelines } from './pipelines/state'
 import { PrsTab } from './prs/prs-tab'
 import { acceptPrs, hidePrs, syncPrs } from './prs/state'
 import { syncShare } from './share/state'
@@ -79,12 +81,14 @@ export function setup(ctx: PanelContext): () => void {
     }),
     plugin.on('orgs.connectFailed', showConnectFailure),
     plugin.on('work.changed', acceptChange),
-    plugin.on('prs.changed', acceptPrs)
+    plugin.on('prs.changed', acceptPrs),
+    plugin.on('runs.changed', acceptRuns)
   )
   void loadOrgs()
   return () => {
     hideWork()
     hidePrs()
+    hidePipelines()
   }
 }
 
@@ -92,6 +96,7 @@ export function TabBody(props: { tab: string }): OrcaNode {
   if (read(tab) !== props.tab) return null
   const org = currentOrg(read(orgs), read(activeOrg))
   if (org && props.tab === 'work') return <WorkTab org={org} />
+  if (org && props.tab === 'pipelines') return <PipelinesTab org={org} />
   if (org && props.tab === 'prs') return <PrsTab org={org} />
   return <EmptyState title="Coming in a later update" />
 }
@@ -219,6 +224,7 @@ export default function Panel(): OrcaNode {
   const onScreen = loaded.status === 'ready' && shown !== 'setup' && !editing
   syncWork(org, onScreen)
   syncPrs(org, onScreen)
+  syncPipelines(org, onScreen)
   syncShare(org?.org ?? null)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {

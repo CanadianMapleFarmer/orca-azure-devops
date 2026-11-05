@@ -1,10 +1,11 @@
 import { assert, test } from 'orca/testing'
+import { MAX_COMMENT } from '../../src/shared/pipelines'
 import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawApproval } from '../ado/approvals'
 import type { RawTimeline } from '../ado/timeline'
 import { json, ORG, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { drain } from '../test-support'
-import { createRunActions, MAX_COMMENT } from './actions'
+import { createRunActions } from './actions'
 import {
   APPROVAL_4520,
   APPROVAL_4531,

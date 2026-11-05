@@ -1,5 +1,5 @@
 import { messageOf } from '../../src/shared/messages'
-import type { RunActionResult } from '../../src/shared/pipelines'
+import { MAX_COMMENT, type RunActionResult } from '../../src/shared/pipelines'
 import { cancellableStatus, finishedStatus } from '../../src/shared/runs'
 import { decideApproval, getApprovals, toApprovalSummary, type RawApproval } from '../ado/approvals'
 import { cancelBuild, retryStage } from '../ado/build-actions'
@@ -21,8 +21,6 @@ import {
   STAGE_GONE,
   STAGE_NOT_RETRYABLE
 } from '../messages'
-
-export const MAX_COMMENT = 1000
 
 type Decision = 'approved' | 'rejected'
 

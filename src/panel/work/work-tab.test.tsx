@@ -816,7 +816,7 @@ test('leaving the Work tab and coming back keeps the open item, its draft and th
 
 test('visibility changes call ui.visibility', async () => {
   const host = await open(input => snapshotOf({ org: input.org }), {}, { orgs: [org('contoso'), org('fabrikam')] })
-  const calls = () => inputsTo(host, 'ui.visibility')
+  const calls = () => inputsTo(host, 'ui.visibility').filter(input => (input as { surface: string }).surface === 'work')
   assert.deepEqual(calls(), [{ surface: 'work', org: 'contoso', visible: true }])
 
   await panel.rerender()

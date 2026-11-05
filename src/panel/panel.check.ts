@@ -1,6 +1,7 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
 import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
+import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
@@ -109,6 +110,25 @@ const prsSnapshot = snapshotOf({
   updatedAt: NOW
 })
 
+const runsSnapshot = runsSnapshotOf({
+  runs: [
+    waitingRun(3, [approvalOf('approval-3', 3, { canApprove: true, instructions: 'Check the smoke tests before approving.' })]),
+    runOf(2, {
+      state: 'running',
+      startedAt: RUN_NOW - 4 * MINUTE,
+      finishedAt: null,
+      watched: true,
+      stages: [stageOf('Build', 'succeeded'), stageOf('Image', 'running'), stageOf('Deploy production', 'pending')]
+    }),
+    runOf(1, {
+      state: 'failed',
+      prId: 77,
+      finishedAt: RUN_NOW - 12 * MINUTE,
+      stages: [stageOf('Build', 'succeeded'), stageOf('Image', 'failed'), stageOf('Deploy production', 'skipped')]
+    })
+  ]
+})
+
 export default defineCheck({
   empty: { requests: { 'orgs.list': [] } },
   'signing-in': { requests: { 'orgs.list': [org('contoso', { state: 'signing-in', account: null })] } },
@@ -126,6 +146,14 @@ export default defineCheck({
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },
       'prs.snapshot': prsSnapshot
+    }
+  },
+  pipelines: {
+    persisted: { workspace: { tab: 'pipelines' } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'runs.snapshot': runsSnapshot
     }
   },
   mismatch: {
