@@ -690,9 +690,14 @@ test('switching organization loads that org and drops the old list', async () =>
     {},
     { orgs: [org('contoso'), org('fabrikam')] }
   )
+  const column = () => panel.find({ type: 'Collapsible', label: 'Active (1)' })?.props.open
   assert.deepEqual(titles(), ['contoso story'])
+  assert.equal(column(), true)
+  await panel.toggle({ type: 'Collapsible', label: 'Active (1)' })
+  assert.equal(column(), false)
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.deepEqual(titles(), ['fabrikam story'])
+  assert.equal(column(), true)
   assert.deepEqual(inputsTo(host, 'work.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
   await panel.post('work.changed', snapshotOf({ org: 'contoso', mine: [item(102, { title: 'Late contoso post' })] }))
   assert.deepEqual(titles(), ['fabrikam story'])

@@ -525,14 +525,25 @@ test('settings hide the PRs surface and closing the panel does too', async () =>
 
 test('switching organization loads that org and drops the other one\'s results', async () => {
   const host = await open(
-    input => snapshotOf({ org: input.org, sets: [setOf([prOf(input.org === 'contoso' ? 55 : 90, { title: `${input.org} change` })])] }),
+    input =>
+      snapshotOf({
+        org: input.org,
+        sets: [setOf([prOf(input.org === 'contoso' ? 55 : 90, { title: `${input.org} change` })])],
+        toReview: [prOf(input.org === 'contoso' ? 80 : 95)],
+        toReviewCount: 1
+      }),
     { 'prs.approve': { results: [{ prId: 55, ok: true, message: 'Approved.' }] } },
     { orgs: [org('contoso'), org('fabrikam')] }
   )
+  const toReviewOpen = () => panel.find({ type: 'Collapsible', label: 'To review (1)' })?.props.open
   await panel.press({ type: 'Button', text: 'Approve all' })
   assert.equal(panel.findAll({ type: 'Text', text: /^Pull Request \d+: / }).length, 1)
+  assert.equal(toReviewOpen(), false)
+  await panel.toggle({ type: 'Collapsible', label: 'To review (1)' })
+  assert.equal(toReviewOpen(), true)
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.deepEqual(titles(), ['fabrikam change'])
   assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(toReviewOpen(), false)
   assert.deepEqual(inputsTo(host, 'prs.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
 })
