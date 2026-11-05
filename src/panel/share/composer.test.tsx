@@ -74,6 +74,8 @@ const results = () =>
     return [title, callout.props.tone, title ? callout.text.slice(title.length).trim() : callout.text]
   })
 
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
 const opens = (host: TestHost) => host.callsOf('shell.openExternal') as { url: string }[]
 
 async function chooseChat(person = 'Grace Hopper'): Promise<void> {
@@ -306,6 +308,40 @@ test('Share is disabled with no checked item or no destination', async () => {
   await panel.toggle({ type: 'Checkbox', label: 'Pull Request 56 → qa' })
   assert.equal(shareButton()?.disabled, true)
   assert.equal(preview(), '')
+})
+
+function held() {
+  let release: (value: { results: ShareResult[] }) => void = () => {}
+  const answer = new Promise<{ results: ShareResult[] }>(resolve => {
+    release = resolve
+  })
+  return { answer, release: (results: ShareResult[]) => release({ results }) }
+}
+
+test('Share is disabled while share.send is pending and a second press posts nothing', async () => {
+  const pending = held()
+  const host = await share({ 'share.send': () => pending.answer })
+  const first = panel.press({ type: 'Button', text: 'Share' })
+  await pause(10)
+  assert.equal(shareButton()?.disabled, true)
+  await assert.rejects(panel.press({ type: 'Button', text: 'Share' }), /disabled/)
+  assert.equal(sends(host).length, 1)
+  pending.release([COPIED])
+  await first
+  assert.equal(sends(host).length, 1)
+  assert.deepEqual(results(), [['Copy as rich text', 'success', 'Copied as rich text.']])
+  assert.equal(shareButton()?.disabled, false)
+})
+
+test('a second press before Share redraws as disabled posts nothing', async () => {
+  const pending = held()
+  const host = await share({ 'share.send': () => pending.answer })
+  const button = shareButton() as NonNullable<ReturnType<typeof shareButton>>
+  const presses = [panel.press(button), panel.press(button)]
+  await pause(10)
+  pending.release([COPIED])
+  await Promise.all(presses)
+  assert.equal(sends(host).length, 1)
 })
 
 test('more than 50 checked pull requests disable Share with the shared message', async () => {
