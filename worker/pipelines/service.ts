@@ -40,6 +40,7 @@ export interface PipelinesService {
   onOrgs(orgs: OrgStatus[]): void
   snapshot(org: string): Promise<RunsSnapshot>
   refresh(org: string): Promise<RunsSnapshot>
+  reloadFresh(org: string): Promise<RunsSnapshot>
   watch(input: { org: string; projectId: string; buildId: number; watched: boolean }): Promise<RunsSnapshot>
   visibility(input: { org: string; visible: boolean }): { ok: true }
   cachedRun(org: string, buildId: number): RunSummary | null
@@ -367,6 +368,12 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       if (last) return last
       const entry = entries.get(org)
       throw entry ? (entry.failure ?? loadFailure(null, RUNS_LOAD_FAILED)) : notConnected()
+    },
+
+    async reloadFresh(org) {
+      await statusOf(org)
+      await entryOf(org).loading?.promise.catch(() => {})
+      return load(org, 'full')
     },
 
     async watch({ org, projectId, buildId, watched }) {

@@ -702,6 +702,26 @@ test('snapshot answers from memory for 30 s; refresh and becoming visible load i
   assert.deepEqual(await rejection(shown.service.me('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
 })
 
+test('reloadFresh starts a full load after the one already running instead of joining it', async () => {
+  const h = harness()
+  const held = h.ado.hold(isMineRuns)
+  const before = h.service.snapshot(ORG)
+  await drain()
+  assert.equal(h.ado.count(isMineRuns), 2, 'the first load has listed my runs')
+
+  const fresh = h.service.reloadFresh(ORG)
+  await drain()
+  assert.equal(h.ado.count(isMineRuns), 2, 'and the fresh one waits for it')
+  held.release()
+  await before
+  const reloaded = await fresh
+
+  assert.equal(h.ado.count(isMineRuns), 4, 'a second full load listed my runs after the first')
+  assert.deepEqual(h.posts.map(post => post.updatedAt), [T0, T0], 'both loads were posted')
+  assert.deepEqual(h.posts.at(-1), reloaded)
+  assert.deepEqual(await rejection(h.service.reloadFresh('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
 function fixtureTimeline(ado: FakePipelines): RawTimeline {
   return structuredClone(ado.runs.timelines.get(4520) ?? assert.fail('no timeline for 4520'))
 }
