@@ -37,7 +37,7 @@ export interface PrActions {
 export interface PrActionsDeps {
   http: AdoHttp
   prs: PrsService
-  settings: PrSettings
+  settings: Pick<PrSettings, 'autoComplete'>
 }
 
 interface Seen {

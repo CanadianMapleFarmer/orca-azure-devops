@@ -1,5 +1,6 @@
 import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
-import type { ConnectFailure, ConnectionMethod, OrgStatus } from './shared/types'
+import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
+import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
   interface PluginRequests {
@@ -47,6 +48,14 @@ declare module 'orca' {
     'prs.refresh': { input: { org: string }; output: PrSnapshot }
     'prs.approve': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
     'prs.autoComplete': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
+    'share.prefs': { input: { org: string; kind: ShareKind }; output: SharePrefsView }
+    'share.send': { input: ShareRequest; output: { results: ShareResult[] } }
+    'share.people': { input: { org: string; query: string; groups: boolean }; output: Identity[] }
+    'share.channels': { input: {}; output: Channel[] }
+    'share.addChannel': { input: { name: string; url: string }; output: Channel }
+    'share.replaceChannel': { input: { id: string; url: string }; output: Channel }
+    'share.removeChannel': { input: { id: string }; output: { ok: true } }
+    'share.testChannel': { input: { id: string }; output: ShareResult }
   }
   interface PluginPanelEvents {
     'orgs.changed': { orgs: OrgStatus[] }

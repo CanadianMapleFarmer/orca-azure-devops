@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
@@ -12,7 +13,13 @@ import { createPrActions } from './prs/actions'
 import { registerPrHandlers } from './prs/handlers'
 import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
+import { prShareSource } from './prs/share-source'
+import { createChannelStore } from './share/channels'
+import { channelDestination, copyDestination, reviewersDestination } from './share/destinations'
+import { registerShareHandlers } from './share/handlers'
+import { createShareService } from './share/service'
 import { createStatusBar, statusText } from './status-bar'
+import { createClipboard, spawnWithInput } from './sys/clipboard'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
 import { registerVisibilityHandler } from './visibility-handler'
@@ -77,6 +84,27 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
+  const clipboard = createClipboard({
+    platform: process.platform,
+    env: process.env,
+    find: name => findExecutable(name, { pathEnv: process.env.PATH }),
+    spawn: spawnWithInput,
+    uid: process.getuid?.() ?? -1,
+    home,
+    exists: existsSync,
+    list: dir => readdirSync(dir),
+    log: message => orca.log(message)
+  })
+  const channels = createChannelStore({ store, secrets: orca.secrets, newId: () => crypto.randomUUID(), now: Date.now })
+  const share = createShareService({
+    http: connections.http,
+    store,
+    channels,
+    fetch: globalThis.fetch,
+    orgs: () => connections.list(),
+    sources: { pr: prShareSource(prs, prSettings) },
+    destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(connections.http)]
+  })
   stopPolling = () => {
     scheduler.dispose()
     prs.dispose()
@@ -89,6 +117,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http: connections.http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
+  registerShareHandlers(orca, share)
   registerVisibilityHandler(orca, { boards, prs })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
   const orgs = await connections.list()

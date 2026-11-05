@@ -65,3 +65,42 @@ test('the auto-complete settings are declared with their defaults and labels', (
     default: false
   })
 })
+
+test('shareTemplate falls back to the default when empty or not a string', async () => {
+  let saved: Record<string, unknown> = {}
+  const host = mockHost({ results: { 'settings.get': () => ({ settings: saved }) } })
+  const seen: { settings?: PrSettings; api?: OrcaWorkerApi['settings'] } = {}
+  const module = {
+    default: async (orca: OrcaWorkerApi) => {
+      seen.api = orca.settings
+      seen.settings = await watchPrSettings(orca.settings, message => orca.log(message))
+    }
+  }
+  await withWorker(module, { host }, async () => {
+    const settings = seen.settings as PrSettings
+    const api = seen.api as OrcaWorkerApi['settings']
+    const DEFAULT = '[Pull Request {id}]({url}): {title}'
+    assert.equal(settings.shareTemplate(), DEFAULT)
+    for (const value of ['', '  \n', 42, null, true]) {
+      saved = { shareTemplate: value }
+      await api.set('shareTemplate', 'changed')
+      await drain()
+      assert.equal(settings.shareTemplate(), DEFAULT, JSON.stringify(value))
+    }
+    saved = { shareTemplate: '{title} ({repo} → {target}): {url}' }
+    await api.set('shareTemplate', 'changed')
+    await drain()
+    assert.equal(settings.shareTemplate(), '{title} ({repo} → {target}): {url}')
+  })
+})
+
+test('the share template setting is declared with its default and help', () => {
+  const declared = manifest.contributes.settings.find(setting => setting.key === 'shareTemplate')
+  assert.deepEqual(declared, {
+    key: 'shareTemplate',
+    title: 'Pull request share line',
+    description: 'One line per pull request. [text]({url}) is the link. Also {repo}, {project}, {source}, {target}, {author}.',
+    type: 'string',
+    default: '[Pull Request {id}]({url}): {title}'
+  })
+})

@@ -706,3 +706,113 @@ test('deactivate aborts a pull request load in flight, and nothing is posted or 
     })
   })
 })
+
+const SIG = 'wQ3vN8sXkP2mR7tY1uZ4aB6cD9eF0gH5iJ'
+const WEBHOOK_HOST = 'default0f0e0d0c.environment.api.powerplatform.com'
+const WEBHOOK = `https://${WEBHOOK_HOST}/powerautomate/automations/direct/workflows/5d1c2b3a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=${SIG}`
+const ROTATED_SIG = 'Rk2pL9qWz4tY8uI0oP3aS6dF'
+const ROTATED = `https://${WEBHOOK_HOST}/powerautomate/automations/direct/workflows/5d1c2b3a/triggers/manual/paths/invoke?api-version=1&sv=1.0&sig=${ROTATED_SIG}`
+
+type WebhookAnswer = (url: string, init?: RequestInit) => Response | Promise<Response>
+
+function withWebhook(ado: FakeAdo, answer: { respond: WebhookAnswer }): typeof fetch {
+  const toAdo = signedIn(ado)
+  return (async (input: RequestInfo | URL, init?: RequestInit) =>
+    new URL(String(input)).host === WEBHOOK_HOST ? answer.respond(String(input), init) : toAdo(input, init)) as typeof fetch
+}
+
+async function outcome<T>(request: Promise<T>): Promise<T | { thrown: string }> {
+  return request.catch((error: unknown) => ({ thrown: error instanceof Error ? error.message : String(error) }))
+}
+
+function exposed(w: TestWorker, answers: unknown[] = []): string {
+  return JSON.stringify([answers, w.logs, w.posts, w.host.data().storage, w.host.calls.filter(call => !call.method.startsWith('secrets.'))])
+}
+
+test('share.addChannel never returns or logs the URL', async () => {
+  const ado = fakePrs()
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const channel = await w.request('share.addChannel', { name: 'Release train', url: WEBHOOK })
+      assert.deepEqual(Object.keys(channel).sort(), ['addedAt', 'id', 'name', 'service'])
+      assert.deepEqual([channel.name, channel.service], ['Release train', 'teams'])
+      assert.equal(w.host.data().secrets[`teams-webhook:${channel.id}`], WEBHOOK)
+      assert.deepEqual(await w.request('share.channels', {}), [channel])
+
+      const prefs = await w.request('share.prefs', { org: 'contoso', kind: 'pr' })
+      assert.deepEqual(prefs, {
+        template: '[Pull Request {id}]({url}): {title}',
+        channels: [channel],
+        prefs: { destinations: [{ kind: 'copy' }] },
+        tenantId: TENANT
+      })
+
+      const answers: unknown[] = [channel, prefs]
+      answers.push(await outcome(w.request('share.addChannel', { name: 'Release train', url: ROTATED })))
+      answers.push(await outcome(w.request('share.addChannel', { name: 'QA', url: ROTATED.replace('https:', 'http:') })))
+      answers.push(await outcome(w.request('share.replaceChannel', { id: channel.id, url: ROTATED })))
+      assert.deepEqual(answers.slice(2), [
+        { thrown: 'You already have a channel with that name.' },
+        { thrown: "That isn't a valid https webhook URL." },
+        channel
+      ])
+      assert.equal(w.host.data().secrets[`teams-webhook:${channel.id}`], ROTATED)
+
+      const seen = exposed(w, answers)
+      for (const secret of [WEBHOOK, SIG, ROTATED, ROTATED_SIG]) assert.ok(!seen.includes(secret), 'a webhook URL leaked outside orca.secrets')
+
+      assert.deepEqual(await w.request('share.removeChannel', { id: channel.id }), { ok: true })
+      assert.deepEqual(await w.request('share.channels', {}), [])
+      assert.equal(Object.keys(w.host.data().secrets).some(key => key.startsWith('teams-webhook:')), false)
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('webhook failures never mention the URL', async () => {
+  const ado = fakePrs()
+  const leaky = (status: number): WebhookAnswer => url => new Response(JSON.stringify({ error: { code: 'WorkflowNotFound', message: `No workflow at ${url}` } }), { status })
+  const failures: [string, WebhookAnswer, string][] = [
+    ['404', leaky(404), "Teams didn't accept the post (HTTP 404). If the workflow changed, replace its URL."],
+    ['400', leaky(400), "Teams didn't accept the post (HTTP 400). If the workflow changed, replace its URL."],
+    ['429', leaky(429), 'Teams is throttling posts. Try again in a minute.'],
+    ['dns', url => Promise.reject(new TypeError(`fetch failed: getaddrinfo ENOTFOUND ${url}`, { cause: new Error(`connect ${url}`) })), "Couldn't reach Teams."],
+    ['timeout', url => Promise.reject(new DOMException(`The operation was aborted due to timeout: ${url}`, 'TimeoutError')), "Couldn't reach Teams."]
+  ]
+  const answer: { respond: WebhookAnswer } = { respond: () => new Response(null, { status: 202 }) }
+  const posted: string[] = []
+  await withFetch(
+    withWebhook(ado, {
+      respond: (url, init) => {
+        posted.push(url)
+        return answer.respond(url, init)
+      }
+    }),
+    async () => {
+      await withWorker(worker, { host: prsHost() }, async w => {
+        const channel = await w.request('share.addChannel', { name: 'Release train', url: WEBHOOK })
+        const destination = `channel:${channel.id}`
+        const share = { org: 'contoso', kind: 'pr' as const, keys: [`pr:${PROJECT}/${REPO}/4101`], intro: 'Ready for QA.', destinations: [{ kind: 'channel' as const, id: channel.id }] }
+        const answers: unknown[] = []
+        for (const [name, respond, message] of failures) {
+          answer.respond = respond
+          const tested = await outcome(w.request('share.testChannel', { id: channel.id }))
+          const sent = await outcome(w.request('share.send', share))
+          answers.push(tested, sent)
+          assert.deepEqual(tested, { destination, ok: false, text: message }, name)
+          assert.deepEqual(sent, { results: [{ destination, ok: false, text: message }] }, name)
+        }
+        assert.equal(posted.length, failures.length * 2, 'every attempt reached the webhook')
+
+        answer.respond = () => new Response(null, { status: 202 })
+        answers.push(await outcome(w.request('share.send', share)))
+        assert.deepEqual(answers.at(-1), { results: [{ destination, ok: true, text: 'Sent to Release train (accepted).' }] })
+
+        const seen = exposed(w, answers)
+        for (const secret of [WEBHOOK, SIG]) assert.ok(!seen.includes(secret), 'the webhook URL leaked')
+        assert.deepEqual(w.host.data().storage['share:prefs:contoso'], { destinations: [{ kind: 'channel', id: channel.id }] })
+        assert.equal(w.refusals.length, 0)
+      })
+    }
+  )
+})

@@ -39,6 +39,24 @@ export const PR_AUTO_COMPLETE_SET = 'Auto-complete set.'
 export const PR_BRANCH_KEPT_UNCHECKED = `${PR_AUTO_COMPLETE_SET} Source branch kept: couldn't check for other pull requests.`
 export const COPY_NEEDS_TOOL = 'Copying needs wl-clipboard or xclip.'
 export const COPY_FAILED = "Couldn't copy to the clipboard."
+export const COPIED_RICH = 'Copied as rich text.'
+export const COPIED_HTML = 'Copied as rich text (HTML only).'
+export const WEBHOOK_URL_EMPTY = 'Paste the webhook URL from Teams Workflows.'
+export const WEBHOOK_URL_INVALID = "That isn't a valid https webhook URL."
+export const CHANNEL_NAME_EMPTY = 'Name the channel.'
+export const CHANNEL_NAME_TAKEN = 'You already have a channel with that name.'
+export const CHANNEL_LIMIT = 'You can add up to 20 channels.'
+export const CHANNEL_GONE = 'That channel no longer exists.'
+export const CHANNEL_URL_MISSING = "This channel's webhook URL is missing. Replace it."
+export const SECRETS_UNAVAILABLE = "Orca can't store secrets on this system, so Teams channels are unavailable."
+export const TEAMS_THROTTLED = 'Teams is throttling posts. Try again in a minute.'
+export const TEAMS_UNREACHABLE = "Couldn't reach Teams."
+export const CARD_TOO_LARGE = 'Too much to post at once. Share fewer pull requests.'
+export const CHANNEL_TEST_INTRO = 'Azure DevOps for Orca can post to this channel.'
+export const CHANNEL_TEST_SENT = "Sent (accepted). Teams doesn't confirm delivery; check the channel."
+export const NO_REVIEWERS_CHOSEN = 'Choose people to add as reviewers.'
+export const NOTHING_TO_SHARE = 'Choose at least one pull request to share.'
+export const UNKNOWN_SHARE_KIND = "That can't be shared."
 
 export const MALFORMED = {
   workItem: 'Azure DevOps returned an unexpected work item response.',
@@ -66,6 +84,30 @@ export function alreadySetWillDelete(prId: number): string {
 
 export function siblingWillDelete(prId: number): string {
   return `${PR_AUTO_COMPLETE_SET} Pull Request ${prId} will delete the shared source branch when it completes.`
+}
+
+export function sentTo(name: string): string {
+  return `Sent to ${name} (accepted).`
+}
+
+export function httpRefused(status: number): string {
+  return `Teams didn't accept the post (HTTP ${status}). If the workflow changed, replace its URL.`
+}
+
+export function sharedBy(name: string): string {
+  return `Shared by ${name} from Orca`
+}
+
+export function addedReviewers(names: string[], count: number): string {
+  return `Added ${names.join(', ')} to ${count} ${count === 1 ? 'pull request' : 'pull requests'}.`
+}
+
+export function alreadyReviewer(name: string, prId: number): string {
+  return `${name} is already on Pull Request ${prId}.`
+}
+
+export function reviewersNotAdded(prId: number, reason: string): string {
+  return `Couldn't add reviewers to Pull Request ${prId}: ${reason}`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {

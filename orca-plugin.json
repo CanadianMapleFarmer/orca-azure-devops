@@ -115,6 +115,13 @@
         "title": "Auto-complete: complete linked work items",
         "type": "boolean",
         "default": false
+      },
+      {
+        "key": "shareTemplate",
+        "title": "Pull request share line",
+        "description": "One line per pull request. [text]({url}) is the link. Also {repo}, {project}, {source}, {target}, {author}.",
+        "type": "string",
+        "default": "[Pull Request {id}]({url}): {title}"
       }
     ],
     "hooks": [
