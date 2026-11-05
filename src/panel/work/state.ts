@@ -1,8 +1,9 @@
-import { atom, plugin, read, set, update, type ReadonlyAtom } from 'orca'
+import { atom, plugin, read, set, update } from 'orca'
 import { messageOf } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { MoveTarget, Nudge, WorkSnapshot } from '../../shared/work'
 import { tab } from '../state'
+import { hostIsVisible, surfaceVisibility } from '../visibility'
 
 export type Load = { status: 'loading' | 'ready' } | { status: 'failed'; message: string }
 export type Notice = { tone: 'danger' | 'neutral'; text: string }
@@ -15,30 +16,9 @@ export const refreshing = atom(false)
 export const openItem = atom<{ org: string; id: number } | null>(null)
 export const moveResets = atom(0)
 const source = atom<Source | null>(null)
-const shownOrg = atom<string | null>(null)
+const visibility = surfaceVisibility('work')
 
-let hostVisible: ReadonlyAtom<boolean> | null = null
-
-export function watchVisibility(visible: ReadonlyAtom<boolean>): void {
-  hostVisible = visible
-}
-
-function tell(org: string, visible: boolean): void {
-  plugin.request('ui.visibility', { surface: 'work', org, visible }).catch(() => {})
-}
-
-function reportVisibility(next: string | null): void {
-  const previous = read(shownOrg)
-  if (previous === next) return
-  set(shownOrg, next)
-  if (previous) tell(previous, false)
-  if (next) tell(next, true)
-}
-
-export function hideWork(): void {
-  const org = read(shownOrg)
-  if (org) tell(org, false)
-}
+export const hideWork = visibility.hide
 
 async function loadSnapshot(wanted: Source): Promise<void> {
   set(load, { status: 'loading' })
@@ -62,7 +42,7 @@ function align(wanted: Source | null, visibleOrg: string | null): void {
     if (wanted) void loadSnapshot(wanted)
     else set(load, { status: 'loading' })
   }
-  reportVisibility(visibleOrg)
+  visibility.report(visibleOrg)
 }
 
 // Orca offers no atom subscription, so Panel calls this while rendering and the effects run after the render.
@@ -71,8 +51,7 @@ export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
   const wanted = connected?.boards
     ? { org: connected.org, key: `${connected.org}/${connected.boards.projectId}/${connected.boards.teamId}` }
     : null
-  const watching = hostVisible !== null && read(hostVisible)
-  const visibleOrg = connected && onScreen && watching && read(tab) === 'work' ? connected.org : null
+  const visibleOrg = connected && onScreen && hostIsVisible() && read(tab) === 'work' ? connected.org : null
   void Promise.resolve().then(() => align(wanted, visibleOrg))
 }
 

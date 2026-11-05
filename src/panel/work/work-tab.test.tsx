@@ -787,7 +787,7 @@ test('visibility changes call ui.visibility', async () => {
   assert.deepEqual(calls().slice(1), [{ surface: 'work', org: 'contoso', visible: false }])
 
   await panel.setVisible(true)
-  await panel.select({ type: 'Tabs' }, 'prs')
+  await panel.select({ type: 'Tabs' }, 'pipelines')
   await panel.select({ type: 'Tabs' }, 'work')
   assert.deepEqual(calls().slice(2), [
     { surface: 'work', org: 'contoso', visible: true },

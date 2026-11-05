@@ -1,6 +1,7 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
 import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
+import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -86,6 +87,28 @@ const workSnapshot: WorkSnapshot = {
   stale: false
 }
 
+const prsSnapshot = snapshotOf({
+  sets: [
+    setOf(
+      [
+        summaryOf(55, {
+          target: 'develop',
+          autoComplete: true,
+          checks: { build: 'succeeded', policies: 'approved' },
+          reviewers: [reviewerOf('Grace Hopper', 10), reviewerOf('Edsger Dijkstra', 0, { isRequired: true })]
+        }),
+        summaryOf(56, { target: 'qa', mergeStatus: 'conflicts', checks: { build: 'failed', policies: 'rejected' } }),
+        summaryOf(57, { target: 'main', status: 'completed', closedAt: NOW - 3_600_000 })
+      ],
+      { title: 'Fix the sign-in redirect that sends people to the wrong page', sources: ['feature/login'] }
+    ),
+    setOf([summaryOf(60, { title: 'Add CSV export', repoName: 'api', isDraft: true, checks: { build: 'running', policies: 'pending' } })])
+  ],
+  toReview: [summaryOf(80, { title: 'Cache the lookups', repoName: 'api', createdBy: { id: 'u-grace', name: 'Grace Hopper' } })],
+  toReviewCount: 1,
+  updatedAt: NOW
+})
+
 export default defineCheck({
   empty: { requests: { 'orgs.list': [] } },
   'signing-in': { requests: { 'orgs.list': [org('contoso', { state: 'signing-in', account: null })] } },
@@ -95,6 +118,14 @@ export default defineCheck({
       'orgs.list': [org('contoso', { boards: BOARDS })],
       'ui.visibility': { ok: true },
       'work.snapshot': workSnapshot
+    }
+  },
+  prs: {
+    persisted: { workspace: { tab: 'prs' } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'prs.snapshot': prsSnapshot
     }
   },
   mismatch: {

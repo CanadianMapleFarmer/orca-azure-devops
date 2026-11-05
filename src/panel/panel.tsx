@@ -23,7 +23,10 @@ import type { OrgState, OrgStatus } from '../shared/types'
 import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
 import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
-import { acceptChange, hideWork, syncWork, watchVisibility } from './work/state'
+import { PrsTab } from './prs/prs-tab'
+import { acceptPrs, hidePrs, syncPrs } from './prs/state'
+import { watchVisibility } from './visibility'
+import { acceptChange, hideWork, syncWork } from './work/state'
 import { WorkTab } from './work/work-tab'
 
 type ProblemState = Exclude<OrgState, 'connected' | 'signing-in'>
@@ -74,17 +77,21 @@ export function setup(ctx: PanelContext): () => void {
       syncSettings(payload.orgs)
     }),
     plugin.on('orgs.connectFailed', showConnectFailure),
-    plugin.on('work.changed', acceptChange)
+    plugin.on('work.changed', acceptChange),
+    plugin.on('prs.changed', acceptPrs)
   )
   void loadOrgs()
-  return hideWork
+  return () => {
+    hideWork()
+    hidePrs()
+  }
 }
 
 export function TabBody(props: { tab: string }): OrcaNode {
-  if (props.tab === 'work') {
-    const org = currentOrg(read(orgs), read(activeOrg))
-    if (org) return <WorkTab org={org} />
-  }
+  if (read(tab) !== props.tab) return null
+  const org = currentOrg(read(orgs), read(activeOrg))
+  if (org && props.tab === 'work') return <WorkTab org={org} />
+  if (org && props.tab === 'prs') return <PrsTab org={org} />
   return <EmptyState title="Coming in a later update" />
 }
 
@@ -208,7 +215,9 @@ export default function Panel(): OrcaNode {
   const org = currentOrg(all, read(activeOrg))
   const shown = read(view)
   const editing = shown === 'settings' ? all.find(item => item.org === read(settingsOrg)) : undefined
-  syncWork(org, loaded.status === 'ready' && shown !== 'setup' && !editing)
+  const onScreen = loaded.status === 'ready' && shown !== 'setup' && !editing
+  syncWork(org, onScreen)
+  syncPrs(org, onScreen)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {
     return (

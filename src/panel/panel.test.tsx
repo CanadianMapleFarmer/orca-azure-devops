@@ -296,7 +296,7 @@ test('connected shows who is signed in, a success badge and the four tabs', asyn
     ['Work', 'Pipelines', 'PRs', 'Wiki']
   )
   assert.equal(tabs?.props?.value, 'work')
-  await panel.select({ type: 'Tabs' }, 'prs')
+  await panel.select({ type: 'Tabs' }, 'pipelines')
   assert.ok(summaryText().includes('EmptyState "Coming in a later update"'))
 })
 
