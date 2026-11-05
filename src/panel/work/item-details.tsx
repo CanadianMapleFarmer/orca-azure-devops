@@ -26,6 +26,7 @@ import {
 } from 'orca'
 import { chipOf } from '../../shared/chips'
 import type { WorkItemDetails } from '../../shared/work'
+import { foldedAfter } from '../folds'
 import { messageOf } from '../state'
 import { openItem } from './state'
 
@@ -51,7 +52,7 @@ const closedFolds = atom<Fold[]>([])
 const foldOpen = (fold: Fold): boolean => !read(closedFolds).includes(fold)
 
 const setFoldOpen = (fold: Fold, open: boolean): void =>
-  update(closedFolds, folds => (open ? folds.filter(closed => closed !== fold) : folds.includes(fold) ? folds : [...folds, fold]))
+  update(closedFolds, folds => foldedAfter(folds, fold, open))
 
 const isOpen = (org: string, id: number): boolean => {
   const open = read(openItem)

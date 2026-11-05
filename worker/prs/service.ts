@@ -15,7 +15,7 @@ import {
 } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { cachedCodeProjects, createPrSource, type CodeProjects, type FullLoad, type PrSource } from './load'
-import { releaseSets, toReviewOf } from './release-sets'
+import { newestCreatedAt, releaseSets, toReviewOf } from './release-sets'
 
 export interface PrsServiceDeps {
   http: AdoHttp
@@ -303,10 +303,6 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     signal.addEventListener('abort', stop, { once: true })
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
   })
-}
-
-function newestCreatedAt(set: ReleaseSet): number {
-  return Math.max(...set.prs.map(pr => pr.createdAt))
 }
 
 function isSignedIn(status: OrgStatus): status is SignedInStatus {

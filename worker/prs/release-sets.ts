@@ -70,7 +70,7 @@ function newestSetFirst(a: ReleaseSet, b: ReleaseSet): number {
   return newestCreatedAt(b) - newestCreatedAt(a) || b.prs[0].prId - a.prs[0].prId
 }
 
-function newestCreatedAt(set: ReleaseSet): number {
+export function newestCreatedAt(set: ReleaseSet): number {
   return Math.max(...set.prs.map(pr => pr.createdAt))
 }
 

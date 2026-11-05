@@ -2,6 +2,7 @@ import { atom, plugin, read, set, update } from 'orca'
 import { messageOf } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { MoveTarget, Nudge, WorkSnapshot } from '../../shared/work'
+import { foldedAfter } from '../folds'
 import { tab } from '../state'
 import { hostIsVisible, surfaceVisibility } from '../visibility'
 
@@ -58,7 +59,7 @@ export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
 }
 
 export function setGroupOpen(key: string, open: boolean): void {
-  update(closedGroups, keys => (open ? keys.filter(closed => closed !== key) : keys.includes(key) ? keys : [...keys, key]))
+  update(closedGroups, keys => foldedAfter(keys, key, open))
 }
 
 export function acceptChange(next: WorkSnapshot): void {

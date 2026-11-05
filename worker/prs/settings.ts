@@ -1,9 +1,9 @@
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { AutoCompleteOptions, MergeStrategy } from '../../src/shared/prs'
+import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type MergeStrategy } from '../../src/shared/prs'
 import { PR_TEMPLATE } from '../../src/shared/share/template'
 import { watchSettings } from '../settings-watcher'
 
-const MERGE_STRATEGIES: readonly MergeStrategy[] = ['noFastForward', 'squash', 'rebase', 'rebaseMerge']
+const MERGE_STRATEGIES = Object.keys(MERGE_STRATEGY_LABELS) as MergeStrategy[]
 
 export interface PrSettings {
   autoComplete(): AutoCompleteOptions
