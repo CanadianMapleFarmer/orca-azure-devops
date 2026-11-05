@@ -25,6 +25,7 @@ import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './s
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
 import { PrsTab } from './prs/prs-tab'
 import { acceptPrs, hidePrs, syncPrs } from './prs/state'
+import { syncShare } from './share/state'
 import { watchVisibility } from './visibility'
 import { acceptChange, hideWork, syncWork } from './work/state'
 import { WorkTab } from './work/work-tab'
@@ -218,6 +219,7 @@ export default function Panel(): OrcaNode {
   const onScreen = loaded.status === 'ready' && shown !== 'setup' && !editing
   syncWork(org, onScreen)
   syncPrs(org, onScreen)
+  syncShare(org?.org ?? null)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {
     return (

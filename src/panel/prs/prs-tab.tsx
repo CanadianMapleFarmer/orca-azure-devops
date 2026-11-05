@@ -1,6 +1,9 @@
 import { Box, Callout, Collapsible, EmptyState, IconButton, List, ListItem, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type PrSnapshot, type ReleaseSet } from '../../shared/prs'
 import type { OrgStatus } from '../../shared/types'
+import { Channels, openChannels } from '../share/channels'
+import { Composer } from '../share/composer'
+import { shareView } from '../share/state'
 import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
 import { ReleaseSetCard } from './release-set'
 import { load, notice, openPr, refresh, refreshing, retryLoad, reviewNotice, setToReviewOpen, snapshot, toReviewOpen } from './state'
@@ -21,7 +24,10 @@ function Header({ org, current }: { org: string; current: PrSnapshot }): OrcaNod
             Updated <RelativeTime at={current.updatedAt} />
           </Text>
         </Box>
-        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
+        <Row gap="xs" align="center">
+          <IconButton icon="settings" label="Teams channels" variant="ghost" size="sm" onPress={openChannels} />
+          <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
+        </Row>
       </Row>
       <SnapshotMessage message={current.message} stale={current.stale} />
     </Stack>
@@ -91,6 +97,9 @@ function ToReview({ current }: { current: PrSnapshot }): OrcaNode {
 }
 
 export function PrsTab({ org }: { org: OrgStatus }): OrcaNode {
+  const shown = shareView()
+  if (shown === 'composer') return <Composer />
+  if (shown === 'channels') return <Channels />
   const stored = read(snapshot)
   const current = stored?.org === org.org ? stored : null
   const status = read(load)

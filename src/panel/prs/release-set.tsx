@@ -1,5 +1,9 @@
 import { Badge, Button, Callout, Card, Link, Row, Stack, Text, type OrcaNode } from 'orca'
 import type { PrReviewer, PrSummary, ReleaseSet, RowResult } from '../../shared/prs'
+import { prShareItem } from '../../shared/share/pr-items'
+import { PR_TEMPLATE, PR_VARS } from '../../shared/share/template'
+import type { Identity } from '../../shared/types'
+import { openComposer } from '../share/state'
 import { act, isActing, outcomeOf, type Outcome } from './state'
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
@@ -86,6 +90,32 @@ function describe(set: ReleaseSet): string {
   return [set.sources.join(', '), repos].filter(part => part !== '').join(' · ')
 }
 
+function reviewersOf(set: ReleaseSet): Identity[] {
+  const byId = new Map<string, Identity>()
+  for (const reviewer of set.prs.flatMap(pr => pr.reviewers)) {
+    if (!byId.has(reviewer.id)) {
+      byId.set(reviewer.id, { id: reviewer.id, displayName: reviewer.name, uniqueName: reviewer.uniqueName, kind: reviewer.isGroup ? 'group' : 'user' })
+    }
+  }
+  return [...byId.values()]
+}
+
+function shareSet(org: string, set: ReleaseSet): void {
+  openComposer({
+    org,
+    kind: 'pr',
+    title: 'Share pull requests',
+    items: set.prs.map(pr => {
+      const item = prShareItem(pr)
+      return { key: item.key, label: `Pull Request ${pr.prId} → ${pr.target}`, item, checked: pr.status === 'active' }
+    }),
+    suggestions: reviewersOf(set),
+    reviewers: true,
+    fallback: PR_TEMPLATE,
+    vars: PR_VARS
+  })
+}
+
 export function ReleaseSetCard({ org, set, limit = set.prs.length }: { org: string; set: ReleaseSet; limit?: number }): OrcaNode {
   const shown = set.prs.slice(0, limit)
   const active = set.prs.filter(pr => pr.status === 'active')
@@ -108,6 +138,9 @@ export function ReleaseSetCard({ org, set, limit = set.prs.length }: { org: stri
         </Button>
         <Button size="sm" variant="outline" disabled={!idle} onPress={() => act('prs.autoComplete', org, active)}>
           Auto-complete all
+        </Button>
+        <Button size="sm" variant="outline" onPress={() => shareSet(org, set)}>
+          Share…
         </Button>
       </Row>
       {outcome ? <Result outcome={outcome} /> : null}
