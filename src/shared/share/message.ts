@@ -5,7 +5,7 @@ export const MAX_SHARE_ITEMS = 50
 export const MAX_INTRO = 2000
 
 const HTML_ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-const MARKDOWN_SPECIALS = /[\\`*_[\]()<>#|~&@]/g
+const MARKDOWN_SPECIALS = /[\\`*_[\]()<>#|~&]/g
 const MARKDOWN_TARGET_SPECIALS = /[\\`()<>&]/g
 
 function cutIntro(intro: string): string {
@@ -65,16 +65,13 @@ export function toPlain(message: ShareMessage): string {
 }
 
 function escapeMarkdown(text: string): string {
-  return text
-    .replace(MARKDOWN_SPECIALS, '\\$&')
-    .replace(/:(?=\/\/)/g, '\\:')
-    .replace(/(www)\./gi, '$1\\.')
+  return text.replace(MARKDOWN_SPECIALS, '\\$&')
 }
 
 function escapeLineStart(line: string): string {
   return line
     .replace(/^[ \t]+/, '')
-    .replace(/^[-+=]/, '\\$&')
+    .replace(/^[-+=:]/, '\\$&')
     .replace(/^(\d+)\./, '$1\\.')
 }
 

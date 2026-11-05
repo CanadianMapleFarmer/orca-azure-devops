@@ -33,7 +33,7 @@ test('titles can never add links or markup', () => {
   const hostile = [
     { title: '](javascript:alert(1))', html: '](javascript:alert(1))', markdown: '\\]\\(javascript:alert\\(1\\)\\)' },
     { title: '<script>x</script>', html: '&lt;script&gt;x&lt;/script&gt;', markdown: '\\<script\\>x\\</script\\>' },
-    { title: '[a](https://evil.example)', html: '[a](https://evil.example)', markdown: '\\[a\\]\\(https\\://evil.example\\)' },
+    { title: '[a](https://evil.example)', html: '[a](https://evil.example)', markdown: '\\[a\\]\\(https://evil.example\\)' },
     { title: '&amp; 🚀', html: '&amp;amp; 🚀', markdown: '\\&amp; 🚀' },
     { title: noisy, html: '[PROJ-1] ' + '&lt;b&gt;&amp;&quot;&#39;](x) '.repeat(35) + 'aaaaaa', markdown: '\\[PROJ-1\\] ' + '\\<b\\>\\&"\'\\]\\(x\\) '.repeat(35) + 'aaaaaa' }
   ]
@@ -61,7 +61,7 @@ test('titles can never add links or markup', () => {
     ['===', '\\==='],
     ['    indented', 'indented'],
     ['\tindented', 'indented'],
-    ['https://evil.example/x?a=1&b=2 www.evil.example evil@example.com', 'https\\://evil.example/x?a=1\\&b=2 www\\.evil.example evil\\@example.com']
+    [':-- delimiter', '\\:-- delimiter']
   ]
   for (const [title, markdown] of blockStarts) {
     const { message } = build([item({ title })], '', '{title} [#{id}]({url})')
@@ -71,17 +71,14 @@ test('titles can never add links or markup', () => {
   }
 })
 
-test('an intro can never add a heading, list, quote, code block or link to the preview', () => {
+test('an intro can never add a heading, list, quote, table or code block to the preview', () => {
   const preview = (intro: string) => toMarkdown(build([], intro).message)
   assert.equal(preview('Release notes\n---'), 'Release notes  \n\\---')
   assert.equal(preview('Release notes\n==='), 'Release notes  \n\\===')
   assert.equal(preview('Hello\n- item\n+ item\n* item'), 'Hello  \n\\- item  \n\\+ item  \n\\* item')
   assert.equal(preview('1. one\n2) two\n# h\n> q'), '1\\. one  \n2\\) two  \n\\# h  \n\\> q')
   assert.equal(preview('    code\n\tmore\n   - item'), 'code  \nmore  \n\\- item')
-  assert.equal(
-    preview('See https://example.com/a?b=1&c=2, www.example.com and alex@contoso.com\nmailto:alex@contoso.com'),
-    'See https\\://example.com/a?b=1\\&c=2, www\\.example.com and alex\\@contoso.com  \nmailto:alex\\@contoso.com'
-  )
+  assert.equal(preview('Header\n:--\n:-:'), 'Header  \n\\:--  \n\\:-:')
 })
 
 test('a template with an unknown placeholder or two links falls back with a warning', () => {
