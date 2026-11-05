@@ -1,5 +1,7 @@
 import { AdoError } from './ado/http'
 
+export { CHANNEL_NAME_TOO_LONG, TOO_MANY_ITEMS, TOO_MANY_PEOPLE } from '../src/shared/share/limits'
+
 export const NOT_CONNECTED = 'Connect this organization first.'
 export const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 export const GONE = "That work item no longer exists, or you can't see it."
@@ -56,9 +58,6 @@ export const CHANNEL_TEST_INTRO = 'Azure DevOps for Orca can post to this channe
 export const CHANNEL_TEST_SENT = "Sent (accepted). Teams doesn't confirm delivery; check the channel."
 export const NO_REVIEWERS_CHOSEN = 'Choose people to add as reviewers.'
 export const NOTHING_TO_SHARE = 'Choose at least one item to share.'
-export const TOO_MANY_ITEMS = 'Share up to 50 items at a time.'
-export const TOO_MANY_PEOPLE = 'Choose up to 20 people.'
-export const CHANNEL_NAME_TOO_LONG = 'Keep the channel name under 100 characters.'
 export const NO_PULL_REQUESTS_FOR_REVIEWERS = 'There are no pull requests to add reviewers to.'
 export const SHARE_PREFS_NOT_SAVED = "Couldn't save the share choices."
 export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams channel that failed to save."

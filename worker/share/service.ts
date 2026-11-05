@@ -1,5 +1,6 @@
 import { messageOf } from '../../src/shared/messages'
 import type { PrKey } from '../../src/shared/prs'
+import { MAX_SHARE_PEOPLE } from '../../src/shared/share/limits'
 import { buildMessage, MAX_SHARE_ITEMS } from '../../src/shared/share/message'
 import { parseTemplate } from '../../src/shared/share/template'
 import type {
@@ -60,7 +61,6 @@ export interface ShareServiceDeps {
 }
 
 const DEFAULT_PREFS: SharePrefs = { destinations: [{ kind: 'copy' }] }
-const MAX_PEOPLE = 20
 
 export function createShareService(deps: ShareServiceDeps): ShareService {
   const { channels } = deps
@@ -124,7 +124,7 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
       const keys = [...new Set(request.keys)]
       if (keys.length > MAX_SHARE_ITEMS) throw badRequest(TOO_MANY_ITEMS)
       const destinations = firstOfEach(request.destinations)
-      if (destinations.some(destination => peopleOf(destination).length > MAX_PEOPLE)) throw badRequest(TOO_MANY_PEOPLE)
+      if (destinations.some(destination => peopleOf(destination).length > MAX_SHARE_PEOPLE)) throw badRequest(TOO_MANY_PEOPLE)
       const { items, prs } = await source.items(request.org, keys)
       if (items.length === 0) throw badRequest(NOTHING_TO_SHARE)
       const { message } = buildMessage({ template: source.template(), fallback: source.fallback, vars: source.vars, intro: request.intro, items })
@@ -174,8 +174,8 @@ function destinationOf(value: unknown, known: Channel[]): ShareDestination[] {
   if (kind === 'copy') return [{ kind: 'copy' }]
   if (kind === 'channel') return typeof id === 'string' && known.some(channel => channel.id === id) ? [{ kind: 'channel', id }] : []
   if (!Array.isArray(people)) return []
-  if (kind === 'chat') return [{ kind: 'chat', people: people.flatMap(identityOf).slice(0, MAX_PEOPLE) }]
-  if (kind === 'reviewers') return [{ kind: 'reviewers', people: people.flatMap(personOf).slice(0, MAX_PEOPLE) }]
+  if (kind === 'chat') return [{ kind: 'chat', people: people.flatMap(identityOf).slice(0, MAX_SHARE_PEOPLE) }]
+  if (kind === 'reviewers') return [{ kind: 'reviewers', people: people.flatMap(personOf).slice(0, MAX_SHARE_PEOPLE) }]
   return []
 }
 

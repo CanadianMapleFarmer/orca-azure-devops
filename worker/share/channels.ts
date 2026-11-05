@@ -1,3 +1,4 @@
+import { MAX_CHANNEL_NAME } from '../../src/shared/share/limits'
 import type { Channel } from '../../src/shared/share/types'
 import type { SecretsPort } from '../auth/pat'
 import type { StorePort } from '../connections'
@@ -32,7 +33,6 @@ export interface ChannelStoreDeps {
 const CHANNELS_KEY = 'share:channels'
 const MAX_CHANNELS = 20
 const MAX_URL_LENGTH = 4096
-const MAX_NAME_LENGTH = 100
 
 export function checkWebhookUrl(input: string): string {
   const text = input.trim()
@@ -71,7 +71,7 @@ export function createChannelStore({ store, secrets, newId, now, log }: ChannelS
       serially(async () => {
         const label = name.trim()
         if (label === '') throw new Error(CHANNEL_NAME_EMPTY)
-        if (label.length > MAX_NAME_LENGTH) throw new Error(CHANNEL_NAME_TOO_LONG)
+        if (label.length > MAX_CHANNEL_NAME) throw new Error(CHANNEL_NAME_TOO_LONG)
         const checked = checkWebhookUrl(url)
         const channels = await list()
         if (channels.some(channel => channel.name.toLowerCase() === label.toLowerCase())) throw new Error(CHANNEL_NAME_TAKEN)
