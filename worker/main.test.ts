@@ -1,12 +1,15 @@
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs/promises'
+import { request } from 'node:http'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import type { JsonValue } from 'orca/worker'
 import { assert, mockHost, test, type TestWorker } from 'orca/testing'
 import type { RunsSnapshot } from '../src/shared/pipelines'
 import type { PrSnapshot } from '../src/shared/prs'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
+import { accessToken, CLIENT_ID, fakeEntra, OID_ADA, tokenAnswer } from './auth/fake-entra'
 import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
@@ -25,7 +28,7 @@ import {
 } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { fakeReviews, isThreads } from './reviews/fake-reviews'
-import { withMockTimers, withWorker } from './test-support'
+import { connectError, drain, withMockTimers, withWorker } from './test-support'
 import { fakeWiki, isPage, isSearch } from './wiki/fake-wiki'
 
 function running(pattern: string): boolean {
@@ -258,6 +261,107 @@ test('deactivate stops a running az login, wrapper and all, within the 2 s budge
     } finally {
       spawnSync('pkill', ['-9', '-f', sleep])
     }
+  })
+})
+
+const ENTRA_TOKEN = accessToken({ oid: OID_ADA, upn: 'ada@contoso.com' })
+const MICROSOFT_HOST = { capabilities: CAPABILITIES, settings: { entraClientId: CLIENT_ID } }
+
+function microsoftFetch(entra: ReturnType<typeof fakeEntra>): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call = new Request(input, init)
+    const url = new URL(call.url)
+    if (url.hostname === 'login.microsoftonline.com') return entra.fetch(input, init)
+    if (url.hostname === 'vssps.dev.azure.com') return new Response(null, { headers: { 'x-vss-resourcetenant': TENANT } })
+    if (call.headers.get('authorization') !== `Bearer ${ENTRA_TOKEN}`) return new Response('', { status: 401 })
+    if (url.pathname === '/contoso/_apis/connectionData') return json(ADA_DATA)
+    return new Response('', { status: 404 })
+  }) as typeof fetch
+}
+
+async function signInPage(w: TestWorker): Promise<URL> {
+  const posted = () => orgsChanged(w.posts).flat().some(status => status.signInUrl !== undefined)
+  assert.ok(await until(posted), 'the sign-in page was posted')
+  const url = orgsChanged(w.posts).flat().find(status => status.signInUrl !== undefined)?.signInUrl
+  return new URL(url ?? assert.fail('no sign-in page was posted'))
+}
+
+function redirectPort(page: URL): number {
+  return Number(new URL(page.searchParams.get('redirect_uri') ?? '').port)
+}
+
+function postToRedirect(port: number, fields: Record<string, string>): Promise<number> {
+  const body = new URLSearchParams(fields).toString()
+  const headers = { host: `localhost:${port}`, 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body) }
+  return new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, method: 'POST', path: '/', headers, agent: false }, res => {
+      res.resume()
+      res.on('end', () => resolve(res.statusCode ?? 0))
+    })
+    req.on('error', reject)
+    req.end(body)
+  })
+}
+
+test('a Microsoft sign-in completes through the real redirect listener', async () => {
+  const entra = fakeEntra()
+  entra.answer('authorization_code', tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com', refresh: 'rt-ada-1' }))
+  await withFetch(microsoftFetch(entra), async () => {
+    await withWorker(worker, { host: mockHost(MICROSOFT_HOST) }, async w => {
+      const started = await w.request('orgs.connect', { orgInput: 'contoso', method: 'entra' })
+      assert.equal(started.state, 'signing-in')
+      assert.equal(started.method, 'entra')
+      assert.deepEqual(started.tokenStore, { kind: 'orca-secrets' })
+
+      const page = await signInPage(w)
+      const port = redirectPort(page)
+      assert.equal(await connectError('127.0.0.1', port), null)
+      assert.equal(await postToRedirect(port, { code: 'c-ada-1', state: page.searchParams.get('state') ?? '' }), 200)
+      assert.ok(await until(() => orgsChanged(w.posts).at(-1)?.[0].state === 'connected'), 'the org connects')
+
+      const [status] = await w.request('orgs.list', {})
+      assert.equal(status.state, 'connected')
+      assert.equal(status.account?.uniqueName, 'ada@contoso.com')
+      assert.equal(status.signInUrl, undefined)
+      assert.equal(await connectError('127.0.0.1', port), 'ECONNREFUSED', 'the port closes with the redirect')
+      assert.deepEqual(JSON.parse(String(w.host.data().secrets['entra:contoso'])), { v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: 'rt-ada-1' })
+      assert.equal(w.refusals.length, 0)
+
+      const verifier = entra.calls[0].form.get('code_verifier') ?? assert.fail('no code verifier was sent')
+      const seen = JSON.stringify([w.posts, w.logs, w.host.calls.filter(call => !call.method.startsWith('secrets.')), w.host.data().storage])
+      for (const leak of ['rt-ada-1', ENTRA_TOKEN, 'c-ada-1', verifier]) assert.ok(!seen.includes(leak), 'a sign-in secret leaked outside orca.secrets')
+    })
+  })
+})
+
+test('deactivate during a Microsoft sign-in closes its port and the next start says it was interrupted', async () => {
+  const host = mockHost(MICROSOFT_HOST)
+  await withFetch(microsoftFetch(fakeEntra()), async () => {
+    let port = 0
+    await withWorker(worker, { host }, async w => {
+      await w.request('orgs.connect', { orgInput: 'contoso', method: 'entra' })
+      port = redirectPort(await signInPage(w))
+      assert.equal(await connectError('127.0.0.1', port), null)
+      const posted = orgsChanged(w.posts).length
+
+      await w.deactivate()
+      assert.equal(await connectError('127.0.0.1', port), 'ECONNREFUSED')
+      await drain()
+      assert.equal(orgsChanged(w.posts).length, posted, 'stopping concludes nothing')
+      assert.deepEqual(host.data().storage['signing-in'], ['contoso'])
+    })
+
+    const next = mockHost({ ...MICROSOFT_HOST, storage: host.data().storage as Record<string, JsonValue> })
+    await withWorker(worker, { host: next }, async w => {
+      const [status] = await w.request('orgs.list', {})
+      assert.equal(status.state, 'disconnected')
+      assert.equal(status.message, 'Sign-in was interrupted. Try again.')
+      assert.equal(status.signInUrl, undefined)
+      assert.equal(Object.keys(next.data().secrets).includes('entra:contoso'), false)
+      assert.deepEqual(next.data().storage['signing-in'], [])
+      assert.equal(await connectError('127.0.0.1', port), 'ECONNREFUSED')
+      assert.equal(w.refusals.length, 0)
+    })
   })
 })
 

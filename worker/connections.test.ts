@@ -2,12 +2,17 @@ import { assert, test } from 'orca/testing'
 import type { BoardsTarget, ConnectFailure, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
+import { entraAuthorizeUrl } from './ado/org'
 import type { AzCliProvider } from './auth/azcli'
-import { accessToken } from './auth/fake-entra'
+import { createPkce, type Timeout } from './auth/entra'
+import { createEntraProvider, ENTRA_SIGN_IN_TIMEOUT_MS } from './auth/entra-provider'
+import { accessToken, CLIENT_ID, entraErrorAnswer, fakeEntra, tokenAnswer } from './auth/fake-entra'
+import type { Listen, Redirect } from './auth/loopback'
 import { basicAuth } from './auth/pat'
 import { createConnections, type Connections, type StorePort } from './connections'
+import { ENTRA } from './messages'
 import { CommandTimeoutError } from './sys/run'
-import { memorySecrets } from './test-support'
+import { drain, memorySecrets } from './test-support'
 
 const HOME = '/home/ada'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
@@ -35,8 +40,15 @@ const JWT_GRACE = jwt({ oid: OID_GRACE, tid: TENANT, upn: 'grace@contoso.com' })
 const JWT_ADA_ELSEWHERE = jwt({ oid: OID_ADA, tid: OTHER_TENANT, upn: 'ada@fabrikam.com' })
 const ENTRA_ADA = accessToken({ oid: OID_ADA, upn: 'ada@contoso.com' })
 const ENTRA_GRACE = accessToken({ oid: OID_GRACE, upn: 'grace@contoso.com' })
+const ENTRA_ADA_RENEWED = jwt({ oid: OID_ADA, tid: TENANT, upn: 'ada@contoso.com', jti: 'renewed' })
+const REFRESH_ADA_1 = 'rt-ada-1'
+const REFRESH_ADA_2 = 'rt-ada-2'
+const CODE_ADA = 'c-ada-1'
+const bytes = (size: number) => Uint8Array.from({ length: size }, (_, at) => (size * 3 + at * 11) % 256)
+const VERIFIER = createPkce(bytes).verifier
 const SECRETS = [
   PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, JWT_ADA, JWT_GRACE, JWT_ADA_ELSEWHERE, ENTRA_ADA, ENTRA_GRACE,
+  ENTRA_ADA_RENEWED, REFRESH_ADA_1, REFRESH_ADA_2, 'rt-grace-1', CODE_ADA, 'c-grace-1', VERIFIER,
   basicAuth(PAT_ADA).slice(6), basicAuth(PAT_GRACE).slice(6)
 ]
 
@@ -47,6 +59,11 @@ const NOT_CONNECTED = 'Connect this organization first.'
 const OTHER_ACCOUNT = 'This org is signed in as a different account.'
 const BAD_PAT = "That token can't be used. Paste it again."
 const TOKEN_FAILED = 'Azure CLI could not get an access token'
+const SIGNED_IN_AS_GRACE = 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.'
+const CANCELLED = 'Sign-in was cancelled.'
+const TIMED_OUT = 'Sign-in timed out. Try again.'
+const STORED_ADA = JSON.stringify({ v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: REFRESH_ADA_1 })
+const STORED_FABRIKAM = JSON.stringify({ v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: 'rt-fabrikam-1' })
 
 const ADA: PinnedAccount = { adoId: 'u1', uniqueName: 'ada@contoso.com', displayName: 'Ada Lovelace', tenantId: TENANT, objectId: null }
 const ADA_OID: PinnedAccount = { ...ADA, objectId: OID_ADA }
@@ -70,6 +87,7 @@ const IDENTITIES = new Map<string, { who: string; data: ConnectionData }>([
   [`Bearer ${JWT_ADA_ELSEWHERE}`, { who: 'ada elsewhere', data: connectionData(ADA) }],
   [`Bearer ${ENTRA_ADA}`, { who: 'ada', data: connectionData(ADA) }],
   [`Bearer ${ENTRA_GRACE}`, { who: 'grace', data: connectionData(GRACE) }],
+  [`Bearer ${ENTRA_ADA_RENEWED}`, { who: 'ada renewed', data: connectionData(ADA) }],
   [basicAuth(PAT_ADA), { who: 'ada', data: connectionData(ADA) }],
   [basicAuth(PAT_GRACE), { who: 'grace', data: connectionData(GRACE) }]
 ])
@@ -215,7 +233,59 @@ function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
   return az
 }
 
-function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Record<string, string>; profiles?: string[] } = {}) {
+function fakeListen(bindError?: Error) {
+  const calls: { state: string; signal: AbortSignal }[] = []
+  const pending: { resolve: (redirect: Redirect) => void; reject: (reason: unknown) => void }[] = []
+  const listen: Listen = async ({ state, signal }) => {
+    calls.push({ state, signal })
+    if (bindError) throw bindError
+    const result = new Promise<Redirect>((resolve, reject) => {
+      pending.push({ resolve, reject })
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    return { redirectUri: 'http://localhost:53682', result }
+  }
+  return {
+    listen,
+    calls,
+    deliver: (redirect: Redirect) => pending.at(-1)?.resolve(redirect),
+    fail: (reason: unknown) => pending.at(-1)?.reject(reason)
+  }
+}
+
+function fakeTimeouts() {
+  const armed: { ms: number; controller: AbortController }[] = []
+  const timeout: Timeout = ms => {
+    const controller = new AbortController()
+    armed.push({ ms, controller })
+    return controller.signal
+  }
+  const fire = (ms: number) => {
+    for (const entry of armed) {
+      if (entry.ms === ms) entry.controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    }
+  }
+  return { timeout, fire }
+}
+
+function adaTokens(refresh = REFRESH_ADA_1): Response {
+  return tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com', refresh })
+}
+
+function renewal(access: string, refresh: string): Response {
+  return json({ token_type: 'Bearer', expires_in: 3600, access_token: access, refresh_token: refresh })
+}
+
+function harness(
+  seed: {
+    orgs?: OrgConfig[]
+    signingIn?: string[]
+    secrets?: Record<string, string>
+    profiles?: string[]
+    settings?: Record<string, unknown>
+    bindError?: Error
+  } = {}
+) {
   const clock = { now: T0 }
   const storage = new Map<string, unknown>()
   if (seed.orgs) storage.set('orgs', seed.orgs)
@@ -232,6 +302,19 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
   const pinnedAzOrgs = (seed.orgs ?? []).filter(cfg => cfg.method === 'azure-cli' && cfg.pinned).map(cfg => cfg.org)
   const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()
+  const entra = fakeEntra()
+  const listener = fakeListen(seed.bindError)
+  const timeouts = fakeTimeouts()
+  const provider = createEntraProvider({
+    secrets,
+    fetch: entra.fetch,
+    settings: () => seed.settings ?? { entraClientId: CLIENT_ID },
+    listen: listener.listen,
+    random: bytes,
+    timeout: timeouts.timeout,
+    now: () => clock.now,
+    log: message => void record(message)
+  })
   const posts: OrgStatus[][] = []
   const failures: ConnectFailure[] = []
   let azInstalled = true
@@ -242,6 +325,7 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     secrets,
     az: async () => (azInstalled ? az.provider : null),
     azProfiles: az.provider,
+    entra: provider,
     fetch: ado.fetch,
     post: orgs => {
       posts.push(record(structuredClone(orgs)))
@@ -262,9 +346,28 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
     secretReads,
     az,
     ado,
+    entra,
+    listener,
+    timeouts,
     posts,
     failures,
     clock,
+    refreshGrants: () => entra.calls.filter(call => call.form.get('grant_type') === 'refresh_token'),
+    async signInUrl(org = 'contoso'): Promise<string> {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        const url = posts.at(-1)?.find(status => status.org === org)?.signInUrl
+        if (url) return url
+        await flush()
+      }
+      return assert.fail(`${org} never posted a sign-in page; last posted ${stateIn(posts.at(-1), org)}`)
+    },
+    async signInWith(answer: Response, redirect: Redirect = { code: CODE_ADA }, org = 'contoso'): Promise<string> {
+      await h.connect({ orgInput: org, method: 'entra' })
+      const url = await h.signInUrl(org)
+      entra.answer('authorization_code', answer)
+      listener.deliver(redirect)
+      return url
+    },
     async unregistered(org = 'contoso') {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
         if (failures.some(failure => failure.org === org)) return
@@ -924,7 +1027,7 @@ test('a rejected PAT on first connect is an error, saves nothing and unregisters
 
 test('connect refuses a sign-in method it does not know without running az', async () => {
   const h = harness()
-  const unknown = 'entra' as ConnectionMethod
+  const unknown = 'device-code' as ConnectionMethod
   await assert.rejects(h.connections.connect({ orgInput: 'contoso', method: unknown }), /^Error: Unknown sign-in method\.$/)
   assert.deepEqual(h.az.calls, [])
   assert.equal(h.stored(), undefined)
@@ -1242,9 +1345,452 @@ test('remove during an az sign-in cancels it and leaves nothing behind', async (
   assert.equal(h.ado.requests.length, 0)
 })
 
+function entraOrg(overrides: Partial<OrgConfig> = {}): OrgConfig {
+  return config({ method: 'entra', pinned: ADA_OID, ...overrides })
+}
+
+function hasSignInUrl(status: OrgStatus | undefined): boolean {
+  return status !== undefined && 'signInUrl' in status
+}
+
+test('connect via Microsoft posts the sign-in page while it waits, then posts connected', async () => {
+  const h = harness()
+  const first = await h.connect({ orgInput: 'https://dev.azure.com/contoso', method: 'entra' })
+  assert.equal(first.state, 'signing-in')
+  assert.equal(first.method, 'entra')
+  assert.deepEqual(first.tokenStore, { kind: 'orca-secrets' })
+
+  const url = new URL(await h.signInUrl())
+  assert.equal(`${url.origin}${url.pathname}`, entraAuthorizeUrl(TENANT))
+  assert.equal(url.searchParams.get('client_id'), CLIENT_ID)
+  assert.equal(url.searchParams.get('login_hint'), null)
+  assert.equal(url.searchParams.get('state'), h.listener.calls[0].state)
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.equal(h.stored()?.[0].pinned, null)
+
+  h.entra.answer('authorization_code', adaTokens())
+  h.listener.deliver({ code: CODE_ADA })
+  await h.until('connected')
+
+  const contoso = h.posts.map(orgs => orgs.find(status => status.org === 'contoso'))
+  assert.deepEqual(contoso.map(status => status?.state), ['signing-in', 'signing-in', 'signing-in', 'connected'])
+  assert.deepEqual(contoso.map(hasSignInUrl), [false, true, false, false])
+  for (const status of contoso) {
+    assert.equal(status?.method, 'entra')
+    assert.deepEqual(status?.tokenStore, { kind: 'orca-secrets' })
+  }
+  assert.equal(h.last()?.account?.uniqueName, 'ada@contoso.com')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.deepEqual(JSON.parse(h.secretStore.get('entra:contoso') ?? 'null'), { v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: REFRESH_ADA_1 })
+
+  await h.connections.http.json(PROJECTS)
+  assert.deepEqual(h.ado.requests.map(request => request.who), ['ada', 'ada'])
+  assert.equal(h.entra.calls.length, 1, 'the sign-in token is reused')
+  assert.equal(h.listener.calls.length, 1)
+})
+
+test('an Entra sign-in for another account is refused before anything is saved', async () => {
+  const h = harness({ orgs: [entraOrg({ boards: BOARDS })], secrets: { 'entra:contoso': STORED_ADA } })
+  await h.signInWith(tokenAnswer({ oid: OID_GRACE, upn: 'grace@contoso.com', refresh: 'rt-grace-1' }), { code: 'c-grace-1' })
+  await h.until('mismatch')
+  assert.equal(h.last()?.message, SIGNED_IN_AS_GRACE)
+  assert.equal(hasSignInUrl(h.last()), false)
+  assert.equal(h.ado.requests.length, 0, 'Azure DevOps is never asked who it is')
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  await h.refusedWithoutCalls(OTHER_ACCOUNT)
+})
+
+test('an Entra id token for another account is named even when the access token cannot be read', async () => {
+  const h = harness({ orgs: [entraOrg()] })
+  const idToken = jwt({ oid: OID_GRACE, tid: TENANT, preferred_username: 'grace@contoso.com' })
+  await h.signInWith(json({ token_type: 'Bearer', expires_in: 3600, access_token: 'opaque', refresh_token: 'rt-grace-1', id_token: idToken }), { code: 'c-grace-1' })
+  await h.until('mismatch')
+  assert.equal(h.last()?.message, SIGNED_IN_AS_GRACE)
+  assert.equal(h.ado.requests.length, 0)
+  assert.equal(h.secretStore.size, 0)
+})
+
+test('a pin without an object id refuses another Entra account once Azure DevOps names it', async () => {
+  const h = harness({ orgs: [entraOrg({ pinned: ADA })] })
+  await h.signInWith(tokenAnswer({ oid: OID_GRACE, upn: 'grace@contoso.com', refresh: 'rt-grace-1' }), { code: 'c-grace-1' })
+  await h.until('mismatch')
+  assert.equal(h.last()?.message, SIGNED_IN_AS_GRACE)
+  assert.deepEqual(h.ado.requests.map(request => request.who), ['grace'])
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.deepEqual(h.stored()?.[0].pinned, ADA)
+})
+
+test('a reconnect asks for the pinned account and still shows the picker', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  const url = new URL(await h.signInWith(adaTokens('rt-ada-2')))
+  assert.equal(url.searchParams.get('login_hint'), 'ada@contoso.com')
+  assert.equal(url.searchParams.get('prompt'), 'select_account')
+  await h.until('connected')
+  assert.equal(JSON.parse(h.secretStore.get('entra:contoso') ?? 'null').refreshToken, REFRESH_ADA_2)
+})
+
+test('a cancelled or timed-out Entra sign-in leaves no listener and no state', async () => {
+  const cancelled = harness()
+  await cancelled.connect({ orgInput: 'contoso', method: 'entra' })
+  await cancelled.signInUrl()
+  const status = record(await cancelled.connections.cancel('contoso'))
+  assert.equal(cancelled.listener.calls[0].signal.aborted, true, 'the listener is told to close')
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, CANCELLED)
+  assert.equal(hasSignInUrl(status), false)
+  assert.equal(hasSignInUrl(cancelled.last()), false)
+  assert.equal(cancelled.secretStore.size, 0)
+  assert.deepEqual(cancelled.storage.get('signing-in'), [])
+  await drain()
+  assert.equal(cancelled.last()?.state, 'disconnected')
+  assert.equal(cancelled.last()?.message, CANCELLED)
+  assert.deepEqual(cancelled.failures, [])
+  assert.equal(cancelled.entra.calls.length, 0)
+
+  const timedOut = harness()
+  await timedOut.connect({ orgInput: 'contoso', method: 'entra' })
+  await timedOut.signInUrl()
+  timedOut.timeouts.fire(ENTRA_SIGN_IN_TIMEOUT_MS)
+  await timedOut.until('disconnected')
+  assert.equal(timedOut.last()?.message, TIMED_OUT)
+  assert.equal(hasSignInUrl(timedOut.last()), false)
+  assert.equal(timedOut.secretStore.size, 0)
+  assert.deepEqual(timedOut.storage.get('signing-in'), [])
+  assert.deepEqual(timedOut.stored()?.map(cfg => cfg.org), ['contoso'], 'a first connect stays registered as signed out')
+  assert.deepEqual(timedOut.failures, [])
+  await timedOut.refusedWithoutCalls(NOT_CONNECTED)
+})
+
+test('cancel and signOut of a Microsoft org settle', async () => {
+  const seeded = { orgs: [entraOrg({ boards: BOARDS })], secrets: { 'entra:contoso': STORED_ADA } }
+
+  const connected = harness(seeded)
+  const unchanged = record(await settled(connected.connections.cancel('contoso')))
+  assert.equal(unchanged.state, 'connected')
+  const signedOut = record(await settled(connected.connections.signOut('contoso')))
+  assert.equal(signedOut.state, 'disconnected')
+  assert.equal(connected.secretStore.has('entra:contoso'), false)
+
+  const cancelling = harness(seeded)
+  await cancelling.connect({ orgInput: 'contoso', method: 'entra' })
+  await cancelling.signInUrl()
+  const cancelled = record(await settled(cancelling.connections.cancel('contoso')))
+  assert.equal(cancelled.message, CANCELLED)
+  assert.equal(cancelling.secretStore.has('entra:contoso'), false)
+  assert.deepEqual(cancelling.storage.get('signing-in'), [])
+
+  const signingOut = harness(seeded)
+  await signingOut.connect({ orgInput: 'contoso', method: 'entra' })
+  await signingOut.signInUrl()
+  const out = record(await settled(signingOut.connections.signOut('contoso')))
+  assert.equal(out.state, 'disconnected')
+  assert.equal(out.message, CANCELLED)
+  assert.equal(signingOut.secretStore.has('entra:contoso'), false)
+  assert.deepEqual(signingOut.stored()?.[0].boards, BOARDS)
+  assert.equal(signingOut.stored()?.[0].pinned, null)
+})
+
+test('abandon leaves the signing-in marker and posts nothing', async () => {
+  const h = harness()
+  await h.connect({ orgInput: 'contoso', method: 'entra' })
+  await h.signInUrl()
+  const posted = h.posts.length
+
+  h.connections.abandon()
+  h.listener.fail(new DOMException('This operation was aborted', 'AbortError'))
+  await drain()
+
+  assert.equal(h.posts.length, posted, 'nothing is posted')
+  assert.deepEqual(h.failures, [])
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  assert.deepEqual(h.stored()?.map(cfg => cfg.org), ['contoso'])
+  assert.equal(hasSignInUrl((await h.connections.list())[0]), false)
+
+  h.restart()
+  const [status] = record(await h.connections.list())
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, INTERRUPTED)
+})
+
+test('abandon leaves an az sign-in marker for the next start too', async () => {
+  const h = harness()
+  h.az.loginGate = deferred()
+  await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  await flush()
+  const posted = h.posts.length
+
+  h.connections.abandon()
+  h.az.loginGate.resolve()
+  await drain()
+
+  assert.equal(h.posts.length, posted)
+  assert.deepEqual(h.failures, [])
+  assert.deepEqual(h.storage.get('signing-in'), ['contoso'])
+  assert.deepEqual(h.stored()?.map(cfg => cfg.org), ['contoso'])
+})
+
+test('connect via Microsoft without an app ID explains where to set it and registers nothing', async () => {
+  const h = harness({ settings: {} })
+  const status = await h.connect({ orgInput: 'contoso', method: 'entra' })
+  assert.equal(status.state, 'error')
+  assert.equal(status.message, ENTRA.noClientId)
+  assert.equal(status.method, 'entra')
+  assert.deepEqual(await h.connections.list(), [])
+  assert.equal(h.stored(), undefined)
+  assert.equal(h.posts.length, 0)
+  assert.equal(h.listener.calls.length, 0)
+  assert.equal(h.secretStore.size, 0)
+})
+
+test('a first Microsoft connect that Entra refuses explains why and registers nothing', async () => {
+  const h = harness()
+  await h.signInWith(adaTokens(), { error: 'consent_required', errorCode: null })
+  await h.unregistered()
+  assert.deepEqual(h.failures, [{ org: 'contoso', url: 'https://dev.azure.com/contoso', method: 'entra', message: ENTRA.consent }])
+  assert.deepEqual(h.stored(), [])
+  assert.deepEqual(h.posts.at(-1), [])
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.equal(h.secretStore.size, 0)
+  assert.equal(h.entra.calls.length, 0, 'no code is redeemed')
+  assert.equal(h.ado.requests.length, 0)
+})
+
+test('a Microsoft sign-in that cannot start a listener says so and registers nothing', async () => {
+  const h = harness({ bindError: new Error('EADDRINUSE') })
+  await h.connect({ orgInput: 'contoso', method: 'entra' })
+  await h.unregistered()
+  assert.deepEqual(h.failures, [{ org: 'contoso', url: 'https://dev.azure.com/contoso', method: 'entra', message: ENTRA.listenFailed }])
+  assert.deepEqual(h.stored(), [])
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.equal(h.secretStore.size, 0)
+})
+
+test('an expired access token is renewed silently from the stored refresh token, also after a restart', async () => {
+  const h = harness()
+  await h.signInWith(adaTokens())
+  await h.until('connected')
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.refreshGrants().length, 0)
+
+  h.clock.now = T0 + HOUR - 5 * 60_000 - 1
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.refreshGrants().length, 0, 'the token is kept until five minutes before it expires')
+
+  h.clock.now += 1
+  h.entra.answer('refresh_token', renewal(ENTRA_ADA_RENEWED, REFRESH_ADA_2))
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.refreshGrants().length, 1)
+  assert.equal(h.refreshGrants()[0].form.get('refresh_token'), REFRESH_ADA_1)
+  assert.deepEqual(h.ado.requests.map(request => request.who), ['ada', 'ada', 'ada', 'ada renewed'])
+  assert.equal(h.listener.calls.length, 1, 'no new browser sign-in')
+  assert.equal(h.last()?.state, 'connected')
+  assert.equal(JSON.parse(h.secretStore.get('entra:contoso') ?? 'null').refreshToken, REFRESH_ADA_2, 'the rotated token is kept')
+
+  h.restart()
+  h.clock.now += HOUR
+  h.entra.answer('refresh_token', adaTokens('rt-ada-3'))
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.refreshGrants().length, 2)
+  assert.equal(h.refreshGrants()[1].form.get('refresh_token'), REFRESH_ADA_2)
+  assert.equal(h.ado.requests.at(-1)?.who, 'ada')
+  assert.equal(h.listener.calls.length, 1, 'a restart never opens a listener')
+})
+
+test('concurrent requests share one Entra refresh and invalid_grant expires the org once', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  h.entra.answer('refresh_token', adaTokens(REFRESH_ADA_2))
+  await Promise.all([1, 2, 3].map(() => h.connections.http.json(PROJECTS)))
+  assert.equal(h.refreshGrants().length, 1)
+
+  h.clock.now += HOUR
+  h.entra.answer('refresh_token', entraErrorAnswer({ error: 'invalid_grant', codes: [700082] }))
+  const errors = await Promise.all([1, 2, 3].map(() => h.failure(h.connections.http.json(PROJECTS))))
+  for (const error of errors) assert.equal(error.message, EXPIRED)
+  assert.equal(h.refreshGrants().length, 2)
+  assert.equal(h.last()?.state, 'expired')
+  assert.equal(h.last()?.message, EXPIRED)
+  assert.equal(h.posts.filter(orgs => orgs[0].state === 'expired').length, 1)
+
+  await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(h.refreshGrants().length, 2, 'an expired org does not ask Entra again')
+})
+
+test('a refresh refused for consent expires the org once and makes no further token calls', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  h.entra.answer('refresh_token', entraErrorAnswer({ error: 'invalid_grant', codes: [65001] }))
+  const error = await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(error.message, EXPIRED)
+  assert.equal(h.last()?.state, 'expired')
+  assert.equal(h.last()?.message, EXPIRED)
+  assert.equal(h.posts.filter(orgs => orgs[0].state === 'expired').length, 1)
+
+  const sent = h.entra.calls.length
+  for (let request = 0; request < 2; request++) {
+    assert.equal((await h.failure(h.connections.http.json(PROJECTS))).message, EXPIRED)
+  }
+  assert.equal(h.entra.calls.length, sent, 'no further token calls')
+  assert.equal(h.ado.requests.length, 0)
+  assert.equal(h.posts.filter(orgs => orgs[0].state === 'expired').length, 1)
+})
+
+test('an unreachable or malformed Entra refresh is an error that waits a minute before asking again', async () => {
+  const cases: [Error | Response, string][] = [[new Error('network down'), ENTRA.unreachable], [json({ nothing: 'useful' }), ENTRA.malformed]]
+  for (const [reply, message] of cases) {
+    const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+    h.entra.answer('refresh_token', reply)
+    const error = await h.failure(h.connections.http.json(PROJECTS))
+    assert.equal(error.message, message)
+    assert.equal(h.last()?.state, 'error')
+    assert.equal(h.last()?.message, message)
+
+    const sent = h.entra.calls.length
+    h.clock.now += 60_000 - 1
+    await h.failure(h.connections.http.json(PROJECTS))
+    assert.equal(h.entra.calls.length, sent, 'the cool-down holds')
+
+    h.clock.now += 1
+    h.entra.answer('refresh_token', adaTokens(REFRESH_ADA_2))
+    await h.connections.http.json(PROJECTS)
+    assert.equal(h.last()?.state, 'connected', 'Entra answering again clears the error')
+  }
+})
+
+test('a refreshed Entra token for another object id is refused as a mismatch and its secret deleted', async () => {
+  for (const idToken of [true, false]) {
+    const h = harness({ orgs: [entraOrg({ boards: BOARDS })], secrets: { 'entra:contoso': STORED_ADA } })
+    h.entra.answer('refresh_token', tokenAnswer({ oid: OID_GRACE, upn: 'grace@contoso.com', refresh: 'rt-grace-1', idToken }))
+    const error = await h.failure(h.connections.http.json(PROJECTS))
+    assert.equal(error.message, OTHER_ACCOUNT, `id token ${idToken}`)
+    assert.equal(h.ado.requests.length, 0, 'the token is never sent')
+    assert.equal(h.last()?.state, 'mismatch')
+    assert.equal(h.last()?.message, SIGNED_IN_AS_GRACE)
+    assert.equal(h.secretStore.has('entra:contoso'), false, 'the secret that issued it is deleted')
+    assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+    assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+    await h.refusedWithoutCalls(OTHER_ACCOUNT)
+  }
+})
+
+test('a refresh without an id token is checked by the access token alone and stays connected', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  h.entra.answer('refresh_token', tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com', idToken: false }))
+  await h.connections.http.json(PROJECTS)
+  assert.deepEqual(h.ado.requests.map(request => request.who), ['ada'])
+  assert.equal((await h.connections.list())[0].state, 'connected')
+  assert.equal(h.secretStore.has('entra:contoso'), true)
+  assert.equal(JSON.parse(h.secretStore.get('entra:contoso') ?? 'null').refreshToken, REFRESH_ADA_1, 'the unrotated token stays')
+  assert.equal(h.posts.length, 0)
+})
+
+test('signOut deletes only that org\'s Entra secret and keeps its settings', async () => {
+  const h = harness({
+    orgs: [
+      entraOrg({ boards: BOARDS, codeProjects: CODE_PROJECTS }),
+      entraOrg({ org: 'fabrikam', boards: BOARDS, codeProjects: CODE_PROJECTS })
+    ],
+    secrets: { 'entra:contoso': STORED_ADA, 'entra:fabrikam': STORED_FABRIKAM }
+  })
+  const status = record(await h.connections.signOut('contoso'))
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.account, null)
+  assert.deepEqual(status.boards, BOARDS)
+  assert.deepEqual(status.codeProjects, CODE_PROJECTS)
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.equal(h.secretStore.get('entra:fabrikam'), STORED_FABRIKAM)
+  assert.deepEqual(h.stored()?.map(cfg => [cfg.org, cfg.method, cfg.pinned?.adoId ?? null]), [['contoso', 'entra', null], ['fabrikam', 'entra', 'u1']])
+  assert.deepEqual(h.stored()?.map(cfg => cfg.boards), [BOARDS, BOARDS])
+  assert.deepEqual(h.stored()?.map(cfg => cfg.codeProjects), [CODE_PROJECTS, CODE_PROJECTS])
+  assert.deepEqual(h.posts.at(-1)?.map(item => item.state), ['disconnected', 'connected'])
+  assert.deepEqual(h.az.calls, [])
+})
+
+test('remove deletes a Microsoft org and its secret only', async () => {
+  const h = harness({
+    orgs: [entraOrg(), entraOrg({ org: 'fabrikam' })],
+    secrets: { 'entra:contoso': STORED_ADA, 'entra:fabrikam': STORED_FABRIKAM }
+  })
+  await h.connections.remove('contoso')
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.equal(h.secretStore.has('entra:fabrikam'), true)
+  assert.deepEqual(h.posts.at(-1)?.map(status => status.org), ['fabrikam'])
+})
+
+test('an Entra org whose secret is gone reports signed out', async () => {
+  const h = harness({ orgs: [entraOrg({ boards: BOARDS })], secrets: { 'entra:contoso': STORED_ADA } })
+  assert.equal((await h.connections.list())[0].state, 'connected')
+  h.secretStore.delete('entra:contoso')
+  const [live] = record(await h.connections.list())
+  assert.equal(live.state, 'disconnected')
+  assert.equal(live.message, 'Signed out.')
+  await h.refusedWithoutCalls(NOT_CONNECTED)
+  assert.equal(h.entra.calls.length, 0)
+
+  h.restart()
+  const [status] = record(await h.connections.list())
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, 'Signed out.')
+  assert.deepEqual(status.account, ADA_OID)
+  assert.deepEqual(status.boards, BOARDS)
+  assert.deepEqual(status.tokenStore, { kind: 'orca-secrets' })
+})
+
+test('an Entra org with an unreadable secret reports signed out', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': '{"v":2}' } })
+  const [status] = await h.connections.list()
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, 'Signed out.')
+})
+
+test('switching an org from Azure CLI to Microsoft wipes the profile and keeps the pin', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA_OID, boards: BOARDS })] })
+  assert.equal(h.az.profiles.has('contoso'), true)
+  const url = new URL(await h.signInWith(adaTokens()))
+  assert.deepEqual(h.az.calls, ['signOut contoso'])
+  assert.equal(h.az.profiles.has('contoso'), false)
+  assert.deepEqual(h.last()?.account, ADA_OID, 'the pin survives the switch')
+  assert.equal(url.searchParams.get('login_hint'), 'ada@contoso.com')
+
+  await h.until('connected')
+  assert.equal(h.stored()?.[0].method, 'entra')
+  assert.deepEqual(h.stored()?.[0].pinned, ADA_OID)
+  assert.deepEqual(h.stored()?.[0].boards, BOARDS)
+  assert.deepEqual(h.az.calls, ['signOut contoso'], 'az is never used again')
+})
+
+test('switching an org from Microsoft to a PAT forgets the Entra secret', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  await h.connect({ orgInput: 'contoso', method: 'pat', pat: PAT_ADA })
+  assert.equal(h.secretStore.has('entra:contoso'), false)
+  assert.equal(h.secretStore.get('pat:contoso'), PAT_ADA)
+  assert.equal(h.stored()?.[0].method, 'pat')
+})
+
+test('resetInterrupted wipes an Entra sign-in left by a previous worker', async () => {
+  const h = harness({
+    orgs: [entraOrg()],
+    signingIn: ['contoso', 'ghost'],
+    secrets: { 'entra:contoso': STORED_ADA, 'entra:ghost': STORED_FABRIKAM, 'entra:fabrikam': STORED_FABRIKAM }
+  })
+  await h.connections.resetInterrupted()
+  const [status] = record(await h.connections.list())
+  assert.equal(status.state, 'disconnected')
+  assert.equal(status.message, INTERRUPTED)
+  assert.equal(h.secretStore.has('entra:contoso'), false, 'the half-finished sign-in keeps nothing')
+  assert.equal(h.secretStore.has('entra:ghost'), false, 'an org that no longer exists is wiped for every method')
+  assert.equal(h.secretStore.has('entra:fabrikam'), true)
+  assert.deepEqual(h.storage.get('signing-in'), [])
+  assert.deepEqual(h.az.calls, ['signOut ghost'])
+})
+
 test('no secrets in posts or logs', () => {
   assert.ok(observed.length > 50, 'the tests above recorded what the service posted, stored, returned and threw')
   const text = JSON.stringify(observed, (_key, value) => (value instanceof Error ? { message: value.message } : value))
   SECRETS.forEach((secret, index) => assert.ok(!text.includes(secret), `secret #${index} leaked`))
+  assert.ok(text.includes('/oauth2/v2.0/authorize?'), 'the sign-in pages were recorded')
   assert.ok(!text.includes('Bearer') && !text.includes('Basic '), 'an Authorization header leaked')
 })

@@ -4,6 +4,8 @@ import * as os from 'node:os'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
+import { createEntraProvider } from './auth/entra-provider'
+import { closeAllListeners, listenForRedirect } from './auth/loopback'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
@@ -30,6 +32,7 @@ import { createReviewActions } from './reviews/actions'
 import { checkoutPr } from './reviews/checkout'
 import { registerReviewHandlers } from './reviews/handlers'
 import { createReviews } from './reviews/service'
+import { watchSettings } from './settings-watcher'
 import { createChannelStore } from './share/channels'
 import { channelDestination, copyDestination, reviewersDestination } from './share/destinations'
 import { registerShareHandlers } from './share/handlers'
@@ -50,9 +53,12 @@ import { registerWorkspaceHandlers } from './workspace/handlers'
 const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
 
 let stopPolling = () => {}
+let stopSignIns = () => {}
 
 export function deactivate(): Promise<void> {
   stopPolling()
+  stopSignIns()
+  closeAllListeners()
   return stopAllCommands(SHUTDOWN)
 }
 
@@ -63,6 +69,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const log = (message: string) => orca.log(message)
   const prSettings = await watchPrSettings(orca.settings, log)
   const pipelineSettings = await watchPipelineSettings(orca.settings, log)
+  const entraSettings = await watchSettings(orca.settings, log)
 
   const store: StorePort = {
     get: async <T,>(key: string) => (await orca.storage.get(key)) as T | null,
@@ -78,6 +85,16 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       return azPath ? createAzCliProvider({ azPath, run: runCommand, home, fs }) : null
     },
     azProfiles: createAzProfiles({ home, fs }),
+    entra: createEntraProvider({
+      secrets: orca.secrets,
+      fetch: globalThis.fetch,
+      settings: entraSettings,
+      listen: listenForRedirect,
+      random: size => crypto.getRandomValues(new Uint8Array(size)),
+      timeout: ms => AbortSignal.timeout(ms),
+      now: Date.now,
+      log
+    }),
     fetch: globalThis.fetch,
     post: orgs => {
       orca.panels.post('orgs.changed', { orgs })
@@ -183,6 +200,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     pipelines.dispose()
     runViews.dispose()
   }
+  stopSignIns = () => connections.abandon()
   await connections.resetInterrupted()
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)

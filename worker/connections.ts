@@ -3,6 +3,8 @@ import { getConnectionData } from './ado/core'
 import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest } from './ado/http'
 import { discoverTenant, parseOrgInput } from './ado/org'
 import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
+import { EntraError, type EntraTokens } from './auth/entra'
+import { EntraTimeout, NoEntraSession, type EntraProvider, type EntraSignedIn } from './auth/entra-provider'
 import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
 import { NOT_CONNECTED } from './messages'
@@ -22,6 +24,7 @@ export interface Connections {
   update(org: string, patch: Partial<Pick<OrgConfig, 'boards' | 'codeProjects'>>): Promise<OrgStatus>
   http: AdoHttp
   resetInterrupted(): Promise<void>
+  abandon(): void
 }
 
 export interface ConnectionsDeps {
@@ -29,6 +32,7 @@ export interface ConnectionsDeps {
   secrets: SecretsPort
   az: () => Promise<AzCliProvider | null>
   azProfiles: AzProfiles
+  entra: EntraProvider
   fetch: typeof fetch
   post: (orgs: OrgStatus[]) => void
   connectFailed: (failure: ConnectFailure) => void
@@ -66,7 +70,7 @@ const MESSAGES = {
 
 type Transient = { state: Exclude<OrgState, 'connected'>; message?: string }
 type Credential = { header: string; expiresAt: number; objectId: string | null }
-type Attempt = { controller: AbortController; registered: boolean }
+type Attempt = { controller: AbortController; registered: boolean; signInUrl: string | null }
 
 class NoCredentialError extends Error {}
 class SignInNeeded extends Error {}
@@ -128,6 +132,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   function statusOf(cfg: OrgConfig, hasCredential: boolean, override?: Transient): OrgStatus {
     const signedOut: Transient | undefined = cfg.pinned && !hasCredential ? { state: 'disconnected', message: MESSAGES.signedOut } : undefined
     const current = override ?? transient.get(cfg.org) ?? signedOut
+    const signInUrl = current?.state === 'signing-in' ? attempts.get(cfg.org)?.signInUrl : null
     return {
       org: cfg.org,
       url: cfg.url,
@@ -135,6 +140,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       state: current?.state ?? (cfg.pinned ? 'connected' : 'disconnected'),
       account: cfg.pinned,
       ...(current?.message ? { message: current.message } : {}),
+      ...(signInUrl ? { signInUrl } : {}),
       tokenStore: tokenStoreOf(cfg),
       boards: cfg.boards,
       codeProjects: cfg.codeProjects
@@ -147,6 +153,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         return { kind: 'orca-secrets' }
       case 'azure-cli':
         return { kind: 'az-profile', path: cfg.org ? deps.azProfiles.profileDir(cfg.org) : '' }
+      case 'entra':
+        return { kind: 'orca-secrets' }
       default:
         return unknownMethod(cfg.method)
     }
@@ -159,6 +167,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
           return (await deps.secrets.get(patKey(cfg.org))) !== null
         case 'azure-cli':
           return await deps.azProfiles.hasProfile(cfg.org)
+        case 'entra':
+          return await deps.entra.hasSession(cfg.org)
         default:
           return unknownMethod(cfg.method)
       }
@@ -222,7 +232,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
 
   function startAttempt(org: string, registered: boolean): Attempt {
     cancelAttempt(org)
-    const attempt = { controller: new AbortController(), registered }
+    const attempt = { controller: new AbortController(), registered, signInUrl: null }
     attempts.set(org, attempt)
     return attempt
   }
@@ -246,6 +256,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
           return pat.forget(org)
         case 'azure-cli':
           return deps.azProfiles.signOut(org)
+        case 'entra':
+          return deps.entra.forget(org)
         default:
           return unknownMethod(method)
       }
@@ -273,6 +285,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         return acquirePat(cfg)
       case 'azure-cli':
         return acquireAz(cfg)
+      case 'entra':
+        return acquireEntra(cfg)
       default:
         return unknownMethod(cfg.method)
     }
@@ -302,12 +316,36 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return azCredential(cfg, issued)
   }
 
+  async function acquireEntra(cfg: OrgConfig): Promise<Credential> {
+    if (!(await deps.entra.hasSession(cfg.org))) throw new NoCredentialError()
+    let tokens: EntraTokens
+    try {
+      tokens = await serial(cfg.org, () => deps.entra.getToken(cfg.org))
+    } catch (error) {
+      if (error instanceof NoEntraSession) throw new NoCredentialError()
+      throw refusesRenewal(error) ? new SignInNeeded() : new TokenUnavailable(messageOf(error))
+    }
+    return entraCredential(cfg, tokens)
+  }
+
   function azCredential(cfg: OrgConfig, issued: { token: string; expiresAt: number }): Credential {
-    const claims = decodeTokenClaims(issued.token)
+    return bearerCredential(cfg, issued.token, issued.expiresAt, null)
+  }
+
+  function entraCredential(cfg: OrgConfig, tokens: EntraTokens): Credential {
+    const pinnedObjectId = cfg.pinned?.objectId
+    if (pinnedObjectId && tokens.objectId !== null && tokens.objectId !== pinnedObjectId) {
+      throw new OtherAccount(tokens.username ?? MESSAGES.anotherAccount)
+    }
+    return bearerCredential(cfg, tokens.accessToken, tokens.expiresAt, tokens.objectId)
+  }
+
+  function bearerCredential(cfg: OrgConfig, token: string, expiresAt: number, objectId: string | null): Credential {
+    const claims = decodeTokenClaims(token)
     if (cfg.pinned && !tokenMatchesPin(cfg.pinned, cfg.tenantId, claims)) {
       throw new OtherAccount(claims?.upn ?? claims?.preferredUsername ?? MESSAGES.anotherAccount)
     }
-    return { header: `Bearer ${issued.token}`, expiresAt: issued.expiresAt, objectId: claims?.oid ?? null }
+    return { header: `Bearer ${token}`, expiresAt, objectId: objectId ?? claims?.oid ?? null }
   }
 
   function credentialFor(cfg: OrgConfig): Promise<Credential> {
@@ -479,6 +517,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         return Promise.resolve()
       case 'azure-cli':
         return serial(cfg.org, () => deps.azProfiles.signOut(cfg.org))
+      case 'entra':
+        return serial(cfg.org, () => deps.entra.forget(cfg.org))
       default:
         return unknownMethod(cfg.method)
     }
@@ -618,6 +658,38 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     return statusFor(cfg)
   }
 
+  async function connectEntra(parsed: { org: string; url: string }): Promise<OrgStatus> {
+    const problem = deps.entra.configProblem()
+    if (problem) return draftError(parsed, 'entra', problem)
+    const tenantId = await discoverTenant(parsed.org, deps.fetch)
+    const { cfg, attempt } = await begin(parsed, 'entra', tenantId)
+    if (!attempt) return statusFor(cfg)
+    const { org } = cfg
+    let signedIn!: EntraSignedIn
+    void signIn(
+      cfg,
+      attempt,
+      async signal => {
+        const session = await deps.entra.begin(org, cfg.tenantId, { loginHint: cfg.pinned?.uniqueName ?? null, signal })
+        if (isCurrent(org, attempt)) {
+          attempt.signInUrl = session.url
+          await publish()
+        }
+        try {
+          signedIn = await session.tokens.catch((error: unknown) => {
+            throw error instanceof EntraTimeout ? new SignInTimedOut() : error
+          })
+        } finally {
+          attempt.signInUrl = null
+          if (isCurrent(org, attempt)) await publish()
+        }
+        return entraCredential(cfg, signedIn)
+      },
+      () => deps.entra.save(org, signedIn)
+    ).catch(() => {})
+    return statusFor(cfg)
+  }
+
   return {
     async list() {
       await load()
@@ -634,6 +706,8 @@ export function createConnections(deps: ConnectionsDeps): Connections {
           return connectPat(parsed, input.pat)
         case 'azure-cli':
           return connectAz(parsed)
+        case 'entra':
+          return connectEntra(parsed)
         default:
           return unknownMethod(method)
       }
@@ -690,12 +764,16 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       await load()
       for (const org of [...signingIn].filter(org => !attempts.has(org))) {
         const cfg = find(org)
-        const wiped = await wipeCredentials(org, cfg ? [cfg.method] : ['azure-cli', 'pat'])
+        const wiped = await wipeCredentials(org, cfg ? [cfg.method] : ['azure-cli', 'pat', 'entra'])
         if (wiped && cfg && !attempts.has(org)) {
           setTransient(org, { state: 'disconnected', message: MESSAGES.interrupted })
           await publish()
         }
       }
+    },
+
+    abandon() {
+      attempts.clear()
     }
   }
 }
@@ -720,6 +798,10 @@ function failedSignIn(error: unknown, pinned: PinnedAccount | null): Transient {
 
 function messageOf(error: unknown): string {
   return error instanceof Error && error.message ? error.message : MESSAGES.signInFailed
+}
+
+function refusesRenewal(error: unknown): boolean {
+  return error instanceof EntraError && error.kind !== 'unreachable' && error.kind !== 'malformed'
 }
 
 function needsSignIn(error: unknown): boolean {

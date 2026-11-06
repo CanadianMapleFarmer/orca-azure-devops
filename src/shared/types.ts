@@ -1,4 +1,4 @@
-export type ConnectionMethod = 'azure-cli' | 'pat'
+export type ConnectionMethod = 'azure-cli' | 'pat' | 'entra'
 export interface PinnedAccount { adoId: string; uniqueName: string; displayName: string; tenantId: string | null; objectId: string | null }
 export interface BoardsTarget { projectId: string; projectName: string; teamId: string; teamName: string }
 export interface OrgConfig {
@@ -15,6 +15,7 @@ export interface OrgStatus {
   org: string; url: string; method: ConnectionMethod; state: OrgState
   account: PinnedAccount | null
   message?: string                 // user-facing, never contains secrets
+  signInUrl?: string
   tokenStore: { kind: 'orca-secrets' } | { kind: 'az-profile'; path: string }
   boards: BoardsTarget | null; codeProjects: OrgConfig['codeProjects']
 }
