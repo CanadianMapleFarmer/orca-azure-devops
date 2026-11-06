@@ -169,6 +169,22 @@ export const MALFORMED = {
   wiki: 'Azure DevOps returned an unexpected wiki response.'
 } as const
 
+export const ENTRA = {
+  browserCancelled: 'Sign-in was cancelled in the browser.',
+  consent: "Your organization hasn't approved this app yet. Ask an admin to grant consent (see the README's admin guide).",
+  appNotFound: "Microsoft can't find this app for your organization. Check the app (client) ID, or ask an admin to allow the app in your tenant.",
+  redirect: "The app registration doesn't allow this sign-in. Ask an admin to add http://localhost under Mobile and desktop applications.",
+  publicClient: "The app registration lists http://localhost under Web or Single-page application, so Microsoft treats this sign-in as a web app. Ask an admin to move it to Mobile and desktop applications (see the README's admin guide).",
+  apiPermission: "The app registration doesn't include the Azure DevOps permission. Ask an admin to add it (see the README's admin guide).",
+  wrongDirectory: "That account isn't in this organization's directory. Sign in again and pick your work account.",
+  unreachable: "Couldn't reach Microsoft sign-in.",
+  malformed: 'Microsoft sign-in returned an unexpected response.'
+} as const
+
+export function entraFailed(code: string | null): string {
+  return code ? `Microsoft sign-in failed (${code}).` : 'Microsoft sign-in failed.'
+}
+
 export function diffCut(lines: number): string {
   return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
 }

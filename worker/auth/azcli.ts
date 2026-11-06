@@ -1,8 +1,8 @@
 import * as path from 'node:path'
-import { isValidOrgName } from '../ado/org'
+import { ADO_RESOURCE, isValidOrgName } from '../ado/org'
 import type { RunCommand } from '../sys/run'
 
-export const ADO_RESOURCE = '499b84ac-1321-427f-aa17-267ca6975798'
+export { ADO_RESOURCE }
 export const NOT_SIGNED_IN = 'Not signed in.'
 
 const PROFILE_ROOT = ['.orca-azure-devops', 'az']

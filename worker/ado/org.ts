@@ -3,6 +3,9 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALL_ZERO_TENANT = '00000000-0000-0000-0000-000000000000'
 const LEGACY_HOST_SUFFIX = '.visualstudio.com'
 const DISCOVERY_TIMEOUT_MS = 10_000
+const ENTRA_HOST = 'https://login.microsoftonline.com'
+
+export const ADO_RESOURCE = '499b84ac-1321-427f-aa17-267ca6975798'
 
 export function isValidOrgName(name: string): boolean {
   return ORG_NAME.test(name)
@@ -24,6 +27,14 @@ export function orgVsspsUrl(org: string): string {
 
 export function orgSearchUrl(org: string): string {
   return `https://almsearch.dev.azure.com/${encodeURIComponent(org)}`
+}
+
+export function entraAuthorizeUrl(authority: string): string {
+  return `${ENTRA_HOST}/${encodeURIComponent(authority)}/oauth2/v2.0/authorize`
+}
+
+export function entraTokenUrl(authority: string): string {
+  return `${ENTRA_HOST}/${encodeURIComponent(authority)}/oauth2/v2.0/token`
 }
 
 function orgFromUrl(text: string): string | null {

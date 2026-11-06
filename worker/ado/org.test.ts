@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { discoverTenant, isValidOrgName, orgSearchUrl, orgVsspsUrl, parseOrgInput } from './org'
+import { discoverTenant, entraAuthorizeUrl, entraTokenUrl, isValidOrgName, orgSearchUrl, orgVsspsUrl, parseOrgInput } from './org'
 
 test('isValidOrgName accepts lower-case names up to 50 characters and nothing else', () => {
   for (const name of ['contoso', 'a', '0abc', 'fab-rikam', 'a'.repeat(50)]) assert.equal(isValidOrgName(name), true, name)
@@ -46,6 +46,15 @@ test('discoverTenant asks the vssps host from orgVsspsUrl', async () => {
 test('orgSearchUrl encodes the org', () => {
   assert.equal(orgSearchUrl('contoso'), 'https://almsearch.dev.azure.com/contoso')
   assert.equal(orgSearchUrl('a/b?c'), 'https://almsearch.dev.azure.com/a%2Fb%3Fc')
+})
+
+test('entra URLs encode the authority', () => {
+  for (const authority of ['contoso.onmicrosoft.com', '0f0e0d0c-0b0a-4908-8706-050403020100', 'organizations']) {
+    assert.equal(entraAuthorizeUrl(authority), `https://login.microsoftonline.com/${authority}/oauth2/v2.0/authorize`)
+    assert.equal(entraTokenUrl(authority), `https://login.microsoftonline.com/${authority}/oauth2/v2.0/token`)
+  }
+  assert.equal(entraAuthorizeUrl('a/../b?c#d'), 'https://login.microsoftonline.com/a%2F..%2Fb%3Fc%23d/oauth2/v2.0/authorize')
+  assert.equal(entraTokenUrl('a/../b?c#d'), 'https://login.microsoftonline.com/a%2F..%2Fb%3Fc%23d/oauth2/v2.0/token')
 })
 
 test('discoverTenant returns null when the header is missing', async () => {
