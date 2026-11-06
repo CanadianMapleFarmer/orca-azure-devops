@@ -4,23 +4,25 @@ Azure DevOps boards, pull requests, pipelines and wikis inside [Orca](https://gi
 
 **Status: under construction.**
 
-| Works now | Coming |
-| --- | --- |
-| Connecting any number of Azure DevOps organisations | PR reviews |
-| Pinning each organisation to one account | Wiki |
-| Choosing each org's boards project, team and code projects | |
-| An always-on worker and an `ADO` status bar item | |
-| A Work tab with your items, grouped by board column | |
-| A full-tab team board with drag-and-drop | |
-| Starting a workspace or an agent from a work item | |
-| A PRs tab with your pull requests in release sets, plus Approve all and Auto-complete all | |
-| Sharing pull requests to the clipboard, a Teams channel, a Teams chat and reviewers | |
-| A Pipelines tab with your runs, their stages and the approvals waiting on them | |
-| A full-tab run view with a live log tail, search, errors only and an error summary | |
-| Approving or rejecting an environment approval, rerunning a failed stage and cancelling a run | |
-| Sharing an approval to the clipboard, a Teams channel, a Teams chat or email | |
-| Desktop notifications for failed runs, watched runs and approvals | |
-| `ADO · N failed · N approvals · N to review` on the status bar | |
+| Works now |
+| --- |
+| Connecting any number of Azure DevOps organisations |
+| Pinning each organisation to one account |
+| Choosing each org's boards project, team and code projects |
+| An always-on worker and an `ADO` status bar item |
+| A Work tab with your items, grouped by board column |
+| A full-tab team board with drag-and-drop |
+| Starting a workspace or an agent from a work item |
+| A PRs tab with your pull requests in release sets, plus Approve all and Auto-complete all |
+| Sharing pull requests to the clipboard, a Teams channel, a Teams chat and reviewers |
+| PR reviews: the description, reviewers, votes, numbered file diffs, comment threads and Check out in Orca |
+| A Pipelines tab with your runs, their stages and the approvals waiting on them |
+| A full-tab run view with a live log tail, search, errors only and an error summary |
+| Approving or rejecting an environment approval, rerunning a failed stage and cancelling a run |
+| Sharing an approval to the clipboard, a Teams channel, a Teams chat or email |
+| Desktop notifications for failed runs, watched runs and approvals |
+| Wiki: a page tree, search and rendered pages, with Edit in Orca and Publish that handles conflicts |
+| `ADO · N failed · N approvals · N to review` on the status bar |
 
 ## Requirements
 
@@ -49,11 +51,12 @@ What exists so far is expected to work with:
 - **Project and team: Read** (`vso.project`) for the project and team lists.
 - **Work Items: Read & write** (`vso.work_write`) for the Work tab and board, moves, comments and links.
 - **Code: Read** (`vso.code`) for pull request chips, the PRs tab and linking a pull request. Without it, chips are off for that organisation and the Work and PRs tabs say so.
-- **Code: Read & write** (`vso.code_write`) for Approve all, Auto-complete all and adding reviewers.
+- **Code: Read & write** (`vso.code_write`) for Approve all, Auto-complete all and adding reviewers. It also covers the votes and comments in a pull request review.
 - **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message, email or add as reviewers.
 - **Build: Read & execute** (`vso.build_execute`) for the Pipelines tab and the run tab: runs, logs, rerun, cancel and approvals. Without Build access the tab says so and pauses for 10 minutes. Approvals may need a scope this list doesn't name yet. Without access to them the runs still load, and the tab says Needs me may be incomplete.
+- **Wiki: Read & write** (`vso.wiki_write`) for the Wiki tab: reading pages and publishing edits. Search may need a further scope this list doesn't name yet.
 
-The identity check that pins your account hasn't been confirmed against a minimal PAT yet, and the Boards, pull request, people-search and Pipelines scopes haven't been checked live, so this list may change. More scopes will be listed here as features land.
+The identity check that pins your account hasn't been confirmed against a minimal PAT yet, and the Boards, pull request, review, people-search, Pipelines and Wiki scopes haven't been checked live, so this list may change. More scopes will be listed here as features land.
 
 ## The Work tab
 
@@ -91,7 +94,7 @@ These use the workspace and agent permissions Orca asks you to approve.
 
 ## The PRs tab
 
-Open the Azure DevOps panel and choose **PRs**. It lists the pull requests you created in the organisation's code projects, grouped into release sets, and the ones waiting for your review.
+Open the Azure DevOps panel and choose **PRs**. It lists the pull requests you created in the organisation's code projects, grouped into release sets, and the ones waiting for your review or that you have already voted on.
 
 ### Release sets
 
@@ -129,7 +132,11 @@ Pull requests in a set often share one source branch. With "delete the source br
 
 ### To review
 
-Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. Click a row to open it in Azure DevOps. The count shows on the status bar (see The status bar).
+Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. The count shows on the status bar (see The status bar).
+
+**Reviewed by you**, inside the same fold, lists the active pull requests you have voted on, under the same rules. Each row shows your vote. It holds up to 50, and it isn't part of the count. The lists refresh after you vote.
+
+Click a row in either list to open the review in the tab (see Reviewing a pull request).
 
 ## Sharing
 
@@ -181,6 +188,81 @@ On Linux you need `wl-clipboard` (Wayland) or `xclip` (X11). A Wayland session n
 4. **Test** posts a test message. **Replace URL** swaps in a new webhook when the workflow changes. **Remove** asks you to confirm.
 
 Channels are shared by all your organisations. Which ones you post to is remembered per organisation.
+
+## Reviewing a pull request
+
+Click a row in **To review** or **Reviewed by you** to open the review in the PRs tab. **Back** returns to the list. **Refresh** (the icon in the header) reads the pull request again. The tab remembers which review is open.
+
+The header shows the title, `Pull Request N`, the repository, the source and target branches, who opened it and when, and when it was loaded. Chips show `draft`, `conflicts` and your own vote. **Open in Azure DevOps** opens it on the website. Under the header are the vote buttons, **Check out in Orca** and three sections:
+
+- **Overview:** the description, the reviewers (up to 100) with their votes and whether each is required, and a box to add a general comment.
+- **Files:** the changed files and their diffs (see The diff).
+- **Comments:** the comment threads (see Comments and replies).
+
+### Votes
+
+**Approve**, **Approve with suggestions**, **Wait for author** and **Reject** vote as you. The button for your current vote is filled. A new vote replaces your earlier one. Pressing the vote you already have changes nothing and says so.
+
+A press reads the pull request again, then sends one request and never retries. It is refused when the pull request is no longer active or is a draft. When Azure DevOps records a different vote from the one you pressed, the result says what it recorded. The PRs lists refresh afterwards.
+
+### The diff
+
+**Files** lists up to 1,000 changed files with how each changed (added, edited, deleted or renamed), and a box to filter them. Select a file to see its diff.
+
+Azure DevOps has no unified diff, so the plugin works it out. It compares the file at the pull request's latest push with the common ancestor of the source and target branches. That shows what the pull request changes, not what the target gained since. A diff has three lines of context around each change and an `@@` line for each hunk.
+
+Each line has two numbers before the `│`: the line in the old file, then the line in the new file. A removed line has only the first, an added line only the second, and a line that didn't change has both.
+
+A line comment uses one of them:
+
+- On an added, edited or renamed file, the second number: the line in the new file.
+- On a deleted file, the first number: the line in the old file.
+
+The note under the diff says which. Leave **Line** empty to comment on the whole file. A line past the end of the file, or one that isn't a whole number from 1 up, is refused and nothing is posted. A line removed from an edited file can't take a line comment here.
+
+#### What isn't shown
+
+The view says why when it leaves something out:
+
+- **Binary files** show no diff and take comments on the whole file only.
+- **Files over 2 MiB** show no diff. The plugin doesn't read them, so it can't check a line number. When the side a comment lands on is that large, comment on the whole file.
+- **Too many changes:** a diff of more than 2,000 changed lines (roughly), or a file of more than 50,000 lines, shows no diff.
+- **More than 1,000 files:** the list holds the first 1,000 and says so.
+- A diff stops at 60 KiB and says how many lines it shows. Lines over 1,000 characters are cut.
+- When Azure DevOps hasn't worked out the pull request's common ancestor yet, there is no diff. Refresh in a moment.
+
+For all of these except binary files, the view suggests **Check out in Orca**, where Source Control shows the whole change.
+
+### Comments and replies
+
+**Comments** lists the threads, unresolved first and the newest first. A thread shows where it is (`General`, a file, or a file and line, with `old line` for the old side), its status (Active, Pending, Resolved, Won't fix, Closed or By design) and its comments with author and time. Threads on a file also show under it in **Files**. Vote changes and other system messages, and deleted comments, aren't listed.
+
+- **Reply** posts under the thread's first comment.
+- **Resolve** sets the thread to Resolved. **Reactivate**, shown on a resolved thread, sets it to Active.
+- **Add a comment** in Overview starts a general thread. **Comment on file** in Files starts a file or line thread. A comment can be up to 10,000 characters.
+
+Comments are shown as Markdown with images as links, and `@` mentions show names. The plugin keeps at most 100 threads and 20 comments in each (the first and the newest 19), and cuts a comment at 8,000 bytes. The panel shows up to 30 threads with 10 comments each (the first and the newest 9). The tab counts every thread, says how many it shows, and says how many replies it left out. Some comments may be dropped to keep a very large review within one answer, and it says so.
+
+Each write reads the pull request or thread again first, sends one request, never retries, and reports what Azure DevOps answered. Its button is off while it runs. A thread deleted meanwhile and a file a later push dropped are refused with a message, and so is a vote on a pull request that has completed.
+
+### Check out in Orca
+
+**Check out in Orca** gets the pull request's source branch into a workspace. It doesn't create the workspace itself. It tells Orca to use the branch for the next workspace you create.
+
+1. Press **Check out in Orca**. The plugin reads the pull request again and looks in your local workspaces for one whose git remote is the pull request's repository. It prefers one already on the source branch, then a git worktree, then the one in focus. It refuses when the pull request is no longer active, comes from a fork (check it out from the fork's repository), or matches no local workspace. It also refuses when the repository is open in Orca only as a folder, which can't create worktrees: open it as a git project and press again.
+2. If that workspace is already on the source branch, Orca opens it. You are done.
+3. Otherwise the plugin shows the repository's workspace (unless it is in focus) and arms Orca's next new workspace for 10 minutes. The panel says what to do and has a **Cancel** button.
+4. In Orca, create a new workspace in that repository's project and leave its branch options alone. It gets the source branch, made from the remote's copy. When a local branch of that name is checked out in another workspace, or sits at another commit than the remote's, it gets `<source>-2` from the same remote branch.
+5. In Source Control, set the compare base to the target branch. Orca starts the new worktree's compare at the source branch itself, so the compare shows nothing until you change it.
+
+The arm works like this:
+
+- It serves one workspace and lasts 10 minutes.
+- The next new workspace you create in Orca gets it, in any project. The plugin can't tie the arm to a project. A workspace made with the `orca` command or by an automation gets it too, so create the one you want first. A new folder workspace doesn't use it.
+- Arming replaces an earlier arm, including one from **Start a workspace** on a work item.
+- The workspace takes the branch name as its name.
+- **Cancel** disarms it. The box stays on screen until you press Cancel, even after the workspace exists or the 10 minutes are up.
+- When a local branch of the source's name exists and Orca has never fetched the remote's copy, Orca bases the workspace on that local branch as it is, without fetching. It may be behind, or hold commits you haven't pushed.
 
 ## The Pipelines tab
 
@@ -295,6 +377,47 @@ Open in Orca looks for the file in your local workspaces. It picks the ones whos
 - **Cancel run** shows while the run hasn't finished and isn't already cancelling. It takes two presses: **Cancel run**, then **Confirm cancel**. The button disarms when it loses focus.
 - Both read the run first and report what Azure DevOps did, and neither retries.
 
+## The Wiki tab
+
+Open the Azure DevOps panel and choose **Wiki**. It lists the project wikis and the published code wikis in the organisation. With more than one, a **Wiki** picker shows `name · project`, and your choice is remembered for each organisation.
+
+### Reading
+
+- The page tree loads a level at a time: expanding a folder reads its pages. A level shows up to 200 pages, in Azure DevOps's order and then by title. The tree draws up to 1,000 rows and says when it hides some. **Refresh pages** reloads the tree. **Refresh** on an open page reloads only that page.
+- **Search the wiki** needs at least 2 characters. Press Enter to search. It shows up to 25 results, each with a snippet, and says how many pages match. **Clear search** returns to the tree. When the organisation has no wiki search, the tab says so.
+- A page is shown as Markdown. Images appear as links (`Image: <name>`), not as pictures. Links to other wiki pages open that page in Azure DevOps. Only `http`, `https` and `mailto` links are kept, `[[_TOC_]]` is dropped, and a page over 60,000 bytes is cut with a note.
+- **Open in Azure DevOps** opens the page on the website.
+
+A code wiki is a folder of a repository published as a wiki. Its pages are read-only here: the page says so and has no **Edit in Orca**. Edit its files in the repository. Search finds only pages inside the published folder.
+
+### Edit in Orca
+
+**Edit in Orca** on a project wiki page opens the page as a Markdown file in Orca's own editor. It needs a local workspace in focus.
+
+- The file is `<workspace>/.orca-ado/wiki/<organisation>/<wiki>/<page path>.md`. It is a draft. The `.orca-ado/` folder is the one the board and run tabs use, and its `.gitignore` containing `*` keeps git out. File names are cleaned so they are valid on every OS, and a very long one is cut and gets a short hash. A copy of the page as you started it is kept under `.orca-ado/wiki/.base/`.
+- Save your changes in the editor, then press **Publish** in the Wiki tab. Publish sends what is saved in the file, not edits you haven't saved.
+- **Drafts (N)** lists your drafts with their page, wiki, workspace and file, and whether they hold saved changes that aren't published. You can keep up to 50 drafts across all organisations. A draft stays after you publish it, so you can keep editing. **Discard…** asks first, then deletes the draft's files. It sends nothing to Azure DevOps.
+- **Edit in Orca** on a page that has a draft opens that draft again. When you haven't changed it, it is first brought up to the page's current version.
+- A draft belongs to the workspace it was made in. When that workspace is gone, discard the draft to edit the page again. A page over 1 MiB can't be edited or published here.
+
+### Publish
+
+**Publish** reads your draft's file, then reads the page again.
+
+- With no saved changes in the draft, it says `Nothing to publish yet` and sends nothing.
+- When the page changed in Azure DevOps since you started, it sends nothing and shows the conflict. A change of version with the same text isn't a conflict.
+- Otherwise it sends one request with the page's version (its ETag, in `If-Match`), so Azure DevOps refuses it if someone saves in between. A refusal of that kind shows the conflict too.
+
+It never retries and never deletes your draft. When the page was moved or deleted in Azure DevOps, Publish says so and keeps the draft.
+
+### When the page changed
+
+The conflict shows **Their changes** (your starting copy to the current page) and **Your changes** (your starting copy to your draft) as diffs, under the same size rules as review diffs. Choose one:
+
+- **Publish mine…** publishes your draft over their changes, after you confirm. Their changes are lost.
+- **Take theirs…** replaces your draft with their version, after you confirm. Your changes are lost.
+- **Merge by hand** opens their version in the editor, as a file under `.orca-ado/wiki/.theirs/`. Copy what you need into your draft, save it and press **Publish**. Until you save a change, Publish shows the conflict again and says your draft hasn't changed. **Publish mine** is still there.
+
 ## Notifications
 
 The plugin shows desktop notifications through Orca whenever Orca is open, with the Pipelines tab hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
@@ -336,6 +459,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
+- Reviews and the Wiki tab: never in the background. A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it and again on Refresh, and search when you press Enter. It reads the drafts when it opens.
 - Slow-down: when Azure DevOps answers any request for an organisation with `Retry-After` or `X-RateLimit-Delay`, whether for work items, pull requests or pipelines, that organisation's pipeline polling drops to the background pace for 5 minutes. The Pipelines tab then polls every 5 minutes, watched runs every 2 minutes and an open run tab every 30 seconds.
 - Pipelines limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read builds, runs for that organisation pause for 10 minutes and the tab says why. When it refuses approvals only, approvals turn off for 10 minutes while runs keep loading, and the tab says Needs me may be incomplete.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.
@@ -404,6 +528,18 @@ Pipelines and notifications:
 - On the client organisation, read-only: `X-RateLimit-*` and `Retry-After` headroom with the Pipelines tab and a run tab open for 10 minutes, whether `requestedFor` carries an id, who it names on a run started by pull request auto-complete, and the `triggerInfo` of one real pull request validation run and one CI run.
 - Which scopes runs, approvals, environment names and the project list need with a partial PAT, and whether a refusal gives the right message.
 - The Pipelines tab at 360 px and the run tab in both themes, a run tab whose file was pruned, and `ADO · N failed · N approvals · N to review` on the status bar.
+
+Reviews and wiki:
+
+- A pull request with an edit, an add, a delete, an unchanged rename, an edited rename and a binary file: the diffs and their line numbers match Azure DevOps.
+- Reply, Resolve and Reactivate work. File comments and line comments on the new and the old side land on the right lines, a line comment's span (offset 1 to 1) shows on its line, and mentions show names.
+- Each of the four votes is recorded as the plugin says, and a draft pull request refuses a vote.
+- Check out in Orca on a workspace already on the source branch, a remote-only source branch, a local branch at the remote's commit, a local branch at another commit, a local branch whose remote copy was never fetched, and a branch checked out in another workspace. Also a workspace created in another project while armed, and Source Control's compare base. Whether `workspace.list` names the branch of a detached worktree.
+- The Wiki tab: the tree, images and links, a code wiki with a mapped folder, and search for a page title, text in a code wiki and a page with `%3A` in its path.
+- Edit in Orca: the ETag form, that `git status` stays clean, and Orca's editor and its preview. A page edited in the browser meanwhile: the conflict view, each choice, and the status Azure DevOps answers to the stale Publish. Also the answer to a Publish to a page deleted meanwhile, and a draft file rewritten from outside while the editor holds unsaved edits.
+- A unicode page such as `/Résumé/Überblick 文档` opens in the editor and publishes, and `git status` stays clean.
+- On the client organisation, read-only: the load time and request count of a large pull request, and whether wiki search is offered. If it is refused, the status and `typeKey`. Also which scope wiki search needs with a partial PAT.
+- The review view and the Wiki tab at 360 px in both themes.
 
 ## License
 
