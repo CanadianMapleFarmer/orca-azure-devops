@@ -31,7 +31,7 @@ interface Change {
   inserted: number
 }
 
-const QUOTES = byteLength('')
+const JSON_QUOTE_BYTES = byteLength('')
 
 export function splitLines(text: string): string[] {
   if (text === '') return []
@@ -179,13 +179,13 @@ export function formatHunks(hunks: readonly Hunk[], maxBytes = MAX_DIFF_BYTES): 
   const widest = hunks.reduce((max, hunk) => Math.max(max, hunk.oldStart + hunk.oldLines - 1, hunk.newStart + hunk.newLines - 1), 1)
   const width = String(widest).length
   const rows: string[] = []
-  let used = QUOTES
+  let used = JSON_QUOTE_BYTES
   let shownLines = 0
   for (const hunk of hunks) {
     let header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n`
     for (const line of hunk.lines) {
       const row = `${header}${rowOf(line, width)}`
-      const cost = byteLength(rows.length ? `\n${row}` : row) - QUOTES
+      const cost = byteLength(rows.length ? `\n${row}` : row) - JSON_QUOTE_BYTES
       if (used + cost > maxBytes) return { text: rows.join('\n'), shownLines, cut: true }
       rows.push(row)
       used += cost
