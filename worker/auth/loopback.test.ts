@@ -149,7 +149,10 @@ test('the redirect listener accepts only one form post with the right state and 
     [{ type: FORM, body: form({ code: 'c1', state: 'wrong' }) }, 400, 'stale'],
     [{ type: FORM, body: form({ code: 'c1' }) }, 400, 'stale'],
     [{ type: FORM, body: form({ state: STATE }) }, 400, 'stale'],
-    [{ type: 'application/json', body: JSON.stringify(right) }, 404, 'notHere']
+    [{ type: 'application/json', body: JSON.stringify(right) }, 404, 'notHere'],
+    [{ method: 'GET', host: 'evil.example' }, 404, 'notHere'],
+    [{ type: 'application/json', body: oversized }, 404, 'notHere'],
+    [{ host: 'evil.example', type: 'application/json', body: oversized }, 400, 'notHere']
   ]
   for (const [sent, status, page] of refusals) {
     assertPage(await send(port, sent), status, page)
