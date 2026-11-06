@@ -36,9 +36,10 @@ interface Desk {
   focused?: WorkspaceEntry
   remotes?: Record<string, AdoRemote[] | Error>
   pr?: (raw: RawPullRequest) => RawPullRequest
+  openFails?: Error
 }
 
-function desk({ workspaces, focused, remotes = {}, pr = raw => raw }: Desk) {
+function desk({ workspaces, focused, remotes = {}, pr = raw => raw, openFails }: Desk) {
   const steps: string[] = []
   const opened: unknown[] = []
   const read: string[] = []
@@ -49,6 +50,7 @@ function desk({ workspaces, focused, remotes = {}, pr = raw => raw }: Desk) {
     if (method === 'workspace.list') return { workspaces, truncated: false }
     if (method === 'workspace.readContext') return focused ? { branch: focused.branch ?? '', displayName: focused.name, terminals: [] } : null
     if (method !== 'workspace.open') throw new Error(`unexpected host call ${method}`)
+    if (openFails) throw openFails
     opened.push(params)
     return { opened: true }
   }
@@ -162,6 +164,18 @@ test("a workspace whose git remotes can't be read is skipped with a fixed log li
   assert.equal((await checkoutPr(d.deps, KEY)).status, 'armed')
   assert.deepEqual(d.opened, [{ workspaceId: 'web-app' }])
   assert.deepEqual(d.logs, [UNREAD])
+})
+
+test('a workspace that fails to open leaves nothing armed and reaches the panel', async () => {
+  const web = workspace('web-app', { branch: 'feature/1204-search' })
+  const gone = new Error('That workspace is no longer in Orca.')
+  const d = desk({ workspaces: [web], remotes: { [web.path]: [WEB] }, openFails: gone })
+  await assert.rejects(checkoutPr(d.deps, KEY), gone)
+  assert.deepEqual([d.opened, d.armed], [[], []])
+
+  const onBranch = desk({ workspaces: [{ ...web, branch: SOURCE }], remotes: { [web.path]: [WEB] }, openFails: gone })
+  await assert.rejects(checkoutPr(onBranch.deps, KEY), gone)
+  assert.deepEqual([onBranch.opened, onBranch.armed], [[], []])
 })
 
 test('a failed pull request read reaches the panel and touches nothing', async () => {
