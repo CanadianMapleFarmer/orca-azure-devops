@@ -7,7 +7,7 @@ import { cutText } from '../ado/cut-text'
 import { decode } from '../ado/html-text'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { parsedHref } from '../ado/pr-links'
-import { getPage, listWikis, pageLevel, pagePathOf, searchWiki, titleOf, wikiPageUrl, type RawSearchResult, type RawWiki } from '../ado/wiki'
+import { getPage, listWikis, pageLevel, pagePathOf, searchWiki, titleText, wikiPageUrl, type RawSearchResult, type RawWiki } from '../ado/wiki'
 import {
   badRequest,
   UNKNOWN_WIKI,
@@ -49,7 +49,6 @@ interface Listing {
 const WIKIS_TTL_MS = 10 * 60_000
 const MAX_WIKIS = 50
 const MAX_LEVEL_PAGES = 200
-const MAX_TITLE = 200
 const MAX_SEARCH_CHARS = 200
 const MAX_SNIPPET = 300
 const MAX_PAGE_MARKDOWN_BYTES = 60_000
@@ -210,10 +209,6 @@ function isPageLink(href: string): boolean {
 function beforeAnchorOrQuery(href: string): string {
   const end = href.search(ANCHOR_OR_QUERY)
   return end === -1 ? href : href.slice(0, end)
-}
-
-function titleText(path: string): string {
-  return cutText(titleOf(path), MAX_TITLE)
 }
 
 async function missingAs<T>(read: Promise<T>, message: string): Promise<T> {

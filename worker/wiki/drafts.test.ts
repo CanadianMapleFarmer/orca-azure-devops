@@ -9,6 +9,7 @@ import { ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
 import { ME } from '../prs/fake-prs'
 import { memoryStore } from '../test-support'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
+import { listing, outside } from './draft-test-support'
 import { createDrafts, draftKey, type StoredDraft } from './drafts'
 import { fakeWiki, isPage } from './fake-wiki'
 import { createWikiService } from './service'
@@ -36,7 +37,6 @@ const TOO_LARGE = 'This page is too large to edit here. Edit it in Azure DevOps.
 const TOO_MANY = 'You have 50 wiki drafts. Publish or discard some first.'
 const FILE_TAKEN = 'Another draft already uses that file name. Publish or discard it first.'
 const WORKSPACE_GONE = 'The workspace holding this draft is gone. Discard the draft to edit the page again.'
-const OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
 const DISCARDED = 'Draft discarded.'
 const DRAFT_GONE = 'That draft no longer exists.'
 
@@ -117,26 +117,6 @@ async function withDirs(count: number, run: (dirs: string[]) => Promise<void>): 
   }
 }
 
-async function listing(dir: string, prefix = ''): Promise<string[]> {
-  const entries: string[] = []
-  for (const name of (await fs.readdir(dir)).sort()) {
-    const full = path.join(dir, name)
-    const stat = await fs.lstat(full)
-    if (stat.isDirectory()) entries.push(`${prefix}${name}/`, ...(await listing(full, `${prefix}${name}/`)))
-    else if (stat.isSymbolicLink()) entries.push(`${prefix}${name} -> ${await fs.readlink(full)}`)
-    else entries.push(`${prefix}${name}: ${await fs.readFile(full, 'utf8')}`)
-  }
-  return entries
-}
-
-function outside(label: string): (error: unknown) => boolean {
-  return error => {
-    assert.ok(error instanceof AdoError, `${label}: expected an AdoError, got ${String(error)}`)
-    assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, OUTSIDE], label)
-    return true
-  }
-}
-
 function missing(label: string): (error: unknown) => boolean {
   return error => {
     assert.equal((error as NodeJS.ErrnoException).code, 'ENOENT', label)
@@ -167,6 +147,7 @@ function seededDraft(i: number): StoredDraft {
 
 interface Plant {
   label: string
+  refusesTheirs: boolean
   before(workspace: string, outsideDir: string): Promise<void>
   after(workspace: string, outsideDir: string): Promise<void>
 }
@@ -174,6 +155,7 @@ interface Plant {
 const PLANTS: Plant[] = [
   {
     label: 'a .orca-ado symlink',
+    refusesTheirs: true,
     before: (workspace, outsideDir) => fs.symlink(outsideDir, path.join(workspace, '.orca-ado')),
     async after(workspace, outsideDir) {
       await fs.rename(path.join(workspace, '.orca-ado'), path.join(outsideDir, 'orca-ado'))
@@ -182,6 +164,7 @@ const PLANTS: Plant[] = [
   },
   {
     label: 'a .orca-ado/wiki symlink',
+    refusesTheirs: true,
     async before(workspace, outsideDir) {
       await fs.mkdir(path.join(workspace, '.orca-ado'))
       await fs.symlink(outsideDir, path.join(workspace, '.orca-ado', 'wiki'))
@@ -193,6 +176,7 @@ const PLANTS: Plant[] = [
   },
   {
     label: 'a .orca-ado/wiki/.base symlink',
+    refusesTheirs: false,
     async before(workspace, outsideDir) {
       await fs.mkdir(path.join(workspace, '.orca-ado', 'wiki'), { recursive: true })
       await fs.symlink(outsideDir, path.join(workspace, '.orca-ado', 'wiki', '.base'))
@@ -204,6 +188,7 @@ const PLANTS: Plant[] = [
   },
   {
     label: 'a draft file that is a symlink to an outside file',
+    refusesTheirs: false,
     async before(workspace, outsideDir) {
       const draft = onDisk(workspace, CHECKLIST_FILE)
       await fs.mkdir(path.dirname(draft), { recursive: true })
@@ -289,9 +274,15 @@ test('draft file names stay inside the wiki folder and are valid on every OS', a
       await fs.writeFile(path.join(outsideDir, 'notes.md'), 'outside\n')
       const h = harness([workspace('ws-web', web)])
       assert.equal((await h.drafts.edit(ref(CHECKLIST))).opened, true)
+      const draft = (await h.drafts.get(draftKey(ref(CHECKLIST))))!
       await plant.after(web, outsideDir)
       const before = await listing(outsideDir)
       await assert.rejects(h.drafts.edit(ref(CHECKLIST)), outside(`${plant.label}, after the draft began`))
+      await assert.rejects(h.drafts.texts(draft), outside(`${plant.label}: texts`))
+      await assert.rejects(h.drafts.rebase(draft, { version: '"2"', base: 'new base\n', mine: 'new mine\n' }), outside(`${plant.label}: rebase`))
+      if (plant.refusesTheirs) await assert.rejects(h.drafts.openTheirs(draft, 'theirs\n'), outside(`${plant.label}: openTheirs`))
+      assert.deepEqual(await listing(outsideDir), before, `${plant.label}: nothing reaches the outside folder`)
+      assert.deepEqual(await h.drafts.get(draft.key), draft, `${plant.label}: a refused rebase keeps the record as it was`)
       assert.deepEqual(
         (await h.drafts.list(ORG)).map(draft => draft.changed),
         [true],
@@ -301,6 +292,39 @@ test('draft file names stay inside the wiki folder and are valid on every OS', a
       assert.deepEqual(await listing(outsideDir), before, `${plant.label}: discard leaves the outside files in place`)
       assert.equal(h.opened.length, 1)
       assert.deepEqual(await h.drafts.list(ORG), [])
+    })
+  }
+})
+
+test('openTheirs refuses a theirs folder or file that leads outside the workspace', async () => {
+  const plants: [string, (workspace: string, outsideDir: string) => Promise<void>][] = [
+    [
+      'a .orca-ado/wiki/.theirs symlink',
+      async (workspace, outsideDir) => {
+        await fs.mkdir(path.join(workspace, '.orca-ado', 'wiki'), { recursive: true })
+        await fs.symlink(outsideDir, path.join(workspace, '.orca-ado', 'wiki', '.theirs'))
+      }
+    ],
+    [
+      'a theirs file that is a symlink to an outside file',
+      async (workspace, outsideDir) => {
+        const file = onDisk(workspace, CHECKLIST_THEIRS)
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(path.join(outsideDir, 'secret.md'), 'secret\n')
+        await fs.symlink(path.join(outsideDir, 'secret.md'), file)
+      }
+    ]
+  ]
+  for (const [label, plant] of plants) {
+    await withDirs(2, async ([web, outsideDir]) => {
+      const h = harness([workspace('ws-web', web)])
+      assert.equal((await h.drafts.edit(ref(CHECKLIST))).opened, true)
+      const draft = (await h.drafts.get(draftKey(ref(CHECKLIST))))!
+      await plant(web, outsideDir)
+      const before = await listing(outsideDir)
+      await assert.rejects(h.drafts.openTheirs(draft, 'theirs\n'), outside(label))
+      assert.deepEqual(await listing(outsideDir), before, `${label}: nothing reaches the outside folder`)
+      assert.equal(h.opened.length, 1, `${label}: the theirs file is not opened`)
     })
   }
 })

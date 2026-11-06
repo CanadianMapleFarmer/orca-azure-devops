@@ -1,4 +1,5 @@
 import { MALFORMED } from '../messages'
+import { cutText } from './cut-text'
 import type { AdoHttp } from './http'
 import { orgWebUrl } from './org'
 import { expectList, expectText, shaped } from './shape'
@@ -27,6 +28,7 @@ export interface RawSearchResult {
 }
 
 const SEARCH_TOP = 25
+const MAX_TITLE = 200
 const MARKDOWN_EXTENSION = /\.md$/
 
 export async function listWikis(http: AdoHttp, org: string, signal?: AbortSignal): Promise<RawWiki[]> {
@@ -132,6 +134,10 @@ export function pagePathOf(gitPath: string): string {
 
 export function titleOf(path: string): string {
   return path.split('/').filter(Boolean).at(-1) ?? path
+}
+
+export function titleText(path: string): string {
+  return cutText(titleOf(path), MAX_TITLE)
 }
 
 function pagesPath(wikiId: string): string {

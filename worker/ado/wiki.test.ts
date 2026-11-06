@@ -3,7 +3,7 @@ import { fixture, json, ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
 import { MALFORMED } from '../messages'
 import { fakeWiki, isLevel, isPage, isPagePut, isSearch, isWikis } from '../wiki/fake-wiki'
 import { AdoError, createAdoHttp } from './http'
-import { getPage, listWikis, pageLevel, pagePathOf, putPage, searchWiki, titleOf, wikiPageUrl } from './wiki'
+import { getPage, listWikis, pageLevel, pagePathOf, putPage, searchWiki, titleOf, titleText, wikiPageUrl } from './wiki'
 
 const WIKI = '6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d'
 const CODE_WIKI = '7c8d9e0f-8888-4b2c-8d3e-4f5a6b7c8d9e'
@@ -219,4 +219,11 @@ test('wikiPageUrl encodes every part and titleOf takes the last segment', () => 
   assert.equal(titleOf('/Résumé/Überblick 文档'), 'Überblick 文档')
   assert.equal(titleOf('/Section/'), 'Section')
   assert.equal(titleOf('/'), '/')
+})
+
+test('titleText cuts the last segment at 200 units without splitting a surrogate pair', () => {
+  assert.equal(titleText('/Release process/Checklist'), 'Checklist')
+  assert.equal(titleText(`/${'a'.repeat(200)}`), 'a'.repeat(200))
+  assert.equal(titleText(`/Docs/${'a'.repeat(201)}`), `${'a'.repeat(199)}…`)
+  assert.equal(titleText(`/${'a'.repeat(198)}😀😀`), `${'a'.repeat(198)}…`)
 })

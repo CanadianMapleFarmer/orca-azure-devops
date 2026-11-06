@@ -59,10 +59,14 @@ export async function assertInside(fs: DraftFs, workspacePath: string, relative:
       throw error
     })
     if (!stat) break
-    const fits = depth === parts.length ? stat.isFile() : stat.isDirectory() && (await fs.realpath(target)) === target
+    const fits = depth === parts.length ? stat.isFile() : stat.isDirectory() && sameFile(await fs.realpath(target), target)
     if (!fits) throw badRequest(DRAFT_OUTSIDE)
   }
   return path.join(root, TAB_FOLDER, relative)
+}
+
+export function sameFile(a: string, b: string): boolean {
+  return a.normalize('NFC').toLowerCase() === b.normalize('NFC').toLowerCase()
 }
 
 function insideWiki(draft: string): string {

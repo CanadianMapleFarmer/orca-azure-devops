@@ -1,6 +1,5 @@
 import { MAX_DRAFTS, type DraftSummary, type WikiPageRef } from '../../src/shared/wiki'
-import { cutText } from '../ado/cut-text'
-import { titleOf } from '../ado/wiki'
+import { titleText } from '../ado/wiki'
 import type { StorePort } from '../connections'
 import {
   badRequest,
@@ -17,7 +16,7 @@ import {
 } from '../messages'
 import { TAB_FOLDER, writeTabFile } from '../tab-files'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
-import { assertInside, baseName, draftName, theirsName, type DraftFs } from './draft-files'
+import { assertInside, baseName, draftName, sameFile, theirsName, type DraftFs } from './draft-files'
 import type { WikiService } from './service'
 
 export interface StoredDraft {
@@ -66,7 +65,6 @@ export interface DraftsDeps {
 
 const DRAFTS_KEY = 'wiki:drafts'
 const MAX_PAGE_BYTES = 1024 * 1024
-const MAX_TITLE = 200
 const TEXT_FIELDS = ['key', 'org', 'projectId', 'wikiId', 'wikiName', 'path', 'version', 'workspaceId', 'workspacePath', 'workspaceName', 'file'] as const
 
 export function draftKey(ref: WikiPageRef): string {
@@ -251,16 +249,8 @@ function refused(message: string): { opened: false; message: string } {
   return { opened: false, message }
 }
 
-function titleText(pagePath: string): string {
-  return cutText(titleOf(pagePath), MAX_TITLE)
-}
-
 function inWorkspace(draft: StoredDraft, workspace: WorkspaceEntry): boolean {
   return draft.workspaceId === workspace.id || draft.workspacePath === workspace.path
-}
-
-function sameFile(a: string, b: string): boolean {
-  return a.normalize('NFC').toLowerCase() === b.normalize('NFC').toLowerCase()
 }
 
 function summaryOf(draft: StoredDraft, changed: boolean): DraftSummary {

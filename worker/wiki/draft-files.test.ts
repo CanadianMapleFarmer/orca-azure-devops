@@ -2,13 +2,12 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
-import { AdoError } from '../ado/http'
 import { assertInside, baseName, draftName, fileSegment, MAX_DRAFT_NAME, MAX_SEGMENT, theirsName } from './draft-files'
+import { listing, outside } from './draft-test-support'
 
 const WIKI_NAME = 'Fabrikam Web.wiki'
 const PREFIX = 'wiki/contoso/Fabrikam Web.wiki'
 const CHECKLIST = `${PREFIX}/Release process/Checklist.md`
-const OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
 const EMOJI = '😀'
 const HASHED = /~[0-9a-f]{8}\.md$/
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u
@@ -20,26 +19,6 @@ async function withDirs(run: (workspace: string, outside: string) => Promise<voi
   } finally {
     for (const dir of dirs) await fs.rm(dir, { recursive: true, force: true })
   }
-}
-
-function outside(label: string): (error: unknown) => boolean {
-  return error => {
-    assert.ok(error instanceof AdoError, `${label}: expected an AdoError, got ${String(error)}`)
-    assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, OUTSIDE], label)
-    return true
-  }
-}
-
-async function listing(dir: string, prefix = ''): Promise<string[]> {
-  const entries: string[] = []
-  for (const name of (await fs.readdir(dir)).sort()) {
-    const full = path.join(dir, name)
-    const stat = await fs.lstat(full)
-    if (stat.isDirectory()) entries.push(`${prefix}${name}/`, ...(await listing(full, `${prefix}${name}/`)))
-    else if (stat.isSymbolicLink()) entries.push(`${prefix}${name} -> ${await fs.readlink(full)}`)
-    else entries.push(`${prefix}${name}: ${await fs.readFile(full, 'utf8')}`)
-  }
-  return entries
 }
 
 test('fileSegment cleans one page name for every OS', () => {
@@ -203,5 +182,18 @@ test('assertInside refuses a symlink or a non-folder at any level, and names tha
     for (const bad of ['../outside.md', 'wiki/../../outside.md', '/etc/passwd', 'wiki//x.md', 'wiki/./x.md', '', 'wiki\\..\\..\\x.md']) {
       await assert.rejects(assertInside(fs, workspace, bad), outside(bad))
     }
+  })
+})
+
+test('assertInside accepts a folder spelled in another case on a case-insensitive volume', async () => {
+  await withDirs(async (workspace, outsideDir) => {
+    const wiki = path.join(workspace, '.orca-ado', 'wiki')
+    await fs.mkdir(path.join(wiki, 'Docs'), { recursive: true })
+    const caseInsensitive = await fs.lstat(path.join(wiki, 'docs')).then(() => true, () => false)
+    if (!caseInsensitive) return
+    const root = await fs.realpath(workspace)
+    assert.equal(await assertInside(fs, workspace, 'wiki/docs/x.md'), path.join(root, '.orca-ado', 'wiki', 'docs', 'x.md'))
+    await fs.symlink(outsideDir, path.join(wiki, 'Linked'))
+    await assert.rejects(assertInside(fs, workspace, 'wiki/linked/x.md'), outside('a symlink spelled in another case'))
   })
 })
