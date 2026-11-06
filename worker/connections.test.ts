@@ -4,9 +4,10 @@ import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
 import type { AzCliProvider } from './auth/azcli'
 import { accessToken } from './auth/fake-entra'
-import { basicAuth, type SecretsPort } from './auth/pat'
+import { basicAuth } from './auth/pat'
 import { createConnections, type Connections, type StorePort } from './connections'
 import { CommandTimeoutError } from './sys/run'
+import { memorySecrets } from './test-support'
 
 const HOME = '/home/ada'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
@@ -227,20 +228,7 @@ function harness(seed: { orgs?: OrgConfig[]; signingIn?: string[]; secrets?: Rec
       storage.set(key, structuredClone(record(value)))
     }
   }
-  const secretStore = new Map(Object.entries(seed.secrets ?? {}))
-  const secretReads: string[] = []
-  const secrets: SecretsPort = {
-    async get(key) {
-      secretReads.push(key)
-      return secretStore.get(key) ?? null
-    },
-    async set(key, value) {
-      secretStore.set(key, value)
-    },
-    async delete(key) {
-      secretStore.delete(key)
-    }
-  }
+  const { data: secretStore, reads: secretReads, secrets } = memorySecrets(seed.secrets)
   const pinnedAzOrgs = (seed.orgs ?? []).filter(cfg => cfg.method === 'azure-cli' && cfg.pinned).map(cfg => cfg.org)
   const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()

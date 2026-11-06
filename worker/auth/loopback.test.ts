@@ -3,7 +3,7 @@ import { type IncomingHttpHeaders, type OutgoingHttpHeaders, request } from 'nod
 import { connect } from 'node:net'
 import { assert, test } from 'orca/testing'
 import { REDIRECT_PAGE } from '../messages'
-import { drain } from '../test-support'
+import { connectError, drain } from '../test-support'
 import { closeAllListeners, type Listener, listenForRedirect, MAX_REDIRECT_BODY_BYTES } from './loopback'
 
 const STATE = 'Qm7vT2xLp9Kd4WzR8nYbHg'
@@ -66,17 +66,6 @@ function settledFlag(promise: Promise<unknown>): () => boolean {
     }
   )
   return () => settled
-}
-
-function connectError(host: string, port: number): Promise<string | null> {
-  return new Promise(resolve => {
-    const socket = connect({ host, port })
-    socket.once('connect', () => {
-      socket.destroy()
-      resolve(null)
-    })
-    socket.once('error', (error: NodeJS.ErrnoException) => resolve(error.code ?? error.message))
-  })
 }
 
 async function connectionMidRequest(port: number): Promise<{ closed: Promise<unknown> }> {

@@ -1,9 +1,22 @@
+import { connect } from 'node:net'
 import { mock } from 'node:test'
 import { mountWorker, type MountWorkerOptions, type TestWorker, type WorkerModule } from 'orca/testing'
+import type { SecretsPort } from './auth/pat'
 import type { StorePort } from './connections'
 
 export async function drain(turns = 100): Promise<void> {
   for (let turn = 0; turn < turns; turn += 1) await new Promise(resolve => setImmediate(resolve))
+}
+
+export function connectError(host: string, port: number): Promise<string | null> {
+  return new Promise(resolve => {
+    const socket = connect({ host, port })
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(null)
+    })
+    socket.once('error', (error: NodeJS.ErrnoException) => resolve(error.code ?? error.message))
+  })
 }
 
 export async function withMockTimers(run: (advance: (ms: number) => Promise<void>) => Promise<void>): Promise<void> {
@@ -100,6 +113,24 @@ export function memoryStore(initial: Record<string, unknown> = {}): { data: Reco
     }
   }
   return { data, store }
+}
+
+export function memorySecrets(initial: Record<string, string> = {}): { data: Map<string, string>; reads: string[]; secrets: SecretsPort } {
+  const data = new Map(Object.entries(initial))
+  const reads: string[] = []
+  const secrets: SecretsPort = {
+    async get(key) {
+      reads.push(key)
+      return data.get(key) ?? null
+    },
+    async set(key, value) {
+      data.set(key, value)
+    },
+    async delete(key) {
+      data.delete(key)
+    }
+  }
+  return { data, reads, secrets }
 }
 
 export async function withWorker(module: WorkerModule, options: MountWorkerOptions, run: (w: TestWorker) => Promise<void>): Promise<void> {
