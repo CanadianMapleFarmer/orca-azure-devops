@@ -14,11 +14,11 @@ function clip(text: string): string {
 
 const placeOf = (approval: ApprovalSummary): string => approval.environment ?? approval.stage ?? 'A stage'
 
-function shareApproval(org: string, run: RunSummary, approval: ApprovalSummary): void {
+function shareApproval(org: string, me: string | null, run: RunSummary, approval: ApprovalSummary): void {
   const item = approvalShareItem(run, approval)
   const runName = `${run.pipeline.name} ${run.runNumber}`
   const approvers: Identity[] = approval.approvers
-    .filter(approver => !approver.isGroup)
+    .filter(approver => !approver.isGroup && approver.id.toLowerCase() !== me?.toLowerCase())
     .map(({ id, name, uniqueName }) => ({ id, displayName: name, uniqueName, kind: 'user' }))
   openComposer({
     org,
@@ -78,7 +78,7 @@ function Decide({ org, approval }: { org: string; approval: ApprovalSummary }): 
   )
 }
 
-export function ApprovalBlock({ org, run, approval }: { org: string; run: RunSummary; approval: ApprovalSummary }): OrcaNode {
+export function ApprovalBlock({ org, me, run, approval }: { org: string; me: string | null; run: RunSummary; approval: ApprovalSummary }): OrcaNode {
   const approvers = approversLine(approval)
   const outcome = outcomeOf(approval.approvalId)
   return (
@@ -96,7 +96,7 @@ export function ApprovalBlock({ org, run, approval }: { org: string; run: RunSum
           ) : null}
           {approval.canApprove ? <Decide org={org} approval={approval} /> : null}
           <Row gap="sm" wrap>
-            <Button size="sm" variant="outline" onPress={() => shareApproval(org, run, approval)}>
+            <Button size="sm" variant="outline" onPress={() => shareApproval(org, me, run, approval)}>
               Share for approval
             </Button>
           </Row>

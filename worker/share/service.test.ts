@@ -503,7 +503,8 @@ test('email destinations are remembered with their people and capped', async () 
   const { results } = await send([{ kind: 'copy' }, { kind: 'email', people: [GRACE, WEB_TEAM, dennis] }, { kind: 'email', people: [DENNIS] }])
   assert.deepEqual(results, [COPIED_RESULT], 'the worker never sends an email')
   const remembered: ShareDestination[] = [{ kind: 'copy' }, { kind: 'email', people: [GRACE, DENNIS] }]
-  assert.deepEqual(h.storage['share:prefs:contoso'], { destinations: remembered })
+  assert.deepEqual(h.storage['share:prefs:contoso:approval'], { destinations: remembered })
+  assert.equal(h.storage['share:prefs:contoso'], undefined)
   assert.deepEqual((await h.share.prefs(ORG, 'approval')).prefs, { destinations: remembered })
   assert.deepEqual((await h.share.prefs('fabrikam', 'approval')).prefs, { destinations: [{ kind: 'copy' }] })
   assert.ok(!JSON.stringify(h.storage).includes(SIG), 'the webhook URL leaked into storage')
@@ -514,6 +515,20 @@ test('email destinations are remembered with their people and capped', async () 
   assert.deepEqual([seen, capped.storage], [[], {}])
   await send([{ kind: 'email', people: people(20) }], capped)
   assert.equal((await capped.share.prefs(ORG, 'approval')).prefs.destinations.length, 1)
+})
+
+test('a PR share and an approval share each remember their own destinations and people', async () => {
+  const h = harness()
+  const prDestinations: ShareDestination[] = [{ kind: 'copy' }, { kind: 'chat', people: [GRACE] }, { kind: 'reviewers', people: [NIA] }]
+  const approvalDestinations: ShareDestination[] = [{ kind: 'copy' }, { kind: 'email', people: [DENNIS] }]
+  await h.share.send({ org: ORG, kind: 'pr', keys: [KEY_A], intro: '', destinations: prDestinations })
+  await h.share.send({ org: ORG, kind: 'approval', keys: [APPROVAL_KEY], intro: '', destinations: approvalDestinations })
+
+  assert.deepEqual((await h.share.prefs(ORG, 'pr')).prefs, { destinations: prDestinations })
+  assert.deepEqual((await h.share.prefs(ORG, 'approval')).prefs, { destinations: approvalDestinations })
+  assert.deepEqual(h.storage['share:prefs:contoso'], { destinations: prDestinations })
+  assert.deepEqual(h.storage['share:prefs:contoso:approval'], { destinations: approvalDestinations })
+  assert.deepEqual((await h.share.prefs('fabrikam', 'approval')).prefs, { destinations: [{ kind: 'copy' }] })
 })
 
 test('prefs for approvals use the approval template and report its warning', async () => {

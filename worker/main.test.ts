@@ -1193,8 +1193,8 @@ test('a run action reloads the open run view at once', async () => {
 async function withFakeClipboard(run: (written: () => Promise<string>) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-clipboard-'))
   const sink = path.join(dir, 'clipboard.html')
-  await fs.writeFile(path.join(dir, 'xclip'), '#!/bin/sh\ncat > "$FAKE_CLIPBOARD"\n', { mode: 0o755 })
-  const names = ['PATH', 'DISPLAY', 'WAYLAND_DISPLAY', 'FAKE_CLIPBOARD']
+  for (const tool of ['xclip', 'wl-copy']) await fs.writeFile(path.join(dir, tool), '#!/bin/sh\ncat > "$FAKE_CLIPBOARD"\n', { mode: 0o755 })
+  const names = ['PATH', 'DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'FAKE_CLIPBOARD']
   const saved = Object.fromEntries(names.map(name => [name, process.env[name]]))
   const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
   try {
@@ -1202,6 +1202,7 @@ async function withFakeClipboard(run: (written: () => Promise<string>) => Promis
     assert.equal(process.platform, 'linux', 'the real clipboard tool would run')
     process.env.PATH = `${dir}${path.delimiter}${saved.PATH ?? ''}`
     process.env.DISPLAY = ':99'
+    process.env.XDG_RUNTIME_DIR = dir
     process.env.FAKE_CLIPBOARD = sink
     delete process.env.WAYLAND_DISPLAY
     await run(() => fs.readFile(sink, 'utf8'))
@@ -1235,7 +1236,7 @@ test('share.send with kind approval copies the approval line', async () => {
         const sent = await w.request('share.send', { ...request, destinations: [{ kind: 'copy' }, { kind: 'email', people: [GRACE] }] })
         assert.deepEqual(sent, { results: [{ destination: 'copy', ok: true, text: 'Copied as rich text (HTML only).' }] })
         assert.equal(await written(), `<div>Please approve.</div><div>Approval needed for production: <a href="${URL_4520}">web-app-cd 20261105.3</a> on main</div>`)
-        assert.deepEqual(w.host.data().storage['share:prefs:contoso'], { destinations: [{ kind: 'copy' }, { kind: 'email', people: [GRACE] }] })
+        assert.deepEqual(w.host.data().storage['share:prefs:contoso:approval'], { destinations: [{ kind: 'copy' }, { kind: 'email', people: [GRACE] }] })
         assert.equal(ado.calls.filter(call => ['PATCH', 'PUT', 'DELETE'].includes(call.method)).length, 0, 'sharing writes nothing to Azure DevOps')
 
         await assert.rejects(w.request('share.send', { ...request, keys: [`approval:${PROJECT}/gone-approval`], destinations: [{ kind: 'copy' }] }), error => {

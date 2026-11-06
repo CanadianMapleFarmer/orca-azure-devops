@@ -566,6 +566,7 @@ test('a failed prefs load shows the message and Try again loads again', async ()
   assert.equal(preview(), `${lineOf(55)}\n\n${lineOf(56)}`)
 })
 
+const INTRO_BETWEEN_THE_LIMITS = 1730
 const NOT_OPENED_EMAIL = "The email draft wasn't opened."
 const RUN_5 = 'https://dev.azure.com/contoso/Fabrikam%20Web/_build/results?buildId=5'
 const APPROVAL_LINE = `Approval needed for production: [web-app-cd 20261105.5](${RUN_5}) on main`
@@ -582,8 +583,10 @@ const approvalPrefs = (over: Partial<SharePrefsView> = {}): SharePrefsView => pr
 
 const mailTo = (to: string[]): string => mailtoUrl({ to, subject: APPROVAL_SUBJECT, body: APPROVAL_PLAIN }) ?? ''
 
+const approvalRuns = () => [waitingRun(5, [approvalOf('ap-1', 5, { approvers: [APPROVER_GRACE, APPROVER_TEAM, APPROVER_LINUS] })])]
+
 async function pipelinesWith(more: MockRequests = {}, orgs: OrgStatus[] = [org('contoso')]): Promise<TestHost> {
-  const runs = [waitingRun(5, [approvalOf('ap-1', 5, { approvers: [APPROVER_GRACE, APPROVER_TEAM, APPROVER_LINUS] })])]
+  const runs = approvalRuns()
   const mounted = await mountPanel(orgs, { 'runs.snapshot': runsSnapshotOf({ runs }), ...more }, { persisted: { workspace: { tab: 'pipelines' } } })
   panel = mounted.panel
   return mounted.host
@@ -624,6 +627,12 @@ test('Share for approval opens the composer with the approval and its approvers'
   assert.equal(panel.findAll({ type: 'Text', text: 'Choose at least one person.' }).length, 1)
 })
 
+test("the approval composer doesn't suggest the signed-in approver to themselves", async () => {
+  await approve({ 'runs.snapshot': runsSnapshotOf({ runs: approvalRuns(), me: 'U-LINUS' }) })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Grace Hopper'])
+})
+
 test('with chat and email chosen, the Teams link opens first and email waits for its own button', async () => {
   const host = await approve({
     'share.prefs': approvalPrefs({
@@ -652,7 +661,7 @@ test('with chat and email chosen, the Teams link opens first and email waits for
   assert.deepEqual(results(), [
     ['Copy as rich text', 'success', 'Copied as rich text.'],
     ['Message in Teams', 'success', 'Opened a Teams chat.'],
-    ['Email', 'danger', `${NOT_OPENED_EMAIL} Open email`]
+    ['Email', 'neutral', `${NOT_OPENED_EMAIL} Open email`]
   ])
   assert.equal(panel.find({ type: 'Button', text: 'Open Teams chat' }), null)
 
@@ -660,6 +669,31 @@ test('with chat and email chosen, the Teams link opens first and email waits for
   assert.deepEqual(opens(host), [{ url: teams }, { url: mailTo(['linus@contoso.com']) }])
   assert.equal(sends(host).length, 1)
   assert.deepEqual(results()[2], ['Email', 'success', 'Opened an email draft.'])
+  assert.equal(panel.find({ type: 'Button', text: 'Open email' }), null)
+})
+
+test("a chat link that's too long leaves the turn to email", async () => {
+  const people = [PERSON_GRACE, PERSON_LINUS]
+  const host = await approve({
+    'share.prefs': approvalPrefs({
+      tenantId: 'tenant-1',
+      prefs: { destinations: [{ kind: 'chat', people }, { kind: 'email', people: [PERSON_LINUS] }] }
+    }),
+    'share.send': { results: [] }
+  })
+  const intro = 'x'.repeat(INTRO_BETWEEN_THE_LIMITS)
+  await panel.type({ label: 'Intro (optional)' }, intro)
+  const body = `${intro}\n\n${APPROVAL_PLAIN}`
+  const mail = mailtoUrl({ to: ['linus@contoso.com'], subject: APPROVAL_SUBJECT, body })
+  assert.equal(teamsChatUrl({ users: people.map(person => person.uniqueName), text: body, tenantId: 'tenant-1' }), null)
+  assert.ok(mail, 'the email link fits where the chat link does not')
+
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(opens(host), [{ url: mail }])
+  assert.deepEqual(results(), [
+    ['Message in Teams', 'danger', 'Too long for a Teams chat link. Use Copy instead.'],
+    ['Email', 'success', 'Opened an email draft.']
+  ])
   assert.equal(panel.find({ type: 'Button', text: 'Open email' }), null)
 })
 

@@ -138,7 +138,7 @@ function ResultCallout({ result }: { result: ShareResult }): OrcaNode {
 
 function LinkCallout({ kind, result }: { kind: LinkKind; result: LinkResult }): OrcaNode {
   return (
-    <Callout tone={result.ok ? 'success' : 'danger'} title={LINK_TITLES[kind]}>
+    <Callout tone={result.ok ? 'success' : result.waiting ? 'neutral' : 'danger'} title={LINK_TITLES[kind]}>
       <Stack gap="xs">
         <Text>{result.text}</Text>
         {result.reason ? <Text size="sm">{result.reason}</Text> : null}

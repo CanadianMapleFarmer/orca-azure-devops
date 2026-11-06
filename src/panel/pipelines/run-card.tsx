@@ -62,7 +62,7 @@ function StageBar({ stages }: { stages: readonly StageChip[] }): OrcaNode {
   )
 }
 
-export function RunCard({ org, run }: { org: string; run: RunSummary }): OrcaNode {
+export function RunCard({ org, me, run }: { org: string; me: string | null; run: RunSummary }): OrcaNode {
   const note = noteOf(run.buildId)
   const leftovers = orphanOutcomes(run)
   return (
@@ -88,7 +88,7 @@ export function RunCard({ org, run }: { org: string; run: RunSummary }): OrcaNod
       </Row>
       {note ? <Callout tone="danger">{note}</Callout> : null}
       {run.approvals.map(approval => (
-        <ApprovalBlock key={approval.approvalId} org={org} run={run} approval={approval} />
+        <ApprovalBlock key={approval.approvalId} org={org} me={me} run={run} approval={approval} />
       ))}
       {leftovers.map(outcome => (
         <OutcomeCallout key={outcome.approvalId} outcome={outcome} />

@@ -67,7 +67,7 @@ function Runs({ org, filter, current, now }: { org: string; filter: RunFilter; c
   return (
     <Stack gap="sm">
       {shown.map(run => (
-        <RunCard key={run.buildId} org={org} run={run} />
+        <RunCard key={run.buildId} org={org} me={current.me} run={run} />
       ))}
       {shown.length < runs.length ? (
         <Text size="sm" muted>

@@ -77,14 +77,14 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
     return deps.sources[kind]
   }
 
-  async function storedPrefs(org: string, known: Channel[]): Promise<SharePrefs> {
-    const stored = await deps.store.get<unknown>(prefsKey(org))
+  async function storedPrefs(org: string, kind: ShareKind, known: Channel[]): Promise<SharePrefs> {
+    const stored = await deps.store.get<unknown>(prefsKey(org, kind))
     return isRecord(stored) && Array.isArray(stored.destinations) ? { destinations: rememberable(stored.destinations, known) } : DEFAULT_PREFS
   }
 
-  async function remember(org: string, destinations: ShareDestination[]): Promise<void> {
+  async function remember(org: string, kind: ShareKind, destinations: ShareDestination[]): Promise<void> {
     try {
-      await deps.store.set(prefsKey(org), { destinations: rememberable(destinations, await channels.list()) })
+      await deps.store.set(prefsKey(org, kind), { destinations: rememberable(destinations, await channels.list()) })
     } catch {
       deps.log(SHARE_PREFS_NOT_SAVED)
     }
@@ -113,7 +113,7 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
         template,
         ...('error' in parsed ? { warning: parsed.error } : {}),
         channels: known,
-        prefs: await storedPrefs(org, known),
+        prefs: await storedPrefs(org, kind, known),
         tenantId: account.tenantId
       }
     },
@@ -130,7 +130,7 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
       const { message } = buildMessage({ template: source.template(), fallback: source.fallback, vars: source.vars, intro: request.intro, items })
       const ctx: DestinationContext = { org: request.org, message, prs, sharedBy: account.displayName }
       const results = (await Promise.all(destinations.map(destination => dispatch(destination, ctx)))).flat()
-      await remember(request.org, destinations)
+      await remember(request.org, request.kind, destinations)
       return { results }
     },
 
@@ -150,8 +150,8 @@ export function createShareService(deps: ShareServiceDeps): ShareService {
   }
 }
 
-function prefsKey(org: string): string {
-  return `share:prefs:${org}`
+function prefsKey(org: string, kind: ShareKind): string {
+  return kind === 'pr' ? `share:prefs:${org}` : `share:prefs:${org}:${kind}`
 }
 
 function peopleOf(destination: ShareDestination): unknown[] {

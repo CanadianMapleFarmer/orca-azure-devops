@@ -46,9 +46,10 @@ function startLinks(urls: LinkUrls): { held: Links; opening: Promise<Links> | nu
     const url = urls[kind]
     if (url === undefined) continue
     if (url === null) held[kind] = { ok: false, text: TEXTS[kind].tooLong }
-    else if (turn) opening = openLink(kind, url).then(result => ({ [kind]: result }))
-    else held[kind] = notOpened(kind, url)
-    turn = false
+    else if (turn) {
+      opening = openLink(kind, url).then(result => ({ [kind]: result }))
+      turn = false
+    } else held[kind] = { ...notOpened(kind, url), waiting: true }
   }
   return { held, opening }
 }

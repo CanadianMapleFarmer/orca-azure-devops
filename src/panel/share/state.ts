@@ -59,6 +59,7 @@ export interface LinkResult {
   text: string
   reason?: string
   retry?: string
+  waiting?: boolean
 }
 
 export type Links = Partial<Record<LinkKind, LinkResult>>
