@@ -6,16 +6,21 @@ Azure DevOps boards, pull requests, pipelines and wikis inside [Orca](https://gi
 
 | Works now | Coming |
 | --- | --- |
-| Connecting any number of Azure DevOps organisations | Pipelines |
-| Pinning each organisation to one account | PR reviews |
-| Choosing each org's boards project, team and code projects | Wiki |
+| Connecting any number of Azure DevOps organisations | PR reviews |
+| Pinning each organisation to one account | Wiki |
+| Choosing each org's boards project, team and code projects | |
 | An always-on worker and an `ADO` status bar item | |
 | A Work tab with your items, grouped by board column | |
 | A full-tab team board with drag-and-drop | |
 | Starting a workspace or an agent from a work item | |
 | A PRs tab with your pull requests in release sets, plus Approve all and Auto-complete all | |
 | Sharing pull requests to the clipboard, a Teams channel, a Teams chat and reviewers | |
-| `ADO · N to review` on the status bar | |
+| A Pipelines tab with your runs, their stages and the approvals waiting on them | |
+| A full-tab run view with a live log tail, search, errors only and an error summary | |
+| Approving or rejecting an environment approval, rerunning a failed stage and cancelling a run | |
+| Sharing an approval to the clipboard, a Teams channel, a Teams chat or email | |
+| Desktop notifications for failed runs, watched runs and approvals | |
+| `ADO · N failed · N approvals · N to review` on the status bar | |
 
 ## Requirements
 
@@ -45,9 +50,10 @@ What exists so far is expected to work with:
 - **Work Items: Read & write** (`vso.work_write`) for the Work tab and board, moves, comments and links.
 - **Code: Read** (`vso.code`) for pull request chips, the PRs tab and linking a pull request. Without it, chips are off for that organisation and the Work and PRs tabs say so.
 - **Code: Read & write** (`vso.code_write`) for Approve all, Auto-complete all and adding reviewers.
-- **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message or add as reviewers.
+- **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message, email or add as reviewers.
+- **Build: Read & execute** (`vso.build_execute`) for the Pipelines tab and the run tab: runs, logs, rerun, cancel and approvals. Without Build access the tab says so and pauses for 10 minutes. Approvals may need a scope this list doesn't name yet. Without access to them the runs still load, and the tab says Needs me may be incomplete.
 
-The identity check that pins your account hasn't been confirmed against a minimal PAT yet, and the Boards, pull request and people-search scopes haven't been checked live, so this list may change. More scopes will be listed here as features land.
+The identity check that pins your account hasn't been confirmed against a minimal PAT yet, and the Boards, pull request, people-search and Pipelines scopes haven't been checked live, so this list may change. More scopes will be listed here as features land.
 
 ## The Work tab
 
@@ -123,11 +129,7 @@ Pull requests in a set often share one source branch. With "delete the source br
 
 ### To review
 
-Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. Click a row to open it in Azure DevOps.
-
-### Status bar
-
-The status bar item reads `ADO · N to review` when N pull requests wait for you across your connected organisations, and `ADO` when none do. N adds up the To review counts. The tooltip and **Azure DevOps: Connection status** break it down by organisation.
+Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. Click a row to open it in Azure DevOps. The count shows on the status bar (see The status bar).
 
 ## Sharing
 
@@ -180,6 +182,147 @@ On Linux you need `wl-clipboard` (Wayland) or `xclip` (X11). A Wayland session n
 
 Channels are shared by all your organisations. Which ones you post to is remembered per organisation.
 
+## The Pipelines tab
+
+Open the Azure DevOps panel and choose **Pipelines**. It lists pipeline runs in the organisation's code projects, the same projects the PRs tab reads, and the approvals waiting on them. Runs that haven't finished come first, newest first. Finished runs follow, newest finish first. **Refresh** (the icon in the header) reloads now.
+
+### Which runs show
+
+For each code project the plugin reads:
+
+- your runs from the last 7 days (the newest 50),
+- the runs in progress, whoever started them (the newest 25),
+- the pending approvals and the runs they belong to,
+- the runs you are watching.
+
+A run is yours when Azure DevOps names you as who it was requested for. The tab lists up to 30 runs for the filter you pick and says how many it leaves out. The plugin itself keeps the newest 100 runs and says when it trims.
+
+### Filters
+
+The filter you pick is remembered. The counts on **Needs me** and **Failed** are this organisation's share of the numbers on the status bar.
+
+- **Mine:** your runs from the last 7 days.
+- **Running:** every run that hasn't finished, whoever started it: queued, running, waiting for approval or cancelling.
+- **Needs me:** runs with a pending approval you can give, and your own runs while they wait for an approval.
+- **Failed:** your runs that failed in the last 24 hours. A run leaves this list when a newer run of the same pipeline and branch is queued, in progress or has succeeded (even with issues).
+
+### A run card
+
+Each card shows the pipeline, the run number, the branch, `PR N` when a pull request started it, and who requested it. A badge gives its state: queued, running, waiting for approval, cancelling, succeeded, partially succeeded, failed or canceled. It also says when the run was queued, started or finished.
+
+- **Open run** opens the run tab (see The run tab).
+- **Open in Azure DevOps** opens the run on the website.
+- **Watch** (the bell) is described next.
+
+The stage bar has one segment per stage, coloured by its state, and a line below it with the stage names: `Build ✓ · Image ✓ · Deploy production ⏸`. The marks are ✓ succeeded, ✗ failed, ● running, ⏸ waiting for approval, ! succeeded with issues, ⊘ canceled, – skipped and ○ not started. Up to 12 stages show, then `+N more`.
+
+The stages come from each run's timeline. A load reads them for up to 8 runs in progress and up to 8 finished runs it hasn't read yet, and keeps what it read, so a long list fills in over the next loads. Until then a run has no bar.
+
+### Watching a run
+
+**Watch** works on a run that hasn't finished. A watched run is read every 30 seconds, and you get a notification when it finishes, whoever started it. Watching ends by itself at the finish. You can watch up to 20 runs per organisation, and the list is kept when Orca restarts.
+
+### Approvals
+
+A run waiting at an environment check shows a **Waiting for approval** box. It says where the run waits (the environment, else the stage), how long it has waited, and who can approve. People are listed by name and groups as `(group)`, with `· needs N` when more than one approval is required. Instructions the approval carries show too, cut at 500 characters.
+
+**Approve…** and **Reject…** show only when Azure DevOps says you can decide: you hold the approval permission, or the approval is assigned to you. Pressing one opens an optional comment (up to 1,000 characters). A second press on **Approve** or **Reject** sends it. The plugin never decides for you.
+
+- It reads the approval again just before sending. If it is no longer pending, the result says so and nothing is sent.
+- It sends one request and never retries.
+- When the approval needs more people, the result says how many: "Approved. It still needs 1 more approval."
+- When Azure DevOps refuses, the result shows its message.
+
+### Share for approval
+
+**Share for approval** opens the composer with one line for that approval. Add an intro, check the preview and tick where it goes. Each destination reports its own result. Destinations and people are remembered per organisation, apart from the ones you use for pull requests.
+
+- **Copy as rich text**, **Post to a Teams channel** and **Message in Teams** work as described under Sharing, with the same channels. **Teams channels** in the tab's header manages them.
+- **Email** opens a draft in your mail app. The subject is `Approval needed: <pipeline> <run>` and the body is the message. Pick people with **Find people to email**. A link over 2,000 characters isn't opened, and the composer suggests Copy.
+- The approvers who are people, apart from you, show as suggestions in both people lists. Groups aren't suggested.
+- Orca opens one link per press. With Teams chat and email both chosen, the chat opens first and **Open email** opens the draft.
+- There is no **Add as reviewers** for approvals.
+
+The message has one line, built from the `approvalShareTemplate` setting. The default is `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`.
+
+- Placeholders: `{pipeline}`, `{run}`, `{url}`, `{environment}`, `{stage}`, `{branch}`, `{requestedBy}` and `{project}`. `{url}` is the run's address in Azure DevOps.
+- `{environment}` falls back to the stage name when the environment couldn't be read.
+- The rules under Sharing apply: one link, its text can't be empty, its address must be http or https, a line break in a value becomes a space, and an empty or invalid template falls back to the default.
+
+## The run tab
+
+**Open run** opens the run in its own tab, a custom editor for `.adorun` files.
+
+It writes `<workspace>/.orca-ado/<org>.<buildId>.adorun` in your focused workspace and opens it. The file holds only the organisation, the project and the run id. The `.orca-ado/` folder is the one the board uses, and its `.gitignore` containing `*` keeps git out. Opening a run also deletes `.adorun` files there that haven't been opened for 7 days. This needs a local workspace. Without one, the button says so.
+
+### What the tab shows
+
+- A strip of the run's stages, each with its state and duration. The tab starts on the failed stage, else the one that is running or waiting, else the last one. It stays on the stage you click.
+- The jobs and steps of that stage, each with its duration and its error and warning counts.
+- The log of the selected step, with an **Errors** box above it when a step failed.
+- A toolbar with the state, **Watch**, **Rerun failed stage**, **Cancel run** and **Open in Azure DevOps**.
+- For a stage waiting for approval, the approvers, the waiting time and **Approve…** and **Reject…** work as in the Pipelines tab. To ask someone, use **Share for approval** there.
+
+The tab refreshes every 5 seconds while the run is active and every minute once it has finished. When a refresh fails, it keeps what it has and says why. When the run no longer exists, or you can't see it, it says so and stops refreshing.
+
+### The log
+
+- A step's log shows when Azure DevOps publishes it, which may be only after the step ends. Until then the step says so.
+- The tab reads a log only for the step you select, and reads it again when it has grown. The first read is the newest 1,000 lines. **Follow** keeps the view at the end and turns off when you scroll up. **Load earlier** reads 1,000 older lines.
+- If a log grows by more than 1,000 lines between reads while you follow, the view jumps to the newest 1,000 lines.
+- The tab holds up to 50,000 lines of a log and cuts lines over 2,000 characters with `…`.
+- Colour codes show as colour. Other terminal codes are dropped, and log text is never read as markup. A line's timestamp shows as its tooltip.
+- **Search the log** looks through the lines the tab holds. Enter goes to the next match and Shift+Enter to the previous one. It ignores case unless your query has a capital letter.
+- **Errors only** keeps the error lines: `##[error]`, an `error:` or `error CS1234:` style prefix, `FAILED` and `fatal:`. They are found by these patterns, never by tool or stage name.
+
+### Errors and Open in Orca
+
+When a step failed, the **Errors** box lists the errors Azure DevOps recorded for it and up to 20 error lines from its log, once that log is loaded. The step's path selects it.
+
+- **Jump to line** scrolls the log to that line.
+- **Open in Orca** opens the file an error names. It shows when the message holds a file: `path(12,5): error …`, `path:12:5` or a Python `File "path", line 12`.
+
+Open in Orca looks for the file in your local workspaces. It picks the ones whose git remote is the run's Azure Repos repository, preferring one on the run's branch, then the focused one. For a run from another kind of repository it uses the focused local workspace. Agent paths carry the agent's folders, so the plugin tries the path with its leading folders dropped one at a time, longest first, and opens the first file that exists.
+
+- Nothing outside the workspace opens. A path with `..` is refused. An absolute path is tried only as a path inside the workspace, and a symlink that points out of it isn't followed. When nothing matches, the message says the file wasn't found.
+- Orca opens the file without a line number. The tab shows what it opened: `Opened src/Api/Program.cs, line 12.`
+- Workspaces on a remote host are skipped.
+
+### Rerun and cancel
+
+- **Rerun failed stage** shows for a finished run with a failed or canceled stage. It reruns the selected stage when that one qualifies, else the first that does. It asks Azure DevOps to retry the stage, without forcing every job to run again. A run with no stages, whose jobs sit under **All jobs**, can't be rerun here.
+- **Cancel run** shows while the run hasn't finished and isn't already cancelling. It takes two presses: **Cancel run**, then **Confirm cancel**. The button disarms when it loses focus.
+- Both read the run first and report what Azure DevOps did, and neither retries.
+
+## Notifications
+
+The plugin shows desktop notifications through Orca. They work whenever Orca is open, with the Pipelines tab hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
+
+It notifies when:
+
+- one of your runs fails: `<pipeline> failed`, with the organisation, run number, branch and, when it is known, the stage that failed (`notifyRunFailures`);
+- a run waits for an approval that you can give, or one of your own runs waits for an approval: `<pipeline> is waiting for approval`, with where it waits and `You can approve it.` when you can (`notifyApprovals`);
+- a run you watch finishes, whether it succeeded, finished with warnings, was canceled or failed (`notifyWatchedRuns`).
+
+Each kind has a setting, on by default. See Settings.
+
+- One notification per finish and per approval. When you rerun a stage and the run fails again, it notifies again.
+- Nothing for your runs that failed, or approvals that started waiting, before the plugin started. A watched run that finished while Orca was closed does notify, once, when the plugin next runs.
+- At most 3 per poll, then one more, `N more pipeline updates`, for the rest.
+- A click opens nothing, because Orca gives the plugin no click event. The text says where to look: the Pipelines tab.
+
+The plugin needs the `notifications:show` permission to show them. Orca asks you to approve it once, when the plugin first loads with it. Until you do, nothing shows. The plugin logs "Couldn't show a desktop notification." and doesn't retry.
+
+## The status bar
+
+The status bar item reads `ADO · N failed · N approvals · N to review`. Each part shows only when it isn't zero, so with nothing to report it reads `ADO`.
+
+- `N failed` is the **Failed** filter's count.
+- `N approvals` is the **Needs me** count, and reads `1 approval` for one.
+- `N to review` is the pull requests waiting for your review, as in To review.
+
+Each number adds up your connected organisations. The tooltip and **Azure DevOps: Connection status** break them down by organisation. The pipeline counts refresh with the Pipelines polling below.
+
 ## Polling
 
 - My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise.
@@ -188,6 +331,12 @@ Channels are shared by all your organisations. Which ones you post to is remembe
 - PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list only, for the status bar). Opening the tab shows data under a minute old without asking again.
 - PRs tab caches: completed pull requests for 5 minutes, linked work items for 10 minutes (an hour once completed), build and policy status for 2 minutes, the code project list for an hour.
 - PRs tab limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes.
+- Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 runs that just finished per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
+- Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
+- Watched runs: every 30 seconds while one hasn't finished.
+- An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
+- Slow-down: when Azure DevOps answers with `Retry-After` or `X-RateLimit-Delay`, that organisation drops to the background pace for 5 minutes. The Pipelines tab then polls every 5 minutes, watched runs every 2 minutes and an open run tab every 30 seconds.
+- Pipelines limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read builds, runs for that organisation pause for 10 minutes and the tab says why. When it refuses approvals only, approvals turn off for 10 minutes while runs keep loading, and the tab says Needs me may be incomplete.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.
 
 ## Settings
@@ -202,6 +351,10 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `autoCompleteDeleteSourceBranch` (Auto-complete: delete the source branch): off by default. A branch that another active pull request still uses is kept either way.
 - `autoCompleteTransitionWorkItems` (Auto-complete: complete linked work items): off by default.
 - `shareTemplate` (Pull request share line): one line per pull request in a share. Defaults to `[Pull Request {id}]({url}): {title}`. See Sharing for the placeholders.
+- `notifyRunFailures` (Notify when my pipeline runs fail): on by default.
+- `notifyApprovals` (Notify when a run waits for approval): on by default. It covers approvals you can give and approvals on your own runs.
+- `notifyWatchedRuns` (Notify when a watched run finishes): on by default.
+- `approvalShareTemplate` (Approval share line): one line per approval in a share. Defaults to `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`. See The Pipelines tab for the placeholders.
 
 ## Development
 
@@ -239,6 +392,18 @@ Pull requests and sharing:
 - `ADO · N to review` on the status bar.
 - The PRs tab and composer at 360 px in both themes, Orca's To review fold and the first press of Share and Open Teams chat.
 - The Markdown preview of a title that holds a bare URL.
+
+Pipelines and notifications:
+
+- A multi-stage sandbox run: the Pipelines tab and the run tab follow its stages and steps live. Whether a running step's log grows before the step ends, whether `startLine` counts from 1 and `endLine` is inclusive, how `changeId` behaves and whether an unchanged timeline answers `204`, what a queued run's timeline and logs return, and whether a log's first line carries a byte order mark.
+- A failing Docker-style step and a failing Helm-style step: Errors only and the error summary find their lines, **Jump to line** works, and **Open in Orca** opens a file in a local workspace. This includes agent paths such as `/home/vsts/work/1/s/…` and `D:\a\1\s\…`, and whether the workspace's branch name matches the run's.
+- Rerun the failed stage, including the one implicit stage of a pipeline without stages and whether a retry replaces the stage's records, then cancel a run.
+- An environment approval: Needs me, the approvers and waiting time, the environment name, Approve and Reject with a comment, and a two-approver check. Also what Azure DevOps answers when the requester approves their own run, the `permissions` value for a group-assigned approver, that `$expand=steps,permissions` is accepted, and that an approval's `pipeline.owner.id` is the run id and its Checkpoint records match.
+- Share for approval to a Teams chat, the test channel, email and Copy. For email: whether `mailto:` opens in the default mail app, how Orca's consent prompt treats it, and whether an `@` encoded as `%40` survives in the address.
+- Notifications for a failure, a watched run and an approval on macOS, with Orca in front and behind, and what a click does.
+- On the client organisation, read-only: `X-RateLimit-*` and `Retry-After` headroom with the Pipelines tab and a run tab open for 10 minutes, whether `requestedFor` carries an id, who it names on a run started by pull request auto-complete, and the `triggerInfo` of one real pull request validation run and one CI run.
+- Which scopes runs, approvals, environment names and the project list need with a partial PAT, and whether a refusal gives the right message.
+- The Pipelines tab at 360 px and the run tab in both themes, a run tab whose file was pruned, and `ADO · N failed · N approvals · N to review` on the status bar.
 
 ## License
 
