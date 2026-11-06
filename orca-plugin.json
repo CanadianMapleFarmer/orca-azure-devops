@@ -3,9 +3,15 @@
   "id": "azure-devops",
   "name": "Azure DevOps",
   "version": "0.1.0",
-  "description": "Azure DevOps work items, pipelines, pull requests and wikis in the Orca sidebar.",
+  "description": "Unofficial. Azure DevOps work items, boards, pipelines, pull requests and wikis in the Orca sidebar.",
+  "icon": "assets/icon.png",
+  "author": {
+    "name": "Gerhard Kloppers",
+    "url": "https://github.com/CanadianMapleFarmer"
+  },
   "license": "MIT",
   "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "homepage": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
   "engines": {
     "orca": ">=1.4.248"
   },

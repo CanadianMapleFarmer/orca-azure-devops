@@ -1,13 +1,14 @@
 # Azure DevOps for Orca
 
-Azure DevOps boards, pull requests, pipelines and wikis inside [Orca](https://github.com/stablyai/orca) (see Status).
+Azure DevOps work items, boards, pull requests, pipelines and wikis in the [Orca](https://github.com/stablyai/orca) sidebar. Connect any number of organisations with the Azure CLI, a Microsoft account or a personal access token, and the plugin keeps each one pinned to the account you signed in with.
 
-**Status: under construction.**
+Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Microsoft.
 
 | Works now |
 | --- |
 | Connecting any number of Azure DevOps organisations |
 | Pinning each organisation to one account |
+| Sign in with Microsoft, and proxy and certificate settings for restricted networks |
 | Choosing each org's boards project, team and code projects |
 | An always-on worker and an `ADO` status bar item |
 | A Work tab with your items, grouped by board column |
@@ -564,6 +565,24 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `httpsProxy` (HTTPS proxy): an `http://` or `https://` proxy address for the plugin's traffic, like `http://proxy.example.com:8080`. Proxies that need a password aren't supported. Empty by default. See Proxies and certificates.
 - `caCertificatesFile` (Extra CA certificates file): a PEM file of certificates to trust, for networks that inspect TLS. Empty by default. A change reaches new connections only; connections already open keep the certificates they started with.
 - `useSystemCertificates` (Trust the system's certificates): also trust the certificates your operating system trusts. Off by default. Like the certificates file, a change reaches new connections only.
+
+## Permissions
+
+Orca asks you to approve these when the plugin first loads. The plugin runs in a trusted worker, a separate Node.js process with your user account's access to the computer. `orca plugin inspect` lists the same grants.
+
+- `storage:own`: the plugin's own storage keeps your connected organisations and their pinned accounts, each board's nudge rules and dismissed nudges, the runs you watch, your share choices and Teams channel names, the links between work items and workspaces, and the list of wiki drafts.
+- `secrets:own`: Orca's encrypted secrets keep personal access tokens, the Microsoft refresh token for each organisation and each Teams webhook URL (see Where credentials live).
+- `settings:own`: reads the settings under Settings and notices when you change one.
+- `workspace:read`: finds your focused workspace and lists your workspaces, for Start an agent, opening a board, a run or a wiki draft, Open in Orca, and finding the workspace that holds a pull request's repository in Check out in Orca.
+- `workspace:write`: shows a workspace (Check out in Orca) and opens files in an editor tab: a board, a run, a wiki draft, or a file a failing step names.
+- `agent:read`: lets the plugin hear `agent.status.changed`. It reads nothing else about agents.
+- `agent:launch`: Start an agent launches your default agent in a workspace with the item's prompt.
+- `notifications:show`: shows the desktop notifications for failed runs, watched runs and approvals (see Notifications).
+- `workspace.create.before`: when Start a workspace or Check out in Orca has armed a branch, gives the next worktree you create that branch (and, for Check out in Orca, its base). Otherwise it changes nothing.
+- `workspace.create.after`: links a workspace made by Start a workspace to its work item.
+- `agent.launch.before`: notes which workspace an agent launch belongs to, so Add work item context to agent prompts knows where its prompt came from.
+- `agent.prompt.before`: with Add work item context to agent prompts on, starts the first prompt of an agent in a linked workspace with a link to the item. Prompts you type are never changed.
+- `agent.status.changed`: notes which workspace an agent that Orca reports belongs to, for the same purpose.
 
 ## Development
 
