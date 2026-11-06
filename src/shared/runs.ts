@@ -107,5 +107,5 @@ function recency(run: RunSummary): number {
 }
 
 function lineOf(run: RunSummary): string {
-  return `${run.pipeline.id}:${run.branch}`
+  return `${run.projectId}:${run.pipeline.id}:${run.branch}`
 }

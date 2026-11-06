@@ -172,6 +172,18 @@ test('failedRuns is replaced only by a newer run that is active, succeeded or wa
   assert.equal(kept(newer('succeeded', { mine: false, requestedFor: { id: GRACE, name: 'Grace Hopper' } })), false, 'someone else')
 })
 
+test('failedRuns is not replaced by a run of the same pipeline id and branch in another project', () => {
+  const OTHER_PROJECT = '7b2c3d4e-2222-4b3c-8d4e-1f2a3b4c5d6e'
+  const failed = run(4512, { state: 'failed', branch: 'main', queuedAt: NOW - 3 * HOUR, finishedAt: NOW - 2 * HOUR })
+  const elsewhere = run(4513, { projectId: OTHER_PROJECT, projectName: 'Fabrikam API', state: 'succeeded', branch: 'main', queuedAt: NOW - HOUR, finishedAt: NOW - 30 * MINUTE })
+  const here = run(4514, { state: 'succeeded', branch: 'main', queuedAt: NOW - HOUR, finishedAt: NOW - 30 * MINUTE })
+
+  assert.deepEqual(ids(failedRuns([failed, elsewhere], NOW)), [4512])
+  assert.deepEqual(ids(runsFor('failed', [failed, elsewhere], NOW)), [4512])
+  assert.equal(runCounts([failed, elsewhere], NOW).failedRuns, 1)
+  assert.deepEqual(ids(failedRuns([failed, elsewhere, here], NOW)), [], 'a newer run in the same project still replaces it')
+})
+
 test("failedRuns ignores failures older than 24 hours and other people's unwatched runs", () => {
   const failed = (buildId: number, over: Partial<RunSummary> = {}) =>
     run(buildId, { state: 'failed', branch: `b${buildId}`, queuedAt: NOW - 2 * HOUR, finishedAt: NOW - HOUR, ...over })
