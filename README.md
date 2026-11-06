@@ -88,7 +88,7 @@ Microsoft shows many sign-in errors on its own page, with an `AADSTS` code. The 
 
 The plugin's own messages:
 
-- `Sign-in was cancelled in the browser.` You pressed Cancel or declined the permissions on Microsoft's page (`AADSTS65004`). You fix it: press **Connect** and try again.
+- `Sign-in was cancelled in the browser.` You pressed Cancel or declined the permissions on Microsoft's page (`AADSTS65004`). You fix it: press **Connect** (**Reconnect** for an organisation you've already added) and try again.
 - `Couldn't reach Microsoft sign-in.` There was no answer from `login.microsoftonline.com`, or Microsoft was briefly unavailable. You fix it by checking your connection and Proxies and certificates, then trying again. If the network blocks Microsoft, your network admin fixes it.
 - `Microsoft sign-in returned an unexpected response.` Something between you and Microsoft, such as a proxy or a network sign-in page, may have answered instead. Try again first. Your network admin fixes it if it repeats.
 - `Set the app (client) ID for Microsoft sign-in in Settings → Azure DevOps. The README explains how an admin creates it.` The `entraClientId` setting is empty. You fix it by pasting in the ID your admin gives you.
