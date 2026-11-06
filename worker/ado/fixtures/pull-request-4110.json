@@ -1,0 +1,77 @@
+{
+  "repository": {
+    "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+    "name": "web-app",
+    "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",
+    "project": {
+      "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+      "name": "Fabrikam Web",
+      "state": "wellFormed",
+      "visibility": "private",
+      "lastUpdateTime": "2026-11-01T08:00:00.000Z"
+    },
+    "size": 1048576,
+    "remoteUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+    "sshUrl": "git@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app",
+    "webUrl": "https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app",
+    "isDisabled": false,
+    "isInMaintenance": false
+  },
+  "pullRequestId": 4110,
+  "codeReviewId": 4110,
+  "status": "active",
+  "createdBy": {
+    "displayName": "Grace Hopper",
+    "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+    "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+    "uniqueName": "grace@contoso.example",
+    "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+  },
+  "creationDate": "2026-11-04T07:45:00.0Z",
+  "title": "Harden the login redirect",
+  "description": "Fixes the open redirect reported in #1211.\n\n![Redirect flow](/.attachments/redirect-flow-4110.png)\n\n@<9D1C2B3A-4444-4E5F-8A6B-7C8D9E0F1A2B>, could you check the decoding order?\n\n- Decode the target once before checking it.\n- Refuse protocol-relative targets.",
+  "sourceRefName": "refs/heads/hotfix/1211-login-redirect",
+  "targetRefName": "refs/heads/main",
+  "isDraft": false,
+  "mergeStatus": "succeeded",
+  "mergeId": "00004110-6666-4a7b-8c9d-0e1f2a3b4c5d",
+  "lastMergeSourceCommit": {
+    "commitId": "4110a2000000000000000000000000000000a002",
+    "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110a2000000000000000000000000000000a002"
+  },
+  "lastMergeTargetCommit": {
+    "commitId": "4110b2000000000000000000000000000000b002",
+    "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110b2000000000000000000000000000000b002"
+  },
+  "lastMergeCommit": {
+    "commitId": "4110d2000000000000000000000000000000d002"
+  },
+  "reviewers": [
+    {
+      "reviewerUrl": null,
+      "vote": 0,
+      "hasDeclined": false,
+      "isRequired": true,
+      "isFlagged": false,
+      "displayName": "Alex Contoso",
+      "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+      "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+      "uniqueName": "alex@contoso.example",
+      "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+    },
+    {
+      "reviewerUrl": null,
+      "vote": 10,
+      "hasDeclined": false,
+      "isRequired": false,
+      "isFlagged": false,
+      "displayName": "Dennis Ritchie",
+      "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+      "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+      "uniqueName": "dennis@contoso.example",
+      "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+    }
+  ],
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110",
+  "supportsIterations": true
+}

@@ -1,0 +1,13 @@
+{
+  "etag": "\"5d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e\"",
+  "page": {
+    "path": "/Release process/Checklist",
+    "order": 0,
+    "gitItemPath": "/Release-process/Checklist.md",
+    "subPages": [],
+    "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d/pages/%2FRelease%20process%2FChecklist",
+    "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d?pagePath=%2FRelease%20process%2FChecklist",
+    "id": 52,
+    "content": "[[_TOC_]]\n\n# Release checklist\n\nFollow these steps before every release.\n\n![Release flow](/.attachments/flow-1a2b.png)\n\n1. Freeze the `main` branch.\n2. Run the smoke tests.\n3. Tag the release.\n\n<img src=\"/.attachments/x.png\" width=300>\n\nIf something goes wrong, see [Rollback](/Release-process/Rollback).\n"
+  }
+}

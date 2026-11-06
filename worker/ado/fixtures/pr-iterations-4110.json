@@ -1,0 +1,81 @@
+{
+  "value": [
+    {
+      "id": 1,
+      "description": "Harden the login redirect",
+      "author": {
+        "displayName": "Grace Hopper",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "uniqueName": "grace@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+      },
+      "createdDate": "2026-11-04T07:45:00.0Z",
+      "updatedDate": "2026-11-04T07:45:00.0Z",
+      "sourceRefCommit": {
+        "commitId": "4110a1000000000000000000000000000000a001",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110a1000000000000000000000000000000a001"
+      },
+      "targetRefCommit": {
+        "commitId": "4110b1000000000000000000000000000000b001",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110b1000000000000000000000000000000b001"
+      },
+      "commonRefCommit": {
+        "commitId": "4110c0000000000000000000000000000000c000",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110c0000000000000000000000000000000c000"
+      },
+      "hasMoreCommits": false,
+      "reason": "create",
+      "push": {
+        "pushId": 9101,
+        "date": "2026-11-04T07:44:30.0Z",
+        "pushedBy": {
+          "displayName": "Grace Hopper",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "uniqueName": "grace@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "description": "Decode the target once",
+      "author": {
+        "displayName": "Grace Hopper",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+        "uniqueName": "grace@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+      },
+      "createdDate": "2026-11-05T08:30:00.0Z",
+      "updatedDate": "2026-11-05T08:30:00.0Z",
+      "sourceRefCommit": {
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110a2000000000000000000000000000000a002"
+      },
+      "targetRefCommit": {
+        "commitId": "4110b2000000000000000000000000000000b002",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110b2000000000000000000000000000000b002"
+      },
+      "commonRefCommit": {
+        "commitId": "4110c0000000000000000000000000000000c000",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/commits/4110c0000000000000000000000000000000c000"
+      },
+      "hasMoreCommits": false,
+      "reason": "push",
+      "push": {
+        "pushId": 9102,
+        "date": "2026-11-05T08:29:40.0Z",
+        "pushedBy": {
+          "displayName": "Grace Hopper",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+          "uniqueName": "grace@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        }
+      }
+    }
+  ],
+  "count": 2
+}

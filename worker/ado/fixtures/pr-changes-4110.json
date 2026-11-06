@@ -1,0 +1,81 @@
+{
+  "changeEntries": [
+    {
+      "changeTrackingId": 1,
+      "changeId": 1,
+      "item": {
+        "objectId": "b10b0001000000000000000000000000000000a2",
+        "originalObjectId": "b10b0001000000000000000000000000000000a1",
+        "gitObjectType": "blob",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/src/auth/redirect.ts",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/src/auth/redirect.ts?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "edit"
+    },
+    {
+      "changeTrackingId": 2,
+      "changeId": 2,
+      "item": {
+        "objectId": "b10b0002000000000000000000000000000000a2",
+        "gitObjectType": "blob",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/src/auth/redirect.test.ts",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/src/auth/redirect.test.ts?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "add"
+    },
+    {
+      "changeTrackingId": 3,
+      "changeId": 3,
+      "item": {
+        "originalObjectId": "b10b0003000000000000000000000000000000a1",
+        "gitObjectType": "blob",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/src/auth/legacy-return.ts",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/src/auth/legacy-return.ts?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "delete"
+    },
+    {
+      "changeTrackingId": 4,
+      "changeId": 4,
+      "item": {
+        "objectId": "b10b0004000000000000000000000000000000a1",
+        "originalObjectId": "b10b0004000000000000000000000000000000a1",
+        "gitObjectType": "blob",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/docs/auth.md",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/docs/auth.md?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "rename",
+      "originalPath": "/docs/login.md"
+    },
+    {
+      "changeTrackingId": 5,
+      "changeId": 5,
+      "item": {
+        "gitObjectType": "tree",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/assets",
+        "isFolder": true,
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/assets?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "add"
+    },
+    {
+      "changeTrackingId": 6,
+      "changeId": 6,
+      "item": {
+        "objectId": "b10b0005000000000000000000000000000000a2",
+        "gitObjectType": "blob",
+        "commitId": "4110a2000000000000000000000000000000a002",
+        "path": "/assets/lock.png",
+        "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/items/assets/lock.png?versionType=Commit&version=4110a2000000000000000000000000000000a002"
+      },
+      "changeType": "add"
+    }
+  ],
+  "nextSkip": 0,
+  "nextTop": 0
+}

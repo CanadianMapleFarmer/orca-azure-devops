@@ -1,0 +1,37 @@
+{
+  "4110c0000000000000000000000000000000c000:/src/auth/redirect.ts": {
+    "objectId": "b10b0001000000000000000000000000000000a1",
+    "content": "import { URL } from 'node:url'\n\nexport interface RedirectOptions {\n  allowedHosts: readonly string[]\n  fallback: string\n}\n\nconst DEFAULT_FALLBACK = '/'\n\nexport function defaultOptions(): RedirectOptions {\n  return { allowedHosts: [], fallback: DEFAULT_FALLBACK }\n}\n\nfunction isRelative(target: string): boolean {\n  return target.startsWith('/') && !target.startsWith('//')\n}\n\nfunction hostOf(target: string): string | null {\n  try {\n    return new URL(target).host\n  } catch {\n    return null\n  }\n}\n\nexport function normalise(target: string): string {\n  return target.trim()\n}\n\nexport function isAllowed(target: string, options: RedirectOptions): boolean {\n  if (isRelative(target)) return true\n  const host = hostOf(target)\n  return host !== null && options.allowedHosts.includes(host)\n}\n\nexport function safeRedirect(raw: string | null, options = defaultOptions()): string {\n  if (raw === null) return options.fallback\n  const target = normalise(raw)\n  if (target === '') return options.fallback\n  if (target.includes('returnUrl=')) {\n    return options.fallback\n  }\n  return isAllowed(target, options) ? target : options.fallback\n}\n\nexport function loginUrl(returnTo: string): string {\n  return `/login?returnUrl=${encodeURIComponent(returnTo)}`\n}\n\nexport function logoutUrl(): string {\n  return '/logout'\n}\n\nexport function describe(target: string): string {\n  return isRelative(target) ? 'relative' : 'absolute'\n}\n\nexport const REDIRECT_PARAM = 'returnUrl'\n\nexport const MAX_REDIRECT_LENGTH = 2048\n",
+    "isBinary": false
+  },
+  "4110a2000000000000000000000000000000a002:/src/auth/redirect.ts": {
+    "objectId": "b10b0001000000000000000000000000000000a2",
+    "content": "import { URL } from 'node:url'\n\nexport interface RedirectOptions {\n  allowedHosts: readonly string[]\n  fallback: string\n}\n\nconst DEFAULT_FALLBACK = '/'\n\nexport function defaultOptions(): RedirectOptions {\n  return { allowedHosts: [], fallback: DEFAULT_FALLBACK }\n}\n\nfunction isRelative(target: string): boolean {\n  return target.startsWith('/') && !target.startsWith('//')\n}\n\nfunction hostOf(target: string): string | null {\n  try {\n    return new URL(target).host\n  } catch {\n    return null\n  }\n}\n\nexport function normalise(target: string): string {\n  return target.trim()\n}\n\nexport function isAllowed(target: string, options: RedirectOptions): boolean {\n  if (isRelative(target)) return true\n  const host = hostOf(target)\n  return host !== null && options.allowedHosts.includes(host)\n}\n\nexport function safeRedirect(raw: string | null, options = defaultOptions()): string {\n  if (raw === null) return options.fallback\n  const target = normalise(raw)\n  if (target === '') return options.fallback\n  if (target.length > MAX_REDIRECT_LENGTH) return options.fallback\n  const decoded = decodeURIComponent(target)\n  if (decoded.includes('returnUrl=')) {\n    return options.fallback\n  }\n  if (decoded.startsWith('//')) return options.fallback\n  if (!isAllowed(decoded, options)) return options.fallback\n  return decoded\n}\n\nexport function loginUrl(returnTo: string): string {\n  return `/login?returnUrl=${encodeURIComponent(returnTo)}`\n}\n\nexport function logoutUrl(): string {\n  return '/logout'\n}\n\nexport function describe(target: string): string {\n  return isRelative(target) ? 'relative' : 'absolute'\n}\n\nexport const REDIRECT_PARAM = 'returnUrl'\n\nexport const MAX_REDIRECT_LENGTH = 2048\n",
+    "isBinary": false
+  },
+  "4110a2000000000000000000000000000000a002:/src/auth/redirect.test.ts": {
+    "objectId": "b10b0002000000000000000000000000000000a2",
+    "content": "import { assert, test } from 'orca/testing'\nimport { safeRedirect } from './redirect'\n\nconst options = { allowedHosts: ['app.contoso.example'], fallback: '/' }\n\ntest('a relative target is kept', () => {\n  assert.equal(safeRedirect('/orders/12', options), '/orders/12')\n})\n\ntest('a nested return URL falls back', () => {\n  assert.equal(safeRedirect('/login?returnUrl=%2F', options), '/')\n})\n\ntest('a protocol-relative target falls back', () => {\n  assert.equal(safeRedirect('%2F%2Fevil.example', options), '/')\n})\n",
+    "isBinary": false
+  },
+  "4110c0000000000000000000000000000000c000:/src/auth/legacy-return.ts": {
+    "objectId": "b10b0003000000000000000000000000000000a1",
+    "content": "import { safeRedirect } from './redirect'\n\nexport function legacyReturn(query: URLSearchParams): string {\n  const raw = query.get('return')\n  if (raw === null) return safeRedirect(null)\n  const trimmed = raw.replace(/^\\s+|\\s+$/g, '')\n  return safeRedirect(decodeURI(trimmed))\n}\n\nexport const LEGACY_PARAM = 'return'\n",
+    "isBinary": false
+  },
+  "4110c0000000000000000000000000000000c000:/docs/login.md": {
+    "objectId": "b10b0004000000000000000000000000000000a1",
+    "content": "# Signing in\n\nPeople sign in at `/login`. After signing in they return to the page they came from.\n\nOnly relative return addresses and the hosts in `allowedHosts` are followed.\n",
+    "isBinary": false
+  },
+  "4110a2000000000000000000000000000000a002:/docs/auth.md": {
+    "objectId": "b10b0004000000000000000000000000000000a1",
+    "content": "# Signing in\n\nPeople sign in at `/login`. After signing in they return to the page they came from.\n\nOnly relative return addresses and the hosts in `allowedHosts` are followed.\n",
+    "isBinary": false
+  },
+  "4110a2000000000000000000000000000000a002:/assets/lock.png": {
+    "objectId": "b10b0005000000000000000000000000000000a2",
+    "content": "PNG\r\n\u001a\n\u0000\u0000\u0000\rIHDR\u0000\u0000\u0000\u0010",
+    "isBinary": true
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "pullRequestThreadContext": {
+    "iterationContext": {
+      "firstComparingIteration": 1,
+      "secondComparingIteration": 2
+    },
+    "changeTrackingId": 1
+  },
+  "id": 106,
+  "publishedDate": "2026-11-06T10:00:00.0Z",
+  "lastUpdatedDate": "2026-11-06T10:00:00.0Z",
+  "comments": [
+    {
+      "id": 1,
+      "parentCommentId": 0,
+      "author": {
+        "displayName": "Alex Contoso",
+        "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+        "uniqueName": "alex@contoso.example",
+        "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+      },
+      "content": "Can this branch get a test of its own?",
+      "publishedDate": "2026-11-06T10:00:00.0Z",
+      "lastUpdatedDate": "2026-11-06T10:00:00.0Z",
+      "lastContentUpdatedDate": "2026-11-06T10:00:00.0Z",
+      "commentType": "text",
+      "usersLiked": []
+    }
+  ],
+  "status": "active",
+  "threadContext": {
+    "filePath": "/src/auth/redirect.ts",
+    "rightFileStart": {
+      "line": 45,
+      "offset": 1
+    },
+    "rightFileEnd": {
+      "line": 45,
+      "offset": 1
+    }
+  },
+  "properties": {},
+  "isDeleted": false,
+  "_links": {
+    "self": {
+      "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/106"
+    }
+  }
+}

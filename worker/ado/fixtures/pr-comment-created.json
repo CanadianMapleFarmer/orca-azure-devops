@@ -1,0 +1,17 @@
+{
+  "id": 3,
+  "parentCommentId": 1,
+  "author": {
+    "displayName": "Alex Contoso",
+    "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+    "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+    "uniqueName": "alex@contoso.example",
+    "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+  },
+  "content": "Thanks, that reads right now.",
+  "publishedDate": "2026-11-06T10:05:00.0Z",
+  "lastUpdatedDate": "2026-11-06T10:05:00.0Z",
+  "lastContentUpdatedDate": "2026-11-06T10:05:00.0Z",
+  "commentType": "text",
+  "usersLiked": []
+}

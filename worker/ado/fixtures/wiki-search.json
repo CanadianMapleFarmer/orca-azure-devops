@@ -1,0 +1,94 @@
+{
+  "count": 3,
+  "results": [
+    {
+      "fileName": "Checklist.md",
+      "path": "/Release-process/Checklist.md",
+      "collection": {
+        "name": "contoso"
+      },
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "visibility": null
+      },
+      "wiki": {
+        "id": "6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+        "mappedPath": "/",
+        "name": "Fabrikam Web.wiki",
+        "version": "wikiMaster"
+      },
+      "contentId": "70c379b63ffa0795fdbfbc128e5a2818397b7e01",
+      "hits": [
+        {
+          "fieldReferenceName": "content",
+          "highlights": [
+            "2. Run the <highlighthit>smoke</highlighthit> tests &amp;   tag\n the release."
+          ]
+        }
+      ]
+    },
+    {
+      "fileName": "Setup-guide.md",
+      "path": "/docs/Setup-guide.md",
+      "collection": {
+        "name": "contoso"
+      },
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "visibility": null
+      },
+      "wiki": {
+        "id": "7c8d9e0f-8888-4b2c-8d3e-4f5a6b7c8d9e",
+        "mappedPath": "/docs",
+        "name": "api-docs",
+        "version": "main"
+      },
+      "contentId": "70c379b63ffa0795fdbfbc128e5a2818397b7e02",
+      "hits": [
+        {
+          "fieldReferenceName": "fileNames",
+          "highlights": [
+            "<highlighthit>Setup</highlighthit>-guide.md"
+          ]
+        },
+        {
+          "fieldReferenceName": "content",
+          "highlights": [
+            "Run the <highlighthit>setup</highlighthit> script once."
+          ]
+        }
+      ]
+    },
+    {
+      "fileName": "FAQ%3A-login.md",
+      "path": "/FAQ%3A-login.md",
+      "collection": {
+        "name": "contoso"
+      },
+      "project": {
+        "id": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+        "name": "Fabrikam Web",
+        "visibility": null
+      },
+      "wiki": {
+        "id": "6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+        "mappedPath": "/",
+        "name": "Fabrikam Web.wiki",
+        "version": "wikiMaster"
+      },
+      "contentId": "70c379b63ffa0795fdbfbc128e5a2818397b7e03",
+      "hits": [
+        {
+          "fieldReferenceName": "content",
+          "highlights": [
+            "Why does <highlighthit>login</highlighthit> send me back to &lt;Home&gt;?"
+          ]
+        }
+      ]
+    }
+  ],
+  "infoCode": 0,
+  "facets": {}
+}

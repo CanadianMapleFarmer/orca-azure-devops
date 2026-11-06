@@ -1,0 +1,28 @@
+{
+  "path": "/Release process",
+  "order": 1,
+  "isParentPage": true,
+  "gitItemPath": "/Release-process.md",
+  "subPages": [
+    {
+      "path": "/Release process/Rollback",
+      "order": 1,
+      "gitItemPath": "/Release-process/Rollback.md",
+      "subPages": [],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d/pages/%2FRelease%20process%2FRollback",
+      "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d?pagePath=%2FRelease%20process%2FRollback"
+    },
+    {
+      "path": "/Release process/Checklist",
+      "order": 0,
+      "gitItemPath": "/Release-process/Checklist.md",
+      "subPages": [],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d/pages/%2FRelease%20process%2FChecklist",
+      "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d?pagePath=%2FRelease%20process%2FChecklist"
+    }
+  ],
+  "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d/pages/%2FRelease%20process",
+  "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d?pagePath=%2FRelease%20process",
+  "id": 41,
+  "content": ""
+}

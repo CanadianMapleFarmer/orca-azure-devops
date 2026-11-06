@@ -1,0 +1,35 @@
+{
+  "value": [
+    {
+      "id": "7c8d9e0f-8888-4b2c-8d3e-4f5a6b7c8d9e",
+      "versions": [
+        {
+          "version": "main"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/7c8d9e0f-8888-4b2c-8d3e-4f5a6b7c8d9e",
+      "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/7c8d9e0f-8888-4b2c-8d3e-4f5a6b7c8d9e",
+      "type": "codeWiki",
+      "name": "api-docs",
+      "projectId": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+      "repositoryId": "8e9f0a1b-3333-4d6e-9f7a-4b5c6d7e8f90",
+      "mappedPath": "/docs"
+    },
+    {
+      "id": "6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+      "versions": [
+        {
+          "version": "wikiMaster"
+        }
+      ],
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+      "remoteUrl": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_wiki/wikis/6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+      "type": "projectWiki",
+      "name": "Fabrikam Web.wiki",
+      "projectId": "4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d",
+      "repositoryId": "6b7c8d9e-8888-4a1b-9c2d-3e4f5a6b7c8d",
+      "mappedPath": "/"
+    }
+  ],
+  "count": 2
+}

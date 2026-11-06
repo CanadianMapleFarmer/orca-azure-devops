@@ -1,0 +1,267 @@
+{
+  "value": [
+    {
+      "pullRequestThreadContext": null,
+      "id": 101,
+      "publishedDate": "2026-11-05T09:10:00.0Z",
+      "lastUpdatedDate": "2026-11-05T09:20:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": {
+            "displayName": "Grace Hopper",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "uniqueName": "grace@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+          },
+          "content": "@<9D1C2B3A-4444-4E5F-8A6B-7C8D9E0F1A2B> could you look at the decoding order before I merge?",
+          "publishedDate": "2026-11-05T09:10:00.0Z",
+          "lastUpdatedDate": "2026-11-05T09:10:00.0Z",
+          "lastContentUpdatedDate": "2026-11-05T09:10:00.0Z",
+          "commentType": "text",
+          "usersLiked": []
+        },
+        {
+          "id": 2,
+          "parentCommentId": 1,
+          "author": {
+            "displayName": "Alex Contoso",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b",
+            "uniqueName": "alex@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+          },
+          "content": "Looking now. Decoding once, before the host check, reads right to me.",
+          "publishedDate": "2026-11-05T09:20:00.0Z",
+          "lastUpdatedDate": "2026-11-05T09:20:00.0Z",
+          "lastContentUpdatedDate": "2026-11-05T09:20:00.0Z",
+          "commentType": "text",
+          "usersLiked": []
+        }
+      ],
+      "status": "active",
+      "threadContext": null,
+      "properties": {},
+      "isDeleted": false,
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/101"
+        }
+      }
+    },
+    {
+      "pullRequestThreadContext": {
+        "iterationContext": {
+          "firstComparingIteration": 1,
+          "secondComparingIteration": 2
+        },
+        "changeTrackingId": 1
+      },
+      "id": 102,
+      "publishedDate": "2026-11-04T10:00:00.0Z",
+      "lastUpdatedDate": "2026-11-05T08:31:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": {
+            "displayName": "Dennis Ritchie",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "uniqueName": "dennis@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+          },
+          "content": "Prefer URL parsing here over string checks.",
+          "publishedDate": "2026-11-04T10:00:00.0Z",
+          "lastUpdatedDate": "2026-11-04T10:00:00.0Z",
+          "lastContentUpdatedDate": "2026-11-04T10:00:00.0Z",
+          "commentType": "text",
+          "usersLiked": []
+        },
+        {
+          "id": 2,
+          "parentCommentId": 1,
+          "author": {
+            "displayName": "Grace Hopper",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "uniqueName": "grace@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+          },
+          "content": "Done in iteration 2.",
+          "publishedDate": "2026-11-05T08:31:00.0Z",
+          "lastUpdatedDate": "2026-11-05T08:31:00.0Z",
+          "lastContentUpdatedDate": "2026-11-05T08:31:00.0Z",
+          "commentType": "text",
+          "usersLiked": []
+        }
+      ],
+      "status": "fixed",
+      "threadContext": {
+        "filePath": "/src/auth/redirect.ts",
+        "rightFileStart": {
+          "line": 42,
+          "offset": 1
+        },
+        "rightFileEnd": {
+          "line": 42,
+          "offset": 1
+        },
+        "leftFileStart": null,
+        "leftFileEnd": null
+      },
+      "properties": {},
+      "isDeleted": false,
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/102"
+        }
+      }
+    },
+    {
+      "pullRequestThreadContext": {
+        "iterationContext": {
+          "firstComparingIteration": 1,
+          "secondComparingIteration": 2
+        },
+        "changeTrackingId": 3
+      },
+      "id": 103,
+      "publishedDate": "2026-11-05T08:40:00.0Z",
+      "lastUpdatedDate": "2026-11-05T08:40:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": {
+            "displayName": "Dennis Ritchie",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "uniqueName": "dennis@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+          },
+          "content": "Was anything else calling `legacyReturn`?",
+          "publishedDate": "2026-11-05T08:40:00.0Z",
+          "lastUpdatedDate": "2026-11-05T08:40:00.0Z",
+          "lastContentUpdatedDate": "2026-11-05T08:40:00.0Z",
+          "commentType": "text",
+          "usersLiked": []
+        }
+      ],
+      "status": "pending",
+      "threadContext": {
+        "filePath": "/src/auth/legacy-return.ts",
+        "leftFileStart": {
+          "line": 7,
+          "offset": 1
+        },
+        "leftFileEnd": {
+          "line": 7,
+          "offset": 1
+        },
+        "rightFileStart": null,
+        "rightFileEnd": null
+      },
+      "properties": {},
+      "isDeleted": false,
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/103"
+        }
+      }
+    },
+    {
+      "pullRequestThreadContext": null,
+      "id": 104,
+      "publishedDate": "2026-11-05T08:45:00.0Z",
+      "lastUpdatedDate": "2026-11-05T08:45:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": {
+            "displayName": "Dennis Ritchie",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+            "uniqueName": "dennis@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+          },
+          "content": "Dennis Ritchie voted 10",
+          "publishedDate": "2026-11-05T08:45:00.0Z",
+          "lastUpdatedDate": "2026-11-05T08:45:00.0Z",
+          "lastContentUpdatedDate": "2026-11-05T08:45:00.0Z",
+          "commentType": "system",
+          "usersLiked": []
+        }
+      ],
+      "threadContext": null,
+      "properties": {
+        "CodeReviewThreadType": {
+          "$type": "System.String",
+          "$value": "VoteUpdate"
+        },
+        "CodeReviewVoteResult": {
+          "$type": "System.String",
+          "$value": "10"
+        },
+        "CodeReviewVotedByIdentity": {
+          "$type": "System.String",
+          "$value": "1"
+        }
+      },
+      "identities": {
+        "1": {
+          "displayName": "Dennis Ritchie",
+          "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e",
+          "uniqueName": "dennis@contoso.example",
+          "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e"
+        }
+      },
+      "isDeleted": false,
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/104"
+        }
+      }
+    },
+    {
+      "pullRequestThreadContext": null,
+      "id": 105,
+      "publishedDate": "2026-11-04T11:00:00.0Z",
+      "lastUpdatedDate": "2026-11-04T11:00:00.0Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": {
+            "displayName": "Grace Hopper",
+            "url": "https://spsprodcus1.vssps.visualstudio.com/Aexample/_apis/Identities/a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d",
+            "uniqueName": "grace@contoso.example",
+            "imageUrl": "https://dev.azure.com/contoso/_apis/GraphProfile/MemberAvatars/aad.a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+          },
+          "content": "Never mind, wrong pull request.",
+          "publishedDate": "2026-11-04T11:00:00.0Z",
+          "lastUpdatedDate": "2026-11-04T11:00:00.0Z",
+          "lastContentUpdatedDate": "2026-11-04T11:00:00.0Z",
+          "commentType": "text",
+          "usersLiked": [],
+          "isDeleted": true
+        }
+      ],
+      "status": "active",
+      "threadContext": null,
+      "properties": {},
+      "isDeleted": true,
+      "_links": {
+        "self": {
+          "href": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/git/repositories/7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f/pullRequests/4110/threads/105"
+        }
+      }
+    }
+  ],
+  "count": 5
+}
