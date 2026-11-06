@@ -13,14 +13,25 @@ export function toReviewOf(prs: PrSummary[], me: string): PrSummary[] {
   return prs.filter(pr => isWaitingOn(pr, me)).sort(newestPrFirst)
 }
 
+export function reviewedOf(prs: PrSummary[], me: string): PrSummary[] {
+  return prs.filter(pr => isVotedOn(pr, me)).sort(newestPrFirst)
+}
+
 function isRelevant(pr: PrSummary, now: number): boolean {
   if (pr.status === 'active') return true
   return pr.status === 'completed' && pr.closedAt !== null && pr.closedAt >= now - COMPLETED_WINDOW_MS
 }
 
 function isWaitingOn(pr: PrSummary, me: string): boolean {
-  if (pr.status !== 'active' || pr.isDraft || sameId(pr.createdBy.id, me)) return false
-  return pr.reviewers.some(reviewer => sameId(reviewer.id, me) && reviewer.vote === 0 && !reviewer.hasDeclined)
+  return isReviewable(pr, me) && pr.reviewers.some(reviewer => sameId(reviewer.id, me) && reviewer.vote === 0 && !reviewer.hasDeclined)
+}
+
+function isVotedOn(pr: PrSummary, me: string): boolean {
+  return isReviewable(pr, me) && pr.reviewers.some(reviewer => sameId(reviewer.id, me) && reviewer.vote !== 0 && !reviewer.hasDeclined)
+}
+
+function isReviewable(pr: PrSummary, me: string): boolean {
+  return pr.status === 'active' && !pr.isDraft && !sameId(pr.createdBy.id, me)
 }
 
 function groupRelated(prs: PrSummary[]): PrSummary[][] {

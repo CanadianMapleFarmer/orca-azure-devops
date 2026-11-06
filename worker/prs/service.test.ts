@@ -187,7 +187,7 @@ test('a background run asks only for reviews and updates the count', async () =>
   h.ado.on(isReviewList, () => json(200, { value: [] }))
   await h.clock.tick(5 * MINUTE)
   assert.deepEqual(h.counts.at(-1), [ORG, 0])
-  assert.deepEqual(h.posts.at(-1), { ...snapshot, toReview: [], toReviewCount: 0 }, 'once the sets are loaded, a review update is posted')
+  assert.deepEqual(h.posts.at(-1), { ...snapshot, toReview: [], toReviewCount: 0, reviewed: [] }, 'once the sets are loaded, a review update is posted')
 })
 
 test('loads are single-flight per org, and a full load waits for a reviews load in flight', async () => {
@@ -233,12 +233,14 @@ test('the snapshot holds release sets, to-review PRs and the saved auto-complete
   })
   assert.deepEqual(search.prs[0].checks, { build: 'succeeded', policies: 'approved' })
   assert.deepEqual(snapshot.toReview.map(pr => pr.prId), [4110])
-  assert.deepEqual({ ...snapshot, sets: [], toReview: [] }, {
+  assert.deepEqual(snapshot.reviewed.map(pr => pr.prId), [4111])
+  assert.deepEqual({ ...snapshot, sets: [], toReview: [], reviewed: [] }, {
     org: ORG,
     me: ME,
     sets: [],
     toReview: [],
     toReviewCount: 1,
+    reviewed: [],
     autoComplete: AUTO,
     updatedAt: T0,
     stale: false
@@ -459,6 +461,57 @@ test('a snapshot over the post budget is trimmed with the message', async () => 
   const capped = await small.service.snapshot(ORG)
   assert.deepEqual([capped.sets.length, capped.toReview.length, capped.toReviewCount, capped.message], [50, 100, 120, TRIMMED])
   assert.equal(capped.sets[0].prs[0].prId, 5000)
+})
+
+function votedPr(prId: number, createdAt: number, title: string, vote = 10): RawPullRequest {
+  return rawPr(prId, createdAt, title, {
+    createdBy: { id: 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d', displayName: 'Grace Hopper' },
+    reviewers: [{ id: ME, displayName: 'Alex Contoso', vote }]
+  })
+}
+
+test('the snapshot carries at most 50 reviewed PRs within the post budget', async () => {
+  const h = harness()
+  const title = (prId: number) => `${prId} ${'x'.repeat(4000)}`
+  const waiting = Array.from({ length: 5 }, (_, index) => toReviewPr(6000 + index, T0 - index * MINUTE, title(6000 + index)))
+  const voted = Array.from({ length: 60 }, (_, index) => votedPr(7000 + index, T0 - index * MINUTE, title(7000 + index)))
+  h.ado.on(isReviewList, call => json(200, { value: projectOf(call) === PROJECT ? [...waiting, ...voted] : [] }))
+
+  const snapshot = await h.service.snapshot(ORG)
+  assert.ok(byteLength(snapshot) <= 240 * 1024, `${byteLength(snapshot)} bytes`)
+  assert.equal(snapshot.message, TRIMMED)
+  assert.deepEqual(snapshot.toReview.map(pr => pr.prId), waiting.map(pr => pr.pullRequestId), 'To review is fitted first')
+  assert.ok(snapshot.reviewed.length > 0 && snapshot.reviewed.length < 50, `${snapshot.reviewed.length} reviewed`)
+  assert.deepEqual(snapshot.reviewed.map(pr => pr.prId), voted.slice(0, snapshot.reviewed.length).map(pr => pr.pullRequestId))
+  assert.deepEqual(h.posts, [snapshot])
+
+  const small = harness()
+  const many = Array.from({ length: 80 }, (_, index) => votedPr(7000 + index, T0 - index * MINUTE, `Voted ${index}`, index % 2 === 0 ? 10 : -5))
+  small.ado.on(isReviewList, call => json(200, { value: projectOf(call) === PROJECT ? many : [] }))
+  const capped = await small.service.snapshot(ORG)
+  assert.deepEqual([capped.reviewed.length, capped.toReview.length, capped.toReviewCount, capped.message], [50, 0, 0, TRIMMED])
+  assert.deepEqual(capped.reviewed.map(pr => pr.prId), many.slice(0, 50).map(pr => pr.pullRequestId))
+  assert.equal(small.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 7079 })?.prId, 7079, 'a PR left out of the post is still known to actions')
+})
+
+test('a background reviews-only poll moves a PR I voted on from To review to Reviewed by you', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  const first = await h.service.snapshot(ORG)
+  assert.deepEqual([first.toReview.map(pr => pr.prId), first.reviewed.map(pr => pr.prId)], [[4110], [4111]])
+
+  const listed = fixture<{ value: RawPullRequest[] }>('pull-requests-review').value
+  for (const pr of listed) for (const reviewer of pr.reviewers ?? []) if (reviewer.id === ME) reviewer.vote = pr.pullRequestId === 4110 ? 10 : 5
+  h.ado.on(isReviewList, call => json(200, { value: projectOf(call) === PROJECT ? listed : [] }))
+  await h.clock.tick(5 * MINUTE)
+
+  const posted = h.posts.at(-1)
+  assert.deepEqual([posted?.toReview, posted?.toReviewCount], [[], 0])
+  assert.deepEqual(posted?.reviewed.map(pr => pr.prId), [4111, 4110])
+  assert.equal(posted?.reviewed.find(pr => pr.prId === 4110)?.reviewers.find(reviewer => reviewer.id === ME)?.vote, 10)
+  assert.deepEqual(posted?.sets, first.sets, 'the sets are kept from the last full load')
+  assert.deepEqual(h.counts.at(-1), [ORG, 0])
 })
 
 test('becoming visible runs a full load when the last one is stale', async () => {

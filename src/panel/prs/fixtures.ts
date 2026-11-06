@@ -55,5 +55,5 @@ export function setOf(prs: PrSummary[], over: Partial<ReleaseSet> = {}): Release
 }
 
 export function snapshotOf(over: Partial<PrSnapshot> = {}): PrSnapshot {
-  return { org: 'contoso', me: 'u-contoso', sets: [], toReview: [], toReviewCount: 0, autoComplete: OPTIONS, updatedAt: NOW, stale: false, ...over }
+  return { org: 'contoso', me: 'u-contoso', sets: [], toReview: [], toReviewCount: 0, reviewed: [], autoComplete: OPTIONS, updatedAt: NOW, stale: false, ...over }
 }

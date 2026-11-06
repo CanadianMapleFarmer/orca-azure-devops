@@ -16,7 +16,7 @@ import {
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource } from './load'
-import { newestCreatedAt, releaseSets, toReviewOf } from './release-sets'
+import { newestCreatedAt, releaseSets, reviewedOf, toReviewOf } from './release-sets'
 
 export interface PrsServiceDeps {
   http: AdoHttp
@@ -61,6 +61,7 @@ const FRESH_MS = 60_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
 const MAX_SETS = 50
 const MAX_TO_REVIEW = 100
+const MAX_REVIEWED = 50
 
 export function createPrsService(deps: PrsServiceDeps): PrsService {
   const { http, scheduler, now } = deps
@@ -120,7 +121,18 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
   function compose(org: string, me: string, sets: ReleaseSet[], review: PrSummary[], message?: string): PrSnapshot {
     const toReview = toReviewOf(review, me)
-    const snapshot: PrSnapshot = { org, me, sets, toReview, toReviewCount: toReview.length, autoComplete: deps.autoComplete(), updatedAt: now(), stale: false }
+    const reviewed = reviewedOf(review, me)
+    const snapshot: PrSnapshot = {
+      org,
+      me,
+      sets,
+      toReview,
+      toReviewCount: toReview.length,
+      reviewed,
+      autoComplete: deps.autoComplete(),
+      updatedAt: now(),
+      stale: false
+    }
     return message ? { ...snapshot, message } : snapshot
   }
 
@@ -177,7 +189,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const review = await entry.source.reviews(me, projects, signal)
       signal.throwIfAborted()
       const toReview = toReviewOf(review, me)
-      const base = { ...(entry.base ?? compose(org, me, [], [])), me, toReview, toReviewCount: toReview.length }
+      const reviewed = reviewedOf(review, me)
+      const base = { ...(entry.base ?? compose(org, me, [], [])), me, toReview, toReviewCount: toReview.length, reviewed }
       entry.review = review
       entry.failure = null
       deps.counts(org, base.toReviewCount)
@@ -279,12 +292,20 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
 function capPrSnapshot(snapshot: PrSnapshot): PrSnapshot {
   const message = joinMessages(snapshot.message, PRS_TRIMMED)
-  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, sets: [], toReview: [], message })
+  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, sets: [], toReview: [], reviewed: [], message })
   const sets = newestThatFit(snapshot.sets, budget, newestCreatedAt, MAX_SETS)
-  const used = [...sets].reduce((sum, set) => sum + itemBytes(set), 0)
-  const toReview = newestThatFit(snapshot.toReview, budget - used, pr => pr.createdAt, MAX_TO_REVIEW)
-  if (sets.size === snapshot.sets.length && toReview.size === snapshot.toReview.length) return snapshot
-  return { ...snapshot, sets: snapshot.sets.filter(set => sets.has(set)), toReview: snapshot.toReview.filter(pr => toReview.has(pr)), message }
+  const setBytes = [...sets].reduce((sum, set) => sum + itemBytes(set), 0)
+  const toReview = newestThatFit(snapshot.toReview, budget - setBytes, pr => pr.createdAt, MAX_TO_REVIEW)
+  const toReviewBytes = [...toReview].reduce((sum, pr) => sum + itemBytes(pr), 0)
+  const reviewed = newestThatFit(snapshot.reviewed, budget - setBytes - toReviewBytes, pr => pr.createdAt, MAX_REVIEWED)
+  if (sets.size === snapshot.sets.length && toReview.size === snapshot.toReview.length && reviewed.size === snapshot.reviewed.length) return snapshot
+  return {
+    ...snapshot,
+    sets: snapshot.sets.filter(set => sets.has(set)),
+    toReview: snapshot.toReview.filter(pr => toReview.has(pr)),
+    reviewed: snapshot.reviewed.filter(pr => reviewed.has(pr)),
+    message
+  }
 }
 
 function offMessage({ off }: FullLoad): string | undefined {

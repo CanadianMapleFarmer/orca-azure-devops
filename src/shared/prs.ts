@@ -68,6 +68,7 @@ export interface PrSnapshot {
   sets: ReleaseSet[]
   toReview: PrSummary[]
   toReviewCount: number
+  reviewed: PrSummary[]
   autoComplete: AutoCompleteOptions
   updatedAt: number
   stale: boolean

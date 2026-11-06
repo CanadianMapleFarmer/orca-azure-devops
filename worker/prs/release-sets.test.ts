@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
 import type { PrReviewer, PrSummary } from '../../src/shared/prs'
-import { COMPLETED_WINDOW_MS, releaseSets, toReviewOf } from './release-sets'
+import { COMPLETED_WINDOW_MS, releaseSets, reviewedOf, toReviewOf } from './release-sets'
 
 const ORG = 'contoso'
 const WEB_APP = '5f3a9c1e-1111-4a2b-8c3d-4e5f6a7b8c9d'
@@ -218,4 +218,33 @@ test('toReviewOf ignores the case of identity ids', () => {
   const own = pr({ prId: 212, createdBy: { id: ME.toUpperCase(), name: 'Alex Morgan' }, reviewers: [reviewer()] })
 
   assert.deepEqual(idsOf(toReviewOf([upper, own], ME)), [211])
+})
+
+test('reviewedOf lists active PRs I voted on, newest first, and none of mine', () => {
+  const grace = { id: GRACE, name: 'Grace Hopper' }
+  const approved = pr({ prId: 301, createdBy: grace, reviewers: [reviewer({ vote: 10 })], createdAt: NOW - 3 * HOUR })
+  const newer = pr({ prId: 302, createdBy: grace, reviewers: [reviewer({ id: GRACE }), reviewer({ vote: -5 })], createdAt: NOW - HOUR })
+  const rejected = pr({ prId: 303, createdBy: grace, reviewers: [reviewer({ vote: -10 })], createdAt: NOW - 2 * HOUR })
+  const suggestions = pr({ prId: 304, createdBy: grace, reviewers: [reviewer({ vote: 5 })], createdAt: NOW - 2 * HOUR })
+  const waiting = pr({ prId: 305, createdBy: grace, reviewers: [reviewer()] })
+  const mine = pr({ prId: 306, reviewers: [reviewer({ vote: 10 })] })
+  const draft = pr({ prId: 307, isDraft: true, createdBy: grace, reviewers: [reviewer({ vote: 10 })] })
+  const declined = pr({ prId: 308, createdBy: grace, reviewers: [reviewer({ vote: 10, hasDeclined: true })] })
+  const notAReviewer = pr({ prId: 309, createdBy: grace, reviewers: [reviewer({ id: GRACE, vote: 10 })] })
+  const finished = pr({ prId: 310, status: 'completed', closedAt: NOW, createdBy: grace, reviewers: [reviewer({ vote: 10 })] })
+  const abandoned = pr({ prId: 311, status: 'abandoned', closedAt: NOW, createdBy: grace, reviewers: [reviewer({ vote: 10 })] })
+  const group = pr({ prId: 312, createdBy: grace, reviewers: [reviewer({ id: API, isGroup: true, vote: 10 })] })
+  const input = [approved, waiting, mine, draft, newer, declined, notAReviewer, finished, abandoned, group, suggestions, rejected]
+
+  assert.deepEqual(idsOf(reviewedOf(input, ME)), [302, 304, 303, 301])
+  assert.deepEqual(idsOf(toReviewOf(input, ME)), [305])
+  assert.deepEqual(idsOf(input), [301, 305, 306, 307, 302, 308, 309, 310, 311, 312, 304, 303])
+})
+
+test('reviewedOf ignores the case of identity ids and breaks ties by the highest id', () => {
+  const upper = pr({ prId: 321, createdBy: { id: GRACE.toUpperCase(), name: 'Grace Hopper' }, reviewers: [reviewer({ id: ME.toUpperCase(), vote: 10 })] })
+  const tied = pr({ prId: 322, createdBy: { id: GRACE, name: 'Grace Hopper' }, reviewers: [reviewer({ vote: 5 })] })
+  const own = pr({ prId: 323, createdBy: { id: ME.toUpperCase(), name: 'Alex Morgan' }, reviewers: [reviewer({ vote: 10 })] })
+
+  assert.deepEqual(idsOf(reviewedOf([upper, own, tied], ME)), [322, 321])
 })
