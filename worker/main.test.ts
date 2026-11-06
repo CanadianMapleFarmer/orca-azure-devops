@@ -2,7 +2,6 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { mock } from 'node:test'
 import { assert, mockHost, test, type TestWorker } from 'orca/testing'
 import type { RunsSnapshot } from '../src/shared/pipelines'
 import type { PrSnapshot } from '../src/shared/prs'
@@ -26,7 +25,7 @@ import {
 } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { fakeReviews, isThreads } from './reviews/fake-reviews'
-import { drain, withWorker } from './test-support'
+import { withMockTimers, withWorker } from './test-support'
 import { fakeWiki, isPage, isSearch } from './wiki/fake-wiki'
 
 function running(pattern: string): boolean {
@@ -1145,14 +1144,7 @@ test('ui.visibility routes pipelines to the pipelines service and the rest as be
 test('a rate-limit header on a pull request answer slows the Pipelines tab of that org too', async () => {
   const ado = pipelinesAt(Date.now() - 60_000)
   ado.on(isReviewList, () => reply(200, { count: 0, value: [] }, { 'X-RateLimit-Delay': '2' }))
-  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
-  const advance = async (ms: number) => {
-    for (let step = 0; step <= ms; step += 10_000) {
-      mock.timers.tick(step === 0 ? 0 : 10_000)
-      await drain()
-    }
-  }
-  try {
+  await withMockTimers(async advance => {
     await withFetch(signedIn(ado), async () => {
       await withWorker(worker, { host: pipelinesHost() }, async w => {
         await advance(0)
@@ -1167,9 +1159,7 @@ test('a rate-limit header on a pull request answer slows the Pipelines tab of th
         assert.equal(w.refusals.length, 0)
       })
     })
-  } finally {
-    mock.timers.reset()
-  }
+  })
 })
 
 test('a failed run after activation shows a desktop notification with no refusals', async () => {

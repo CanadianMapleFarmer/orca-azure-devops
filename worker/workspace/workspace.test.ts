@@ -1,10 +1,9 @@
-import { mock } from 'node:test'
 import { assert, hostError, mockHost, test, type TestWorker } from 'orca/testing'
 import type { OrgConfig } from '../../src/shared/types'
 import { basicAuth } from '../auth/pat'
 import { BOARDS, fakeAdo, ORG_URL, type FakeAdo } from '../boards/fake-ado'
 import * as worker from '../main'
-import { drain, withWorker } from '../test-support'
+import { drain, withMockTimers, withWorker } from '../test-support'
 
 const PAT = 'pat-workspace-test-8a41'
 const BRANCH = 'feature/1204-add-vehicle-search-filters'
@@ -149,14 +148,7 @@ test('the arm is posted with its identity alone when it is armed and when a new 
 })
 
 test('an arm that runs out is posted as gone after ten minutes, and the next worktree passes through', async () => {
-  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
-  const advance = async (ms: number) => {
-    for (let step = 0; step <= ms; step += 10_000) {
-      mock.timers.tick(step === 0 ? 0 : 10_000)
-      await drain()
-    }
-  }
-  try {
+  await withMockTimers(async advance => {
     await withDesk({}, async ({ w }) => {
       await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
       await advance(590_000)
@@ -166,9 +158,7 @@ test('an arm that runs out is posted as gone after ten minutes, and the next wor
       assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
       assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }, null])
     })
-  } finally {
-    mock.timers.reset()
-  }
+  })
 })
 
 test('a cancel for another arm is a no-op that still answers ok', async () => {

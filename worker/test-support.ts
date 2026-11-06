@@ -1,8 +1,24 @@
+import { mock } from 'node:test'
 import { mountWorker, type MountWorkerOptions, type TestWorker, type WorkerModule } from 'orca/testing'
 import type { StorePort } from './connections'
 
 export async function drain(turns = 100): Promise<void> {
   for (let turn = 0; turn < turns; turn += 1) await new Promise(resolve => setImmediate(resolve))
+}
+
+export async function withMockTimers(run: (advance: (ms: number) => Promise<void>) => Promise<void>): Promise<void> {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  const advance = async (ms: number) => {
+    for (let step = 0; step <= ms; step += 10_000) {
+      mock.timers.tick(step === 0 ? 0 : 10_000)
+      await drain()
+    }
+  }
+  try {
+    await run(advance)
+  } finally {
+    mock.timers.reset()
+  }
 }
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1
