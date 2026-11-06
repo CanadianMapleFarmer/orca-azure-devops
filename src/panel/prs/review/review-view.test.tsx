@@ -4,6 +4,7 @@ import type { OrgStatus } from '../../../shared/types'
 import { closeCleanly, mountPanel, org, requestsTo, type TestHost } from '../../test-support'
 import { NOW, prOf, reviewerOf, snapshotOf } from '../fixtures'
 import { OPEN_REVIEW, REVIEW_KEY, REVIEW_TITLE, reviewOf } from './fixtures'
+import { ReviewView } from './review-view'
 import { closeReview, reloadReview, showReview } from './state'
 
 let panel: TestPanel
@@ -561,6 +562,13 @@ test('a panel that starts on another tab does not load the review until the PRs 
   assert.equal(requestsTo(host, 'reviews.open').length, 1)
 })
 
+test('a render for another organization does not load the open review', async () => {
+  const host = await open({}, { persisted: { tab: 'work' } })
+  assert.equal(ReviewView({ org: org('fabrikam') }), null)
+  await pause(10)
+  assert.deepEqual(requestsTo(host, 'reviews.open'), [])
+})
+
 test('an organization that is not connected keeps the persisted review', async () => {
   await open({}, { orgs: [org('contoso', { state: 'expired', message: 'Sign in again.' })] })
   assert.equal(heading(), undefined)
@@ -580,5 +588,5 @@ test('the largest overview stays within the panel limits', async () => {
     'reviews.open': input => reviewOf({ key: input, description: 'x'.repeat(59_000), pr: prOf(4110, { title: 'T'.repeat(400), reviewers }), message: 'm'.repeat(1_000) })
   })
   assert.ok(countNodes(panel.tree()) < 1_000, `${countNodes(panel.tree())} nodes`)
-  assert.ok(JSON.stringify(panel.tree()).length < 450 * 1024)
+  assert.ok(new TextEncoder().encode(JSON.stringify(panel.tree())).length < 450 * 1024)
 })

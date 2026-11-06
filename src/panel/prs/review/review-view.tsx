@@ -211,9 +211,9 @@ function Sections({ review }: { review: PrReview }): OrcaNode {
 }
 
 export function ReviewView({ org }: { org: OrgStatus }): OrcaNode {
-  loadReviewWhenIdle()
   const open = read(openReview)
   if (!open || open.org !== org.org) return null
+  loadReviewWhenIdle()
   const loaded = read(loadedReview)
   if (!loaded) {
     const status = read(reviewLoad)
