@@ -137,6 +137,7 @@ export const DRAFT_GONE = 'That draft no longer exists.'
 export const DRAFT_BUSY = 'This draft is already being published.'
 export const DRAFT_FILE_GONE = 'The draft file is gone. Press Edit to start again.'
 export const DRAFT_KEPT = 'Your draft is kept.'
+export const DRAFT_BASE_GONE = `The draft's base copy is gone, so it can't be compared. ${DRAFT_KEPT}`
 export const NOTHING_TO_PUBLISH = 'Nothing to publish yet. Save your changes in the editor first.'
 export const MERGE_NOT_SAVED = "Your draft hasn't changed since their version opened. Copy what you need into it and save, or choose Publish mine."
 export const WIKI_CONFLICT = 'Someone changed this page in Azure DevOps after you started editing.'
@@ -204,6 +205,10 @@ export function armedCheckout({ repo, branch, base, prId, target }: { repo: stri
 
 export function openedDraft(title: string): string {
   return `Opened ${title} in Orca. Save your changes there, then press Publish here.`
+}
+
+export function draftNotUpdated(reason: string): string {
+  return `Your draft couldn't be updated to match: ${reason}`
 }
 
 export function openedTheirs(name: string): string {

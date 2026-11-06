@@ -607,10 +607,13 @@ test('texts, rebase, openTheirs and forget keep the files and the record in step
     assert.deepEqual(h.opened.at(-1), { workspaceId: 'ws-web', path: opened })
     assert.equal(await fs.readFile(onDisk(web, CHECKLIST_THEIRS), 'utf8'), 'their version\n')
 
+    assert.equal(await h.drafts.hasFile(draft), true)
     await fs.unlink(onDisk(web, CHECKLIST_BASE))
     assert.equal(await h.drafts.texts(draft), null, 'a missing base gives no texts')
+    assert.equal(await h.drafts.hasFile(draft), true, 'a missing base leaves the draft file')
     await fs.unlink(onDisk(web, CHECKLIST_FILE))
     assert.equal(await h.drafts.texts(draft), null, 'a missing draft gives no texts')
+    assert.equal(await h.drafts.hasFile(draft), false, 'a missing draft file is reported')
 
     await h.drafts.forget(draft.key)
     assert.equal(await h.drafts.get(draft.key), null)

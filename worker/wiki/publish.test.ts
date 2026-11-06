@@ -40,6 +40,7 @@ const CONFLICT = 'Someone changed this page in Azure DevOps after you started ed
 const MERGE_NOT_SAVED = "Your draft hasn't changed since their version opened. Copy what you need into it and save, or choose Publish mine."
 const GONE_KEPT = 'This page was moved or deleted in Azure DevOps. Your draft is kept.'
 const FILE_GONE = 'The draft file is gone. Press Edit to start again.'
+const BASE_GONE = "The draft's base copy is gone, so it can't be compared. Your draft is kept."
 const DRAFT_GONE = 'That draft no longer exists.'
 const BUSY = 'This draft is already being published.'
 const TOOK_THEIRS = 'Your draft now holds their version.'
@@ -47,6 +48,7 @@ const TOO_LARGE = 'This page is too large to edit here. Edit it in Azure DevOps.
 const NEEDS_READ = 'The wiki needs Wiki (Read) access.'
 const NOT_CONNECTED = 'Connect this organization first.'
 const OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
+const NOT_UPDATED = `Your draft couldn't be updated to match: ${OUTSIDE}`
 const OPENED_THEIRS = `Opened their version as .orca-ado/${THEIRS_FILE}. Copy what you need into your draft, save it, then press Publish.`
 const STALE = 'TF401028: The page was changed by someone else since you last read it.'
 
@@ -200,6 +202,30 @@ test('publish never overwrites a page that changed since the draft began', async
 
   await withDraft(async h => {
     await h.save(h.mine)
+    h.ado.on(isPagePut, () => {
+      h.ado.pages.delete(CHECKLIST)
+      return stale(412)
+    })
+    assert.deepEqual(await h.publisher.publish(KEY), { status: 'failed', message: GONE_KEPT }, 'a page deleted during the race fails and keeps the draft')
+    assert.deepEqual([h.reads(), h.puts().length], [2, 1])
+    assert.deepEqual([await h.file(DRAFT_FILE), await h.file(BASE_FILE)], [h.mine, h.original])
+    assert.deepEqual(versionOf(await h.record()), { version: CHECKLIST_ETAG, publishedAt: null, mergeMark: null })
+  })
+
+  await withDraft(async h => {
+    await h.save(h.mine)
+    h.ado.on(isPagePut, () => {
+      h.ado.on(isPage, () => json(403, { message: 'TF400813: The user is not authorized to access this resource.' }))
+      return stale(412)
+    })
+    assert.deepEqual(await h.publisher.publish(KEY), { status: 'failed', message: NEEDS_READ }, 'a second read that fails reports its message')
+    assert.deepEqual([h.reads(), h.puts().length], [2, 1])
+    assert.deepEqual([h.page()?.content, await h.file(DRAFT_FILE), await h.file(BASE_FILE)], [h.original, h.mine, h.original])
+    assert.deepEqual(versionOf(await h.record()), { version: CHECKLIST_ETAG, publishedAt: null, mergeMark: null })
+  })
+
+  await withDraft(async h => {
+    await h.save(h.mine)
     h.theirEdit(h.original)
     assert.deepEqual(await h.publisher.publish(KEY), { status: 'published', message: PUBLISHED }, 'an ETag change with no content change publishes')
     assert.deepEqual([h.reads(), h.puts().length], [1, 1])
@@ -327,8 +353,19 @@ test('a missing draft file says so and forgets the draft', async () => {
   await withDraft(async (h, dir) => {
     await h.save(h.mine)
     await fs.unlink(onDisk(dir, BASE_FILE))
-    assert.deepEqual(await h.publisher.publish(KEY), { status: 'failed', message: FILE_GONE }, 'a missing base counts as gone')
-    assert.equal(await h.record(), null)
+    const before = await h.record()
+    assert.deepEqual(await h.publisher.publish(KEY), { status: 'failed', message: BASE_GONE }, 'a missing base is not a missing draft')
+    assert.deepEqual(await h.record(), before, 'the draft is kept')
+    assert.equal(h.calls(), 0)
+    assert.equal(await h.file(DRAFT_FILE), h.mine)
+    for (const choice of ['mine', 'theirs', 'merge'] as const) {
+      assert.deepEqual(await h.publisher.resolve({ key: KEY, choice }), { status: 'failed', message: BASE_GONE }, `${choice}: a missing base`)
+    }
+    assert.deepEqual(await h.record(), before)
+    assert.equal(h.calls(), 0)
+    assert.deepEqual(h.opened, [])
+    assert.deepEqual(await h.drafts.edit(REF), { opened: true, message: 'Opened Checklist in Orca. Save your changes there, then press Publish here.' }, 'Edit reopens the draft')
+    assert.deepEqual([await h.file(DRAFT_FILE), h.opened.length], [h.mine, 1], 'and does not overwrite it')
     assert.equal(h.calls(), 0)
   })
 
@@ -467,7 +504,20 @@ test('a page Azure DevOps accepted is reported as published even when the draft 
         throw badRequest(OUTSIDE)
       }
     })
-    assert.deepEqual(await publisher.publish(KEY), { status: 'published', message: `${PUBLISHED} ${OUTSIDE}` })
+    assert.deepEqual(await publisher.publish(KEY), { status: 'published', message: `${PUBLISHED} ${NOT_UPDATED}` })
+    assert.equal(h.page()?.content, h.mine)
+    assert.equal(h.puts().length, 1)
+  })
+
+  await withDraft(async h => {
+    await h.save(h.mine)
+    h.theirEdit(h.theirs)
+    const publisher = h.publisherOf({
+      rebase: async () => {
+        throw badRequest(OUTSIDE)
+      }
+    })
+    assert.deepEqual(await publisher.resolve({ key: KEY, choice: 'mine' }), { status: 'published', message: `${PUBLISHED_OVER} ${NOT_UPDATED}` })
     assert.equal(h.page()?.content, h.mine)
     assert.equal(h.puts().length, 1)
   })

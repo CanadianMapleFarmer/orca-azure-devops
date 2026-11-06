@@ -51,6 +51,7 @@ export interface Drafts {
   discard(key: string): Promise<{ ok: true; message: string }>
   get(key: string): Promise<StoredDraft | null>
   texts(draft: StoredDraft): Promise<{ mine: string; base: string } | null>
+  hasFile(draft: StoredDraft): Promise<boolean>
   rebase(draft: StoredDraft, change: DraftRebase): Promise<void>
   openTheirs(draft: StoredDraft, theirs: string): Promise<string>
   forget(key: string): Promise<void>
@@ -228,6 +229,8 @@ export function createDrafts(deps: DraftsDeps): Drafts {
     get: async key => (await read()).find(draft => draft.key === key) ?? null,
 
     texts,
+
+    hasFile: async draft => (await readText(draft.workspacePath, draft.file)) !== null,
 
     rebase: (draft, change) => serially(() => rebaseNow(draft, change)),
 

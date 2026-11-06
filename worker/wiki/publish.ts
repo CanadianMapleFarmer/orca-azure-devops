@@ -5,10 +5,12 @@ import type { WikiPageRef, WikiResult } from '../../src/shared/wiki'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { putPage } from '../ado/wiki'
 import {
+  DRAFT_BASE_GONE,
   DRAFT_BUSY,
   DRAFT_FILE_GONE,
   DRAFT_GONE,
   DRAFT_KEPT,
+  draftNotUpdated,
   joinMessages,
   MERGE_NOT_SAVED,
   NOTHING_TO_PUBLISH,
@@ -69,6 +71,7 @@ export function createPublisher(deps: PublisherDeps): Publisher {
     if (!draft) return failed(DRAFT_GONE)
     const texts = await deps.drafts.texts(draft)
     if (!texts) {
+      if (await deps.drafts.hasFile(draft)) return failed(DRAFT_BASE_GONE)
       await deps.drafts.forget(key)
       return failed(DRAFT_FILE_GONE)
     }
@@ -92,7 +95,7 @@ export function createPublisher(deps: PublisherDeps): Publisher {
     try {
       await deps.drafts.rebase(draft, { version: saved.etag, base: mine, publishedAt: deps.now() })
     } catch (error) {
-      return { status: 'published', message: joinMessages(message, messageOf(error)) ?? message }
+      return { status: 'published', message: joinMessages(message, draftNotUpdated(messageOf(error))) ?? message }
     }
     return { status: 'published', message }
   }
