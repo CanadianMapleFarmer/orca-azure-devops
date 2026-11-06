@@ -3,6 +3,7 @@ import type { BoardsTarget, ConnectFailure, ConnectionMethod, OrgConfig, OrgStat
 import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
 import type { AzCliProvider } from './auth/azcli'
+import { accessToken } from './auth/fake-entra'
 import { basicAuth, type SecretsPort } from './auth/pat'
 import { createConnections, type Connections, type StorePort } from './connections'
 import { CommandTimeoutError } from './sys/run'
@@ -31,8 +32,10 @@ const TOKEN_UNKNOWN = 'az-token-unknown-e4'
 const JWT_ADA = jwt({ oid: OID_ADA, tid: TENANT, upn: 'ada@contoso.com' })
 const JWT_GRACE = jwt({ oid: OID_GRACE, tid: TENANT, upn: 'grace@contoso.com' })
 const JWT_ADA_ELSEWHERE = jwt({ oid: OID_ADA, tid: OTHER_TENANT, upn: 'ada@fabrikam.com' })
+const ENTRA_ADA = accessToken({ oid: OID_ADA, upn: 'ada@contoso.com' })
+const ENTRA_GRACE = accessToken({ oid: OID_GRACE, upn: 'grace@contoso.com' })
 const SECRETS = [
-  PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, JWT_ADA, JWT_GRACE, JWT_ADA_ELSEWHERE,
+  PAT_ADA, PAT_GRACE, TOKEN_ADA, TOKEN_GRACE, TOKEN_ANON, TOKEN_UNKNOWN, JWT_ADA, JWT_GRACE, JWT_ADA_ELSEWHERE, ENTRA_ADA, ENTRA_GRACE,
   basicAuth(PAT_ADA).slice(6), basicAuth(PAT_GRACE).slice(6)
 ]
 
@@ -64,6 +67,8 @@ const IDENTITIES = new Map<string, { who: string; data: ConnectionData }>([
   [`Bearer ${JWT_ADA}`, { who: 'ada', data: connectionData(ADA) }],
   [`Bearer ${JWT_GRACE}`, { who: 'grace', data: connectionData(GRACE) }],
   [`Bearer ${JWT_ADA_ELSEWHERE}`, { who: 'ada elsewhere', data: connectionData(ADA) }],
+  [`Bearer ${ENTRA_ADA}`, { who: 'ada', data: connectionData(ADA) }],
+  [`Bearer ${ENTRA_GRACE}`, { who: 'grace', data: connectionData(GRACE) }],
   [basicAuth(PAT_ADA), { who: 'ada', data: connectionData(ADA) }],
   [basicAuth(PAT_GRACE), { who: 'grace', data: connectionData(GRACE) }]
 ])
