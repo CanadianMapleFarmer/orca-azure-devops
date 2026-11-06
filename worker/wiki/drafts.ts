@@ -4,6 +4,7 @@ import type { StorePort } from '../connections'
 import {
   badRequest,
   DRAFT_DISCARDED,
+  DRAFT_FILE_NOT_REMOVED,
   DRAFT_FILE_TAKEN,
   DRAFT_GONE,
   DRAFT_WORKSPACE_GONE,
@@ -63,6 +64,7 @@ export interface DraftsDeps {
   call: HostCall
   wiki: Pick<WikiService, 'wiki' | 'fresh'>
   now: () => number
+  log: (message: string) => void
 }
 
 const DRAFTS_KEY = 'wiki:drafts'
@@ -196,10 +198,16 @@ export function createDrafts(deps: DraftsDeps): Drafts {
     }
   }
 
-  async function remove(workspacePath: string, name: string): Promise<void> {
-    try {
-      await deps.fs.rm(await assertInside(deps.fs, workspacePath, name), { force: true })
-    } catch {}
+  async function remove(workspacePath: string, names: string[]): Promise<void> {
+    let failed = false
+    for (const name of names) {
+      try {
+        await deps.fs.rm(await assertInside(deps.fs, workspacePath, name), { force: true })
+      } catch {
+        failed = true
+      }
+    }
+    if (failed) deps.log(DRAFT_FILE_NOT_REMOVED)
   }
 
   return {
@@ -217,7 +225,7 @@ export function createDrafts(deps: DraftsDeps): Drafts {
         const drafts = await read()
         const draft = drafts.find(item => item.key === key)
         if (!draft) throw badRequest(DRAFT_GONE)
-        for (const name of [draft.file, baseName(draft.file), theirsName(draft.file)]) await remove(draft.workspacePath, name)
+        await remove(draft.workspacePath, [draft.file, baseName(draft.file), theirsName(draft.file)])
         await save(drafts.filter(item => item !== draft))
         return { ok: true, message: DRAFT_DISCARDED }
       }),

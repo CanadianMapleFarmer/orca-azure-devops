@@ -206,7 +206,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     actions: reviewActions,
     checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
   })
-  const drafts = createDrafts({ store, fs, call, wiki, now: Date.now })
+  const drafts = createDrafts({ store, fs, call, wiki, now: Date.now, log })
   registerWikiHandlers(orca, { wiki, drafts, publisher: createPublisher({ http, drafts, wiki, now: Date.now }) })
   registerPipelineHandlers(orca, {
     pipelines,

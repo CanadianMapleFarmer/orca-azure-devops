@@ -134,6 +134,7 @@ export const TOO_MANY_DRAFTS = `You have ${MAX_DRAFTS} wiki drafts. Publish or d
 export const DRAFT_FILE_TAKEN = 'Another draft already uses that file name. Publish or discard it first.'
 export const DRAFT_DISCARDED = 'Draft discarded.'
 export const DRAFT_GONE = 'That draft no longer exists.'
+export const DRAFT_FILE_NOT_REMOVED = "Couldn't remove a wiki draft file."
 export const DRAFT_BUSY = 'This draft is already being published.'
 export const DRAFT_FILE_GONE = 'The draft file is gone. Press Edit to start again.'
 export const DRAFT_KEPT = 'Your draft is kept.'

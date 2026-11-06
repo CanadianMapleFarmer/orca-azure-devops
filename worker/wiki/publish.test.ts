@@ -89,7 +89,7 @@ function harness(dir: string) {
     throw new Error(`unexpected host call ${method}`)
   }
   const memory = memoryStore()
-  const drafts = createDrafts({ store: memory.store, fs, call, wiki, now: () => now })
+  const drafts = createDrafts({ store: memory.store, fs, call, wiki, now: () => now, log: message => assert.fail(message) })
   const publisherOf = (over: Partial<Drafts> = {}) => createPublisher({ http, drafts: { ...drafts, ...over }, wiki, now: () => now })
   const original = ado.pages.get(CHECKLIST)!.content
   let start = 0

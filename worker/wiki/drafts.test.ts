@@ -9,6 +9,7 @@ import { ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
 import { ME } from '../prs/fake-prs'
 import { memoryStore } from '../test-support'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
+import type { DraftFs } from './draft-files'
 import { listing, outside } from './draft-test-support'
 import { createDrafts, type StoredDraft } from './drafts'
 import { fakeWiki, isPage } from './fake-wiki'
@@ -39,6 +40,7 @@ const FILE_TAKEN = 'Another draft already uses that file name. Publish or discar
 const WORKSPACE_GONE = 'The workspace holding this draft is gone. Discard the draft to edit the page again.'
 const DISCARDED = 'Draft discarded.'
 const DRAFT_GONE = 'That draft no longer exists.'
+const NOT_REMOVED = "Couldn't remove a wiki draft file."
 
 function status(): OrgStatus {
   return {
@@ -57,7 +59,7 @@ function workspace(id: string, dir: string, name = 'web-app', branch = 'main', h
   return { id, kind: 'worktree', name, path: dir, branch, hostId }
 }
 
-function harness(workspaces: WorkspaceEntry[], memory = memoryStore()) {
+function harness(workspaces: WorkspaceEntry[], memory = memoryStore(), files: DraftFs = fs) {
   const ado = fakeWiki()
   const http = createAdoHttp({
     fetch: ((input: RequestInfo | URL, init?: RequestInit) => ado.fetch(input, init)) as typeof globalThis.fetch,
@@ -69,6 +71,7 @@ function harness(workspaces: WorkspaceEntry[], memory = memoryStore()) {
   wiki.onOrgs([status()])
   const host: { workspaces: WorkspaceEntry[]; focused: string | null } = { workspaces, focused: workspaces[0]?.id ?? null }
   const opened: { workspaceId: string; path: string }[] = []
+  const logs: string[] = []
   const call: HostCall = async (method, params) => {
     if (method === 'workspace.readContext') {
       const focused = host.workspaces.find(entry => entry.id === host.focused)
@@ -81,11 +84,12 @@ function harness(workspaces: WorkspaceEntry[], memory = memoryStore()) {
     }
     throw new Error(`unexpected host call ${method}`)
   }
-  const start = () => createDrafts({ store: memory.store, fs, call, wiki, now: () => now })
+  const start = () => createDrafts({ store: memory.store, fs: files, call, wiki, now: () => now, log: message => logs.push(message) })
   return {
     ado,
     host,
     opened,
+    logs,
     data: memory.data,
     drafts: start(),
     restart: start,
@@ -290,6 +294,7 @@ test('draft file names stay inside the wiki folder and are valid on every OS', a
       )
       assert.deepEqual(await h.drafts.discard(draftKey(ref(CHECKLIST))), { ok: true, message: DISCARDED })
       assert.deepEqual(await listing(outsideDir), before, `${plant.label}: discard leaves the outside files in place`)
+      assert.deepEqual(h.logs, [NOT_REMOVED], `${plant.label}: the refused removal is logged once`)
       assert.equal(h.opened.length, 1)
       assert.deepEqual(await h.drafts.list(ORG), [])
     })
@@ -547,6 +552,24 @@ test('discard removes the record and its files', async () => {
     await fs.rm(path.join(web, '.orca-ado', 'wiki'), { recursive: true })
     assert.deepEqual(await h.drafts.discard(draftKey(ref(UNICODE))), { ok: true, message: DISCARDED }, 'missing files are ignored')
     assert.deepEqual(stored(h.data), [])
+    assert.deepEqual(h.logs, [])
+  })
+})
+
+test('a file that cannot be removed is logged and discard still succeeds', async () => {
+  await withDirs(1, async ([web]) => {
+    const busy: DraftFs = {
+      ...fs,
+      rm: async () => {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      }
+    }
+    const h = harness([workspace('ws-web', web)], memoryStore(), busy)
+    await h.drafts.edit(ref(CHECKLIST))
+    assert.deepEqual(await h.drafts.discard(draftKey(ref(CHECKLIST))), { ok: true, message: DISCARDED })
+    assert.equal(await h.drafts.get(draftKey(ref(CHECKLIST))), null)
+    assert.ok(await fs.readFile(onDisk(web, CHECKLIST_FILE), 'utf8'))
+    assert.deepEqual(h.logs, [NOT_REMOVED])
   })
 })
 
