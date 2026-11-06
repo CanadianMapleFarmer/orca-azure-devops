@@ -11,6 +11,7 @@ import { basicAuth } from './auth/pat'
 import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
 import {
+  APPROVAL_4520,
   APPROVAL_4531,
   buildIdOf,
   fakePipelines,
@@ -1185,6 +1186,64 @@ test('a run action reloads the open run view at once', async () => {
       const view = await w.request('runs.view', { org: 'contoso', ...RUN_4520 })
       assert.deepEqual([view.run.state, view.canCancel], ['cancelling', false])
       assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+async function withFakeClipboard(run: (written: () => Promise<string>) => Promise<void>): Promise<void> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-clipboard-'))
+  const sink = path.join(dir, 'clipboard.html')
+  await fs.writeFile(path.join(dir, 'xclip'), '#!/bin/sh\ncat > "$FAKE_CLIPBOARD"\n', { mode: 0o755 })
+  const names = ['PATH', 'DISPLAY', 'WAYLAND_DISPLAY', 'FAKE_CLIPBOARD']
+  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]))
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  try {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+    assert.equal(process.platform, 'linux', 'the real clipboard tool would run')
+    process.env.PATH = `${dir}${path.delimiter}${saved.PATH ?? ''}`
+    process.env.DISPLAY = ':99'
+    process.env.FAKE_CLIPBOARD = sink
+    delete process.env.WAYLAND_DISPLAY
+    await run(() => fs.readFile(sink, 'utf8'))
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name]
+      else process.env[name] = saved[name]
+    }
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+}
+
+test('share.send with kind approval copies the approval line', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  const GRACE = { id: 'u-grace', displayName: 'Grace Hopper', uniqueName: 'grace@contoso.com', kind: 'user' as const }
+  const URL_4520 = `${ORG_URL}/${PROJECT}/_build/results?buildId=4520`
+  await withFetch(signedIn(ado), async () => {
+    await withFakeClipboard(async written => {
+      await withWorker(worker, { host: pipelinesHost() }, async w => {
+        await w.request('runs.snapshot', { org: 'contoso' })
+        assert.deepEqual(await w.request('share.prefs', { org: 'contoso', kind: 'approval' }), {
+          template: 'Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}',
+          channels: [],
+          prefs: { destinations: [{ kind: 'copy' }] },
+          tenantId: TENANT
+        })
+
+        const key = `approval:${PROJECT}/${APPROVAL_4520}`
+        const request = { org: 'contoso', kind: 'approval' as const, keys: [key, `approval:${PROJECT}/gone-approval`], intro: 'Please approve.' }
+        const sent = await w.request('share.send', { ...request, destinations: [{ kind: 'copy' }, { kind: 'email', people: [GRACE] }] })
+        assert.deepEqual(sent, { results: [{ destination: 'copy', ok: true, text: 'Copied as rich text (HTML only).' }] })
+        assert.equal(await written(), `<div>Please approve.</div><div>Approval needed for production: <a href="${URL_4520}">web-app-cd 20261105.3</a> on main</div>`)
+        assert.deepEqual(w.host.data().storage['share:prefs:contoso'], { destinations: [{ kind: 'copy' }, { kind: 'email', people: [GRACE] }] })
+        assert.equal(ado.calls.filter(call => ['PATCH', 'PUT', 'DELETE'].includes(call.method)).length, 0, 'sharing writes nothing to Azure DevOps')
+
+        await assert.rejects(w.request('share.send', { ...request, keys: [`approval:${PROJECT}/gone-approval`], destinations: [{ kind: 'copy' }] }), error => {
+          assert.equal((error as Error).message, 'Choose at least one item to share.')
+          return true
+        })
+        assert.equal(w.refusals.length, 0)
+      })
     })
   })
 })

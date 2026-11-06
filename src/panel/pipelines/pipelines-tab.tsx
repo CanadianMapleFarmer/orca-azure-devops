@@ -2,6 +2,9 @@ import { Box, Button, Callout, EmptyState, IconButton, read, RelativeTime, Row, 
 import type { RunFilter, RunsSnapshot } from '../../shared/pipelines'
 import { runCounts, runsFor } from '../../shared/runs'
 import type { OrgStatus } from '../../shared/types'
+import { Channels, openChannels } from '../share/channels'
+import { Composer } from '../share/composer'
+import { shareView } from '../share/state'
 import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
 import { RunCard } from './run-card'
 import { load, notice, refresh, refreshing, retryLoad, runFilter, selectFilter, snapshot } from './state'
@@ -33,7 +36,10 @@ function Header({ org, current }: { org: string; current: RunsSnapshot }): OrcaN
             Updated <RelativeTime at={current.updatedAt} />
           </Text>
         </Box>
-        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
+        <Row gap="xs" align="center">
+          <IconButton icon="settings" label="Teams channels" variant="ghost" size="sm" onPress={() => openChannels('pipelines')} />
+          <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
+        </Row>
       </Row>
       <SnapshotMessage message={current.message} stale={current.stale} />
     </Stack>
@@ -73,6 +79,9 @@ function Runs({ org, filter, current, now }: { org: string; filter: RunFilter; c
 }
 
 export function PipelinesTab({ org }: { org: OrgStatus }): OrcaNode {
+  const shown = shareView('pipelines')
+  if (shown === 'composer') return <Composer />
+  if (shown === 'channels') return <Channels />
   const stored = read(snapshot)
   const current = stored?.org === org.org ? stored : null
   const status = read(load)

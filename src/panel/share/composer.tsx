@@ -5,11 +5,9 @@ import type { ShareResult } from '../../shared/share/types'
 import { LoadFailure } from '../snapshot-parts'
 import { openChannels } from './channels'
 import { PeoplePicker } from './people-picker'
-import { retryChat, sending, share } from './send'
+import { retryLink, sending, share } from './send'
 import {
-  chat,
   chatHint,
-  chatOpening,
   checked,
   checkItem,
   choices,
@@ -18,21 +16,28 @@ import {
   closeComposer,
   composer,
   intro,
+  LINK_KINDS,
+  linkOpening,
+  links,
   prefs,
   retryPrefs,
   sent,
   setIntro,
   sharePlan,
   shownChannels,
-  type ChatResult,
-  type ComposerInput
+  type ComposerInput,
+  type LinkKind,
+  type LinkResult
 } from './state'
 
 const CHAT_HINT = "Orca asks before opening Teams. Tick 'Always allow' to skip this next time."
 const COPY = 'Copy as rich text'
 const CHAT = 'Message in Teams'
+const EMAIL = 'Email'
 const REVIEWERS = 'Add as reviewers'
 const MAX_RESULT_TEXT = 2000
+const LINK_TITLES: Record<LinkKind, string> = { chat: CHAT, email: EMAIL }
+const LINK_BUTTONS: Record<LinkKind, string> = { chat: 'Open Teams chat', email: 'Open email' }
 
 const postTo = (name: string): string => `Post to ${name}`
 
@@ -71,7 +76,7 @@ function Destinations({ input }: { input: ComposerInput }): OrcaNode {
         <Checkbox key={channel.id} label={postTo(channel.name)} checked={chosen.channels.includes(channel.id)} onChange={on => chooseChannel(channel.id, on)} />
       ))}
       <Row gap="sm">
-        <Button variant="ghost" size="sm" onPress={openChannels}>
+        <Button variant="ghost" size="sm" onPress={() => openChannels(input.host)}>
           Manage channels
         </Button>
       </Row>
@@ -90,6 +95,18 @@ function Destinations({ input }: { input: ComposerInput }): OrcaNode {
           people={chosen.chatPeople}
           suggestions={input.suggestions}
           onChange={chatPeople => choose({ chatPeople })}
+        />
+      ) : null}
+      {input.email ? <Checkbox label={EMAIL} checked={chosen.email} onChange={email => choose({ email })} /> : null}
+      {input.email && chosen.email ? (
+        <PeoplePicker
+          org={input.org}
+          label="Find people to email"
+          groups={false}
+          required={false}
+          people={chosen.emailPeople}
+          suggestions={input.suggestions}
+          onChange={emailPeople => choose({ emailPeople })}
         />
       ) : null}
       {input.reviewers ? <Checkbox label={REVIEWERS} checked={chosen.reviewers} onChange={reviewers => choose({ reviewers })} /> : null}
@@ -119,16 +136,16 @@ function ResultCallout({ result }: { result: ShareResult }): OrcaNode {
   )
 }
 
-function ChatCallout({ result }: { result: ChatResult }): OrcaNode {
+function LinkCallout({ kind, result }: { kind: LinkKind; result: LinkResult }): OrcaNode {
   return (
-    <Callout tone={result.ok ? 'success' : 'danger'} title={CHAT}>
+    <Callout tone={result.ok ? 'success' : 'danger'} title={LINK_TITLES[kind]}>
       <Stack gap="xs">
         <Text>{result.text}</Text>
         {result.reason ? <Text size="sm">{result.reason}</Text> : null}
         {result.retry ? (
           <Row gap="sm">
-            <Button size="sm" disabled={read(chatOpening)} onPress={retryChat}>
-              Open Teams chat
+            <Button size="sm" disabled={read(linkOpening) || read(sending)} onPress={() => retryLink(kind)}>
+              {LINK_BUTTONS[kind]}
             </Button>
           </Row>
         ) : null}
@@ -139,13 +156,19 @@ function ChatCallout({ result }: { result: ChatResult }): OrcaNode {
 
 function Results(): OrcaNode {
   const answer = read(sent)
-  const chatResult = read(chat)
-  if (!answer && !chatResult) return null
+  const linked = read(links)
+  const shown = LINK_KINDS.flatMap(kind => {
+    const result = linked[kind]
+    return result ? [{ kind, result }] : []
+  })
+  if (!answer && shown.length === 0) return null
   return (
     <Stack gap="sm">
       {answer?.error ? <Callout tone="danger">{answer.error}</Callout> : null}
       {answer?.results.map(result => <ResultCallout key={result.destination} result={result} />)}
-      {chatResult ? <ChatCallout result={chatResult} /> : null}
+      {shown.map(({ kind, result }) => (
+        <LinkCallout key={kind} kind={kind} result={result} />
+      ))}
     </Stack>
   )
 }

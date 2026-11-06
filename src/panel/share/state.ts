@@ -14,13 +14,18 @@ export interface ComposerItem {
   checked: boolean
 }
 
+export type ShareHost = 'prs' | 'pipelines'
+
 export interface ComposerInput {
   org: string
   kind: ShareKind
+  host: ShareHost
   title: string
   items: ComposerItem[]
   suggestions: Identity[]
   reviewers: boolean
+  email: boolean
+  subject: string
   fallback: string
   vars: readonly string[]
 }
@@ -30,6 +35,8 @@ export interface Choices {
   channels: string[]
   chat: boolean
   chatPeople: Person[]
+  email: boolean
+  emailPeople: Person[]
   reviewers: boolean
   reviewerPeople: Person[]
 }
@@ -43,20 +50,27 @@ export interface Plan {
   ready: boolean
 }
 
-export interface ChatResult {
+export type LinkKind = 'chat' | 'email'
+
+export const LINK_KINDS: readonly LinkKind[] = ['chat', 'email']
+
+export interface LinkResult {
   ok: boolean
   text: string
   reason?: string
   retry?: string
 }
 
+export type Links = Partial<Record<LinkKind, LinkResult>>
+
 type ShareView = 'none' | 'composer' | 'channels'
 type Load<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'failed'; message: string }
 
 const MAX_CHANNELS_SHOWN = 20
-const NO_CHOICES: Choices = { copy: false, channels: [], chat: false, chatPeople: [], reviewers: false, reviewerPeople: [] }
+const NO_CHOICES: Choices = { copy: false, channels: [], chat: false, chatPeople: [], email: false, emailPeople: [], reviewers: false, reviewerPeople: [] }
 
 const view = atom<ShareView>('none')
+const viewHost = atom<ShareHost | null>(null)
 const backTo = atom<'none' | 'composer'>('none')
 export const composer = atom<ComposerInput | null>(null)
 export const checked = atom<string[]>([])
@@ -64,8 +78,8 @@ export const intro = atom('')
 export const prefs = atom<Load<SharePrefsView>>({ status: 'loading' })
 export const choices = atom<Choices>(NO_CHOICES)
 export const sent = atom<{ results: ShareResult[]; error?: string } | null>(null)
-export const chat = atom<ChatResult | null>(null)
-export const chatOpening = atom(false)
+export const links = atom<Links>({})
+export const linkOpening = atom(false)
 export const chatHint = atom(false)
 const chatHintShown = atom(false)
 const channelList = atom<Channel[]>([])
@@ -74,7 +88,8 @@ let opened = 0
 
 export const currentRun = (): number => opened
 
-export function shareView(): ShareView {
+export function shareView(host: ShareHost): ShareView {
+  if (read(viewHost) !== host) return 'none'
   const shown = read(view)
   if (shown !== 'composer') return shown
   return read(composer)?.org === currentOrg(read(orgs), read(activeOrg))?.org ? 'composer' : 'none'
@@ -94,10 +109,11 @@ export function openComposer(input: ComposerInput): void {
   set(intro, '')
   set(choices, NO_CHOICES)
   set(sent, null)
-  set(chat, null)
-  set(chatOpening, false)
+  set(links, {})
+  set(linkOpening, false)
   set(chatHint, false)
   forgetSearches()
+  set(viewHost, input.host)
   set(view, 'composer')
   void loadPrefs(input, opened)
 }
@@ -107,13 +123,16 @@ export function closeComposer(): void {
   set(composer, null)
   forgetSearches()
   set(sent, null)
-  set(chat, null)
+  set(links, {})
   if (read(view) === 'composer') set(view, 'none')
   set(backTo, 'none')
 }
 
-export function showChannels(): void {
+export function showChannels(host: ShareHost): void {
+  const open = read(composer)
+  if (open && open.host !== host) closeComposer()
   set(backTo, read(view) === 'composer' ? 'composer' : 'none')
+  set(viewHost, host)
   set(view, 'channels')
 }
 
@@ -169,6 +188,11 @@ function remembered(stored: SharePrefsView, input: ComposerInput): Choices {
         next.chat = true
         next.chatPeople = destination.people.slice(0, MAX_SHARE_PEOPLE).map(person => ({ ...identityOf(person), required: false }))
         break
+      case 'email':
+        if (!input.email) break
+        next.email = true
+        next.emailPeople = destination.people.slice(0, MAX_SHARE_PEOPLE).map(person => ({ ...identityOf(person), required: false }))
+        break
       case 'reviewers':
         if (!input.reviewers) break
         next.reviewers = true
@@ -198,12 +222,13 @@ function destinationsOf(input: ComposerInput, chosen: Choices): ShareDestination
       .filter(channel => chosen.channels.includes(channel.id))
       .map(channel => ({ kind: 'channel' as const, id: channel.id })),
     ...(chosen.chat ? [{ kind: 'chat' as const, people: chosen.chatPeople.map(identityOf) }] : []),
+    ...(input.email && chosen.email ? [{ kind: 'email' as const, people: chosen.emailPeople.map(identityOf) }] : []),
     ...(input.reviewers && chosen.reviewers ? [{ kind: 'reviewers' as const, people: chosen.reviewerPeople }] : [])
   ]
 }
 
 const everyoneChosen = (destinations: ShareDestination[]): boolean =>
-  destinations.every(destination => (destination.kind === 'chat' || destination.kind === 'reviewers' ? destination.people.length > 0 : true))
+  destinations.every(destination => destination.kind === 'copy' || destination.kind === 'channel' || destination.people.length > 0)
 
 export function sharePlan(): Plan | null {
   const input = read(composer)

@@ -151,6 +151,13 @@
         "title": "Notify when a watched run finishes",
         "type": "boolean",
         "default": true
+      },
+      {
+        "key": "approvalShareTemplate",
+        "title": "Approval share line",
+        "description": "One line per approval. [text]({url}) is the link. Also {stage}, {requestedBy}, {project}.",
+        "type": "string",
+        "default": "Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}"
       }
     ],
     "hooks": [

@@ -1,4 +1,5 @@
 import { assert, mockHost, mount, type MockRequests, type TestPanel } from 'orca/testing'
+import { APPROVAL_TEMPLATE } from '../shared/share/approval-items'
 import { PR_TEMPLATE } from '../shared/share/template'
 import type { OrgStatus } from '../shared/types'
 import * as panelModule from './panel'
@@ -41,7 +42,12 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
       'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
       'prs.snapshot': input => snapshotOf({ org: input.org, updatedAt: 0 }),
       'runs.snapshot': input => runsSnapshotOf({ org: input.org, updatedAt: 0 }),
-      'share.prefs': { template: PR_TEMPLATE, channels: [], prefs: { destinations: [{ kind: 'copy' }] }, tenantId: null },
+      'share.prefs': input => ({
+        template: input.kind === 'approval' ? APPROVAL_TEMPLATE : PR_TEMPLATE,
+        channels: [],
+        prefs: { destinations: [{ kind: 'copy' }] },
+        tenantId: null
+      }),
       ...requests
     }
   })

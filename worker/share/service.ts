@@ -155,7 +155,7 @@ function prefsKey(org: string): string {
 }
 
 function peopleOf(destination: ShareDestination): unknown[] {
-  return (destination.kind === 'chat' || destination.kind === 'reviewers') && Array.isArray(destination.people) ? destination.people : []
+  return destination.kind !== 'copy' && destination.kind !== 'channel' && Array.isArray(destination.people) ? destination.people : []
 }
 
 function firstOfEach(destinations: ShareDestination[]): ShareDestination[] {
@@ -175,6 +175,7 @@ function destinationOf(value: unknown, known: Channel[]): ShareDestination[] {
   if (kind === 'channel') return typeof id === 'string' && known.some(channel => channel.id === id) ? [{ kind: 'channel', id }] : []
   if (!Array.isArray(people)) return []
   if (kind === 'chat') return [{ kind: 'chat', people: people.flatMap(identityOf).slice(0, MAX_SHARE_PEOPLE) }]
+  if (kind === 'email') return [{ kind: 'email', people: people.flatMap(identityOf).filter(person => person.kind === 'user').slice(0, MAX_SHARE_PEOPLE) }]
   if (kind === 'reviewers') return [{ kind: 'reviewers', people: people.flatMap(personOf).slice(0, MAX_SHARE_PEOPLE) }]
   return []
 }

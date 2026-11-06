@@ -1,31 +1,56 @@
-import { atom, plugin, read, set, shell } from 'orca'
+import { atom, plugin, read, set, shell, update } from 'orca'
 import { messageOf, OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
+import { mailtoUrl } from '../../shared/share/email'
 import { toPlain } from '../../shared/share/message'
 import { teamsChatUrl } from '../../shared/share/teams'
-import type { ShareDestination, ShareMessage, ShareResult } from '../../shared/share/types'
+import type { ShareResult } from '../../shared/share/types'
+import type { Identity } from '../../shared/types'
 import { LONG_WAIT } from '../state'
-import { chat, chatOpening, composer, currentRun, intro, prefs, sent, sharePlan, type ChatResult } from './state'
+import { composer, currentRun, intro, LINK_KINDS, linkOpening, links, prefs, sent, sharePlan, type LinkKind, type LinkResult, type Links, type Plan } from './state'
 
-type ChatDestination = Extract<ShareDestination, { kind: 'chat' }>
+type LinkUrls = Partial<Record<LinkKind, string | null>>
 
-const CHAT_OPENED: ChatResult = { ok: true, text: 'Opened a Teams chat.' }
-const CHAT_TOO_LONG: ChatResult = { ok: false, text: 'Too long for a Teams chat link. Use Copy instead.' }
-const CHAT_NOT_OPENED = "Teams chat wasn't opened."
+const TEXTS: Record<LinkKind, { opened: string; notOpened: string; tooLong: string }> = {
+  chat: { opened: 'Opened a Teams chat.', notOpened: "Teams chat wasn't opened.", tooLong: 'Too long for a Teams chat link. Use Copy instead.' },
+  email: { opened: 'Opened an email draft.', notOpened: "The email draft wasn't opened.", tooLong: 'Too long for an email link. Use Copy instead.' }
+}
 
 export const sending = atom(false)
 
-const notOpened = (url: string, reason?: string): ChatResult => ({ ok: false, text: CHAT_NOT_OPENED, retry: url, ...(reason ? { reason } : {}) })
+const notOpened = (kind: LinkKind, url: string, reason?: string): LinkResult => ({ ok: false, text: TEXTS[kind].notOpened, retry: url, ...(reason ? { reason } : {}) })
 
-function openChat(url: string): Promise<ChatResult> {
+function openLink(kind: LinkKind, url: string): Promise<LinkResult> {
   return shell.openExternal(url).then(
-    result => (result.opened ? CHAT_OPENED : notOpened(url, result.reason === 'consent-unavailable' ? OPEN_LINK_UNAVAILABLE : undefined)),
-    error => notOpened(url, messageOf(error))
+    result => (result.opened ? { ok: true, text: TEXTS[kind].opened } : notOpened(kind, url, result.reason === 'consent-unavailable' ? OPEN_LINK_UNAVAILABLE : undefined)),
+    error => notOpened(kind, url, messageOf(error))
   )
 }
 
-function startChat(destination: ChatDestination, message: ShareMessage, tenantId: string | null): Promise<ChatResult> {
-  const url = teamsChatUrl({ users: destination.people.map(person => person.uniqueName), text: toPlain(message), tenantId })
-  return url === null ? Promise.resolve(CHAT_TOO_LONG) : openChat(url)
+const uniqueNames = (people: Identity[]): string[] => people.map(person => person.uniqueName)
+
+function linkUrls(plan: Plan, subject: string, tenantId: string | null): LinkUrls {
+  const body = toPlain(plan.message)
+  const urls: LinkUrls = {}
+  for (const destination of plan.destinations) {
+    if (destination.kind === 'chat') urls.chat = teamsChatUrl({ users: uniqueNames(destination.people), text: body, tenantId })
+    if (destination.kind === 'email') urls.email = mailtoUrl({ to: uniqueNames(destination.people), subject, body })
+  }
+  return urls
+}
+
+function startLinks(urls: LinkUrls): { held: Links; opening: Promise<Links> | null } {
+  const held: Links = {}
+  let opening: Promise<Links> | null = null
+  let turn = true
+  for (const kind of LINK_KINDS) {
+    const url = urls[kind]
+    if (url === undefined) continue
+    if (url === null) held[kind] = { ok: false, text: TEXTS[kind].tooLong }
+    else if (turn) opening = openLink(kind, url).then(result => ({ [kind]: result }))
+    else held[kind] = notOpened(kind, url)
+    turn = false
+  }
+  return { held, opening }
 }
 
 export function share(): void {
@@ -33,8 +58,7 @@ export function share(): void {
   const loaded = read(prefs)
   const plan = sharePlan()
   if (!input || loaded.status !== 'ready' || !plan?.ready || read(sending)) return
-  const chatTo = plan.destinations.find((destination): destination is ChatDestination => destination.kind === 'chat')
-  const chatting = chatTo ? startChat(chatTo, plan.message, loaded.value.tenantId) : null
+  const { held, opening } = startLinks(linkUrls(plan, input.subject, loaded.value.tenantId))
   const request = plugin.request(
     'share.send',
     { org: input.org, kind: input.kind, keys: plan.keys, intro: read(intro), destinations: plan.destinations },
@@ -42,11 +66,11 @@ export function share(): void {
   )
   set(sending, true)
   set(sent, null)
-  set(chat, null)
-  void settle(currentRun(), request, chatting)
+  set(links, held)
+  void settle(currentRun(), request, opening)
 }
 
-async function settle(run: number, request: Promise<{ results: ShareResult[] }>, chatting: Promise<ChatResult> | null): Promise<void> {
+async function settle(run: number, request: Promise<{ results: ShareResult[] }>, opening: Promise<Links> | null): Promise<void> {
   const answered = request.then(
     ({ results }) => ({ results }),
     error => ({ results: [], error: messageOf(error) })
@@ -55,22 +79,22 @@ async function settle(run: number, request: Promise<{ results: ShareResult[] }>,
     answered.then(answer => {
       if (run === currentRun()) set(sent, answer)
     }),
-    chatting?.then(result => {
-      if (run === currentRun()) set(chat, result)
+    opening?.then(opened => {
+      if (run === currentRun()) update(links, current => ({ ...current, ...opened }))
     })
   ])
   set(sending, false)
 }
 
-export function retryChat(): void {
-  const url = read(chat)?.retry
-  if (!url || read(chatOpening)) return
+export function retryLink(kind: LinkKind): void {
+  const url = read(links)[kind]?.retry
+  if (!url || read(linkOpening) || read(sending)) return
   const run = currentRun()
-  const opening = openChat(url)
-  set(chatOpening, true)
+  const opening = openLink(kind, url)
+  set(linkOpening, true)
   void opening.then(result => {
     if (run !== currentRun()) return
-    set(chat, result)
-    set(chatOpening, false)
+    update(links, current => ({ ...current, [kind]: result }))
+    set(linkOpening, false)
   })
 }

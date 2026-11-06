@@ -3,7 +3,7 @@ import { messageOf } from '../../shared/messages'
 import { CHANNEL_NAME_TOO_LONG, MAX_CHANNEL_NAME } from '../../shared/share/limits'
 import type { Channel } from '../../shared/share/types'
 import { LoadFailure } from '../snapshot-parts'
-import { addToChannels, dropChannel, leaveChannels, setChannels, showChannels, shownChannels } from './state'
+import { addToChannels, dropChannel, leaveChannels, setChannels, showChannels, shownChannels, type ShareHost } from './state'
 
 const REPLACED = 'Webhook URL replaced.'
 const HELP =
@@ -49,9 +49,9 @@ async function loadChannels(): Promise<void> {
   }
 }
 
-export function openChannels(): void {
+export function openChannels(host: ShareHost): void {
   forgetDrafts()
-  showChannels()
+  showChannels(host)
   void loadChannels()
 }
 

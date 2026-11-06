@@ -87,7 +87,7 @@ test('a template with an unknown placeholder or two links falls back with a warn
     ['{id} {nope}: {title}', 'Unknown placeholder {nope} in the share template.'],
     ['[a]({url}) [b]({url})', 'The share template can have only one link.'],
     ['   ', 'The share template is empty.'],
-    ['[]({url}): {title}', 'The link needs text, like [Pull Request {id}]({url}).']
+    ['[]({url}): {title}', 'The link in the share template needs text, like [text]({url}).']
   ]) {
     const result = build([item()], '', template)
     assert.equal(result.warning, warning)

@@ -16,6 +16,7 @@ import { createPressure } from './pipelines/pressure'
 import { openRun } from './pipelines/run-file'
 import { createRunViews } from './pipelines/run-views'
 import { createPipelinesService } from './pipelines/service'
+import { approvalShareSource } from './pipelines/share-source'
 import { watchPipelineSettings } from './pipelines/settings'
 import { createRunSignals } from './pipelines/signals'
 import { createWatchList } from './pipelines/watched'
@@ -152,7 +153,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     channels,
     fetch: globalThis.fetch,
     orgs: () => connections.list(),
-    sources: { pr: prShareSource(connections.http, prs, prSettings) },
+    sources: { pr: prShareSource(connections.http, prs, prSettings), approval: approvalShareSource(pipelines, pipelineSettings) },
     destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(connections.http)],
     log
   })

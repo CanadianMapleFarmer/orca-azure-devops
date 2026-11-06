@@ -5,7 +5,7 @@ export const PR_VARS = ['id', 'title', 'url', 'repo', 'project', 'source', 'targ
 
 export const TEMPLATE_EMPTY = 'The share template is empty.'
 export const TEMPLATE_TWO_LINKS = 'The share template can have only one link.'
-export const TEMPLATE_EMPTY_LINK = 'The link needs text, like [Pull Request {id}]({url}).'
+export const TEMPLATE_EMPTY_LINK = 'The link in the share template needs text, like [text]({url}).'
 export const unknownPlaceholder = (name: string): string => `Unknown placeholder {${name}} in the share template.`
 
 type Piece = { readonly text: string } | { readonly variable: string }

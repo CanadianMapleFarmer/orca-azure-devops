@@ -1,5 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { AutoCompleteOptions, PrKey } from '../../src/shared/prs'
+import { APPROVAL_4520, APPROVAL_ID, RUN_4520, RUN_URL } from '../../src/shared/share/approval-fixtures'
+import { APPROVAL_TEMPLATE, approvalItemKey } from '../../src/shared/share/approval-items'
 import { toHtml } from '../../src/shared/share/message'
 import { prItemKey } from '../../src/shared/share/pr-items'
 import { PR_TEMPLATE } from '../../src/shared/share/template'
@@ -11,6 +13,7 @@ import type { StorePort } from '../connections'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { createScheduler } from '../poll/scheduler'
 import { fakePrs, isOnePr, isPrWorkItems, ME } from '../prs/fake-prs'
+import { approvalShareSource } from '../pipelines/share-source'
 import { createPrsService } from '../prs/service'
 import { prShareSource } from '../prs/share-source'
 import type { Clipboard } from '../sys/clipboard'
@@ -31,6 +34,7 @@ const AUTO: AutoCompleteOptions = { mergeStrategy: 'noFastForward', deleteSource
 const NOT_CONNECTED = 'Connect this organization first.'
 const NO_PERMISSION = 'TF401027: You need the PullRequestContribute permission.'
 const FOOTER = 'Shared by Alex Contoso from Orca'
+const COPIED_RESULT = { destination: 'copy', ok: true, text: 'Copied as rich text.' }
 
 const PR_A: PrKey = { projectId: PROJECT, repoId: REPO, prId: 4101 }
 const PR_B: PrKey = { projectId: PROJECT, repoId: API_REPO, prId: 4104 }
@@ -137,13 +141,24 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     now: clock.now
   })
   const template = { value: PR_TEMPLATE }
+  const approvalTemplate = { value: APPROVAL_TEMPLATE }
+  const approvalReads: { org: string; key: { projectId: string; approvalId: string } }[] = []
+  const pipelines = {
+    approval: async (org: string, key: { projectId: string; approvalId: string }) => {
+      approvalReads.push({ org, key })
+      return key.approvalId === APPROVAL_ID ? { run: RUN_4520, approval: APPROVAL_4520 } : null
+    }
+  }
   const share = createShareService({
     http,
     store,
     channels,
     fetch: fetchFn,
     orgs: async () => structuredClone(orgs),
-    sources: { pr: prShareSource(http, prs, { shareTemplate: () => template.value }) },
+    sources: {
+      pr: prShareSource(http, prs, { shareTemplate: () => template.value }),
+      approval: approvalShareSource(pipelines, { approvalTemplate: () => approvalTemplate.value })
+    },
     destinations: pick({ copy: copyDestination(clipboard), channel: channelDestination(channels, fetchFn), reviewers: reviewersDestination(http) }),
     log
   })
@@ -152,7 +167,7 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
       .filter(isPutReviewer)
       .map(call => ({ prId: Number(REVIEWER.exec(call.path)?.[1]), reviewer: REVIEWER.exec(call.path)?.[2], body: call.body }))
       .sort((a, b) => a.prId - b.prId)
-  return { ado, storage, failing, logs, channels, posted, answer, copies, prs, template, share, puts }
+  return { ado, storage, failing, logs, channels, posted, answer, copies, prs, template, approvalTemplate, approvalReads, share, puts }
 }
 
 function recording(kind: ShareDestination['kind'], seen: { ctx: DestinationContext; destination: ShareDestination }[]): WorkerDestination {
@@ -440,7 +455,86 @@ test('corrupt stored prefs are dropped entry by entry, never thrown', async () =
     'share:prefs:fabrikam': { destinations: 'copy' }
   })
   assert.deepEqual((await h.share.prefs(ORG, 'pr')).prefs, {
-    destinations: [{ kind: 'reviewers', people: [NIA] }, { kind: 'channel', id: 'channel-1' }, { kind: 'copy' }, { kind: 'chat', people: crowd.slice(0, 20) }]
+    destinations: [
+      { kind: 'reviewers', people: [NIA] },
+      { kind: 'channel', id: 'channel-1' },
+      { kind: 'email', people: [GRACE] },
+      { kind: 'copy' },
+      { kind: 'chat', people: crowd.slice(0, 20) }
+    ]
   })
   assert.deepEqual((await h.share.prefs('fabrikam', 'pr')).prefs, { destinations: [{ kind: 'copy' }] })
+})
+
+const APPROVAL_KEY = approvalItemKey(APPROVAL_4520)
+const APPROVAL_PLAIN = `Approval needed for production: web-app-cd 20261105.3 on main ${RUN_URL}`
+
+test('send shares an approval from the approval source by key', async () => {
+  const seen: { ctx: DestinationContext; destination: ShareDestination }[] = []
+  const stubbed = harness(() => [recording('copy', seen)])
+  const send = (keys: string[]) => stubbed.share.send({ org: ORG, kind: 'approval', keys, intro: '', destinations: [{ kind: 'copy' }] })
+
+  await send([APPROVAL_KEY, 'approval:proj-web/gone-approval', 'not-a-key', APPROVAL_KEY, '<b>approval</b>'])
+  assert.deepEqual(seen[0].ctx.message.lines, [
+    [{ text: 'Approval needed for production: ' }, { text: 'web-app-cd 20261105.3', href: RUN_URL }, { text: ' on main' }]
+  ])
+  assert.deepEqual(seen[0].ctx.prs, [])
+  assert.deepEqual(stubbed.approvalReads, [
+    { org: ORG, key: { projectId: 'proj-web', approvalId: APPROVAL_ID } },
+    { org: ORG, key: { projectId: 'proj-web', approvalId: 'gone-approval' } }
+  ])
+  assert.equal(stubbed.ado.calls.length, 0)
+  await assert.rejects(send(['approval:proj-web/gone-approval']), failsWith('Choose at least one item to share.'))
+  assert.equal(seen.length, 1)
+
+  const real = harness()
+  const { results } = await real.share.send({ org: ORG, kind: 'approval', keys: [APPROVAL_KEY], intro: 'Please approve.', destinations: [{ kind: 'copy' }] })
+  assert.deepEqual(results, [COPIED_RESULT])
+  assert.equal(real.copies[0].plain, `Please approve.\n\n${APPROVAL_PLAIN}`)
+  assert.equal(real.copies[0].html, `<div>Please approve.</div><div>Approval needed for production: <a href="${RUN_URL}">web-app-cd 20261105.3</a> on main</div>`)
+})
+
+test('email destinations are remembered with their people and capped', async () => {
+  const seen: { ctx: DestinationContext; destination: ShareDestination }[] = []
+  const h = harness()
+  const send = (destinations: ShareDestination[], from = h) => from.share.send({ org: ORG, kind: 'approval', keys: [APPROVAL_KEY], intro: '', destinations })
+  const dennis = { ...DENNIS, vote: 10, url: WEBHOOK } as Identity
+
+  const { results } = await send([{ kind: 'copy' }, { kind: 'email', people: [GRACE, WEB_TEAM, dennis] }, { kind: 'email', people: [DENNIS] }])
+  assert.deepEqual(results, [COPIED_RESULT], 'the worker never sends an email')
+  const remembered: ShareDestination[] = [{ kind: 'copy' }, { kind: 'email', people: [GRACE, DENNIS] }]
+  assert.deepEqual(h.storage['share:prefs:contoso'], { destinations: remembered })
+  assert.deepEqual((await h.share.prefs(ORG, 'approval')).prefs, { destinations: remembered })
+  assert.deepEqual((await h.share.prefs('fabrikam', 'approval')).prefs, { destinations: [{ kind: 'copy' }] })
+  assert.ok(!JSON.stringify(h.storage).includes(SIG), 'the webhook URL leaked into storage')
+
+  const people = (count: number): Identity[] => Array.from({ length: count }, (_, index) => ({ ...GRACE, id: `person-${index}`, displayName: `Person ${index}` }))
+  const capped = harness(() => [recording('copy', seen)])
+  await assert.rejects(send([{ kind: 'copy' }, { kind: 'email', people: people(21) }], capped), failsWith('Choose up to 20 people.'))
+  assert.deepEqual([seen, capped.storage], [[], {}])
+  await send([{ kind: 'email', people: people(20) }], capped)
+  assert.equal((await capped.share.prefs(ORG, 'approval')).prefs.destinations.length, 1)
+})
+
+test('prefs for approvals use the approval template and report its warning', async () => {
+  const h = harness()
+  assert.deepEqual(await h.share.prefs(ORG, 'approval'), { template: APPROVAL_TEMPLATE, channels: [], prefs: { destinations: [{ kind: 'copy' }] }, tenantId: TENANT })
+
+  h.approvalTemplate.value = 'Needs you: [{pipeline} {run}]({url}) {owner}'
+  assert.deepEqual(await h.share.prefs(ORG, 'approval'), {
+    template: 'Needs you: [{pipeline} {run}]({url}) {owner}',
+    warning: 'Unknown placeholder {owner} in the share template.',
+    channels: [],
+    prefs: { destinations: [{ kind: 'copy' }] },
+    tenantId: TENANT
+  })
+  await h.share.send({ org: ORG, kind: 'approval', keys: [APPROVAL_KEY], intro: '', destinations: [{ kind: 'copy' }] })
+  assert.equal(h.copies[0].plain, APPROVAL_PLAIN, 'an invalid template falls back to the default line')
+
+  h.approvalTemplate.value = '[]({url}) on {branch}'
+  assert.equal((await h.share.prefs(ORG, 'approval')).warning, 'The link in the share template needs text, like [text]({url}).')
+  h.approvalTemplate.value = '[Pull Request {id}]({url})'
+  assert.equal((await h.share.prefs(ORG, 'approval')).warning, 'Unknown placeholder {id} in the share template.')
+  assert.equal((await h.share.prefs(ORG, 'pr')).template, PR_TEMPLATE)
+  assert.equal((await h.share.prefs(ORG, 'pr')).warning, undefined)
 })

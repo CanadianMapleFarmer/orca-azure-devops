@@ -25,8 +25,8 @@ test('the template errors are exact', () => {
   assert.deepEqual(parseTemplate('{id} {nope}', PR_VARS), { error: 'Unknown placeholder {nope} in the share template.' })
   assert.deepEqual(parseTemplate('[{id}]({link})', PR_VARS), { error: 'Unknown placeholder {link} in the share template.' })
   assert.deepEqual(parseTemplate('{id}', ['title']), { error: 'Unknown placeholder {id} in the share template.' })
-  assert.deepEqual(parseTemplate('[]({url}): {title}', PR_VARS), { error: 'The link needs text, like [Pull Request {id}]({url}).' })
-  assert.deepEqual(parseTemplate('[ ]({url})', PR_VARS), { error: 'The link needs text, like [Pull Request {id}]({url}).' })
+  assert.deepEqual(parseTemplate('[]({url}): {title}', PR_VARS), { error: 'The link in the share template needs text, like [text]({url}).' })
+  assert.deepEqual(parseTemplate('[ ]({url})', PR_VARS), { error: 'The link in the share template needs text, like [text]({url}).' })
 })
 
 test('brackets that do not form a link span stay literal text', () => {

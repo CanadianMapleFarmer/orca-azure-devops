@@ -1,10 +1,14 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { ReleaseSet } from '../../shared/prs'
+import type { Approver } from '../../shared/pipelines'
+import { APPROVAL_TEMPLATE } from '../../shared/share/approval-items'
+import { mailtoUrl } from '../../shared/share/email'
 import { MAX_INTRO } from '../../shared/share/limits'
 import { teamsChatUrl } from '../../shared/share/teams'
 import { PR_TEMPLATE } from '../../shared/share/template'
 import type { Channel, SharePrefsView, ShareRequest, ShareResult } from '../../shared/share/types'
 import type { Identity, OrgStatus } from '../../shared/types'
+import { approvalOf, runsSnapshotOf, waitingRun } from '../pipelines/fixtures'
 import { NOW, prOf, reviewerOf, setOf, snapshotOf } from '../prs/fixtures'
 import { closeCleanly, mountPanel, org, requestsTo, type TestHost } from '../test-support'
 
@@ -560,4 +564,244 @@ test('a failed prefs load shows the message and Try again loads again', async ()
   assert.equal(panel.find({ type: 'Markdown' }), null)
   await panel.press({ type: 'Button', text: 'Try again' })
   assert.equal(preview(), `${lineOf(55)}\n\n${lineOf(56)}`)
+})
+
+const NOT_OPENED_EMAIL = "The email draft wasn't opened."
+const RUN_5 = 'https://dev.azure.com/contoso/Fabrikam%20Web/_build/results?buildId=5'
+const APPROVAL_LINE = `Approval needed for production: [web-app-cd 20261105.5](${RUN_5}) on main`
+const APPROVAL_PLAIN = `Approval needed for production: web-app-cd 20261105.5 on main ${RUN_5}`
+const APPROVAL_SUBJECT = 'Approval needed: web-app-cd 20261105.5'
+
+const APPROVER_GRACE: Approver = { id: 'u-grace', name: 'Grace Hopper', uniqueName: 'grace@contoso.com', isGroup: false }
+const APPROVER_LINUS: Approver = { id: 'u-linus', name: 'Linus Torvalds', uniqueName: 'linus@contoso.com', isGroup: false }
+const APPROVER_TEAM: Approver = { id: 'g-approvers', name: 'Release Approvers', uniqueName: '[Fabrikam Web]\\Release Approvers', isGroup: true }
+const PERSON_GRACE: Identity = { id: 'u-grace', displayName: 'Grace Hopper', uniqueName: 'grace@contoso.com', kind: 'user' }
+const PERSON_LINUS: Identity = { id: 'u-linus', displayName: 'Linus Torvalds', uniqueName: 'linus@contoso.com', kind: 'user' }
+
+const approvalPrefs = (over: Partial<SharePrefsView> = {}): SharePrefsView => prefsOf({ template: APPROVAL_TEMPLATE, ...over })
+
+const mailTo = (to: string[]): string => mailtoUrl({ to, subject: APPROVAL_SUBJECT, body: APPROVAL_PLAIN }) ?? ''
+
+async function pipelinesWith(more: MockRequests = {}, orgs: OrgStatus[] = [org('contoso')]): Promise<TestHost> {
+  const runs = [waitingRun(5, [approvalOf('ap-1', 5, { approvers: [APPROVER_GRACE, APPROVER_TEAM, APPROVER_LINUS] })])]
+  const mounted = await mountPanel(orgs, { 'runs.snapshot': runsSnapshotOf({ runs }), ...more }, { persisted: { workspace: { tab: 'pipelines' } } })
+  panel = mounted.panel
+  return mounted.host
+}
+
+async function approve(more: MockRequests = {}): Promise<TestHost> {
+  const host = await pipelinesWith(more)
+  await panel.press({ type: 'Button', text: 'Share for approval' })
+  return host
+}
+
+const approvalBoxes = () => panel.findAll({ type: 'Checkbox', label: /→/ }).map(box => [box.label, box.props.checked])
+
+const orderOfLinksAndSends = (host: TestHost) =>
+  host.calls
+    .map(call => (call.method === 'plugin.request' ? (call.params as { name: string }).name : call.method))
+    .filter(name => name === 'shell.openExternal' || name === 'share.send')
+
+test('Share for approval opens the composer with the approval and its approvers', async () => {
+  const host = await approve()
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share for approval')
+  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(requestsTo(host, 'share.prefs').map(call => call.input), [{ org: 'contoso', kind: 'approval' }])
+  assert.deepEqual(approvalBoxes(), [['web-app-cd 20261105.5 → production', true]])
+  assert.equal(preview(), APPROVAL_LINE)
+  assert.equal(isChecked('Copy as rich text'), true)
+  assert.equal(isChecked('Message in Teams'), false)
+  assert.equal(isChecked('Email'), false)
+  assert.equal(panel.find({ type: 'Checkbox', label: 'Add as reviewers' }), null)
+  assert.equal(panel.find({ label: 'Find people to email' }), null)
+  assert.equal(panel.find({ type: 'Button', text: 'Back' })?.props.variant, 'ghost')
+
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  assert.equal(panel.find({ label: 'Find people to email' })?.props.placeholder, 'Name or email')
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Grace Hopper', 'Linus Torvalds'])
+  assert.equal(panel.find({ type: 'Switch' }), null)
+  assert.equal(shareButton()?.disabled, true)
+  assert.equal(panel.findAll({ type: 'Text', text: 'Choose at least one person.' }).length, 1)
+})
+
+test('with chat and email chosen, the Teams link opens first and email waits for its own button', async () => {
+  const host = await approve({
+    'share.prefs': approvalPrefs({
+      tenantId: 'tenant-1',
+      prefs: { destinations: [{ kind: 'copy' }, { kind: 'chat', people: [PERSON_GRACE] }, { kind: 'email', people: [PERSON_LINUS] }] }
+    }),
+    'share.send': { results: [COPIED] }
+  })
+  assert.equal(isChecked('Message in Teams'), true)
+  assert.equal(isChecked('Email'), true)
+  assert.ok(panel.find({ label: 'Remove Linus Torvalds' }))
+  await panel.press({ type: 'Button', text: 'Share' })
+
+  const teams = teamsChatUrl({ users: ['grace@contoso.com'], text: APPROVAL_PLAIN, tenantId: 'tenant-1' })
+  assert.deepEqual(opens(host), [{ url: teams }])
+  assert.deepEqual(orderOfLinksAndSends(host), ['shell.openExternal', 'share.send'])
+  assert.deepEqual(sends(host), [
+    {
+      org: 'contoso',
+      kind: 'approval',
+      keys: ['approval:proj-web/ap-1'],
+      intro: '',
+      destinations: [{ kind: 'copy' }, { kind: 'chat', people: [PERSON_GRACE] }, { kind: 'email', people: [PERSON_LINUS] }]
+    }
+  ])
+  assert.deepEqual(results(), [
+    ['Copy as rich text', 'success', 'Copied as rich text.'],
+    ['Message in Teams', 'success', 'Opened a Teams chat.'],
+    ['Email', 'danger', `${NOT_OPENED_EMAIL} Open email`]
+  ])
+  assert.equal(panel.find({ type: 'Button', text: 'Open Teams chat' }), null)
+
+  await panel.press({ type: 'Button', text: 'Open email' })
+  assert.deepEqual(opens(host), [{ url: teams }, { url: mailTo(['linus@contoso.com']) }])
+  assert.equal(sends(host).length, 1)
+  assert.deepEqual(results()[2], ['Email', 'success', 'Opened an email draft.'])
+  assert.equal(panel.find({ type: 'Button', text: 'Open email' }), null)
+})
+
+test('email alone opens the mailto link before share.send', async () => {
+  const host = await approve({ 'share.send': { results: [COPIED] } })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  await panel.press({ type: 'ListItem', label: 'Linus Torvalds' })
+  assert.equal(shareButton()?.disabled, false)
+  await panel.press({ type: 'Button', text: 'Share' })
+
+  const url = mailTo(['linus@contoso.com'])
+  assert.match(url, /^mailto:linus%40contoso\.com\?subject=Approval%20needed%3A%20web-app-cd%2020261105\.5&body=/)
+  assert.deepEqual(opens(host), [{ url }])
+  assert.deepEqual(orderOfLinksAndSends(host), ['shell.openExternal', 'share.send'])
+  assert.deepEqual(sends(host)[0]?.destinations, [{ kind: 'copy' }, { kind: 'email', people: [PERSON_LINUS] }])
+  assert.deepEqual(results(), [
+    ['Copy as rich text', 'success', 'Copied as rich text.'],
+    ['Email', 'success', 'Opened an email draft.']
+  ])
+  assert.equal(panel.find({ type: 'Button', text: 'Open email' }), null)
+})
+
+test('a refused email link offers Open email, which opens only the link', async () => {
+  const host = await approve({ 'share.send': { results: [COPIED] } })
+  host.respond('shell.openExternal', () => {
+    throw hostError('rate_limited', 'Too many links opened. Try again in a few seconds.')
+  })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  await panel.press({ type: 'ListItem', label: 'Grace Hopper' })
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(results(), [
+    ['Copy as rich text', 'success', 'Copied as rich text.'],
+    ['Email', 'danger', `${NOT_OPENED_EMAIL} Too many links opened. Try again in a few seconds. Open email`]
+  ])
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press({ type: 'Button', text: 'Open email' })
+  assert.equal(opens(host).length, 2)
+  assert.equal(opens(host)[1]?.url, opens(host)[0]?.url)
+  assert.equal(sends(host).length, 1)
+  assert.deepEqual(results()[1], ['Email', 'success', 'Opened an email draft.'])
+})
+
+test("an email link that's too long is refused without opening anything", async () => {
+  const host = await approve({ 'share.send': { results: [] } })
+  await panel.toggle({ type: 'Checkbox', label: 'Copy as rich text' })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  await panel.press({ type: 'ListItem', label: 'Grace Hopper' })
+  await panel.type({ label: 'Intro (optional)' }, 'x'.repeat(MAX_INTRO))
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(opens(host), [])
+  assert.deepEqual(sends(host)[0]?.destinations, [{ kind: 'email', people: [PERSON_GRACE] }])
+  assert.deepEqual(results(), [['Email', 'danger', 'Too long for an email link. Use Copy instead.']])
+  assert.equal(panel.find({ type: 'Button', text: 'Open email' }), null)
+})
+
+test("an email link Orca couldn't ask about says so", async () => {
+  const host = await approve({ 'share.send': { results: [] } })
+  host.respond('shell.openExternal', { opened: false, reason: 'consent-unavailable' })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  await panel.press({ type: 'ListItem', label: 'Grace Hopper' })
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(results(), [['Email', 'danger', `${NOT_OPENED_EMAIL} ${OPEN_UNAVAILABLE} Open email`]])
+})
+
+test('a remembered email destination preselects its people where email is offered, and is ignored where it is not', async () => {
+  const remembered = { destinations: [{ kind: 'copy' as const }, { kind: 'email' as const, people: [PERSON_LINUS] }] }
+  await approve({ 'share.prefs': approvalPrefs({ prefs: remembered }) })
+  assert.equal(isChecked('Email'), true)
+  assert.ok(panel.find({ label: 'Remove Linus Torvalds' }))
+  await closeCleanly(panel)
+
+  const host = await share({ 'share.prefs': prefsOf({ prefs: remembered }), 'share.send': { results: [COPIED] } })
+  assert.equal(panel.find({ type: 'Checkbox', label: 'Email' }), null)
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(sends(host)[0]?.destinations, [{ kind: 'copy' }])
+  assert.deepEqual(opens(host), [])
+})
+
+test("a composer opened from Pipelines doesn't show on the PRs tab, and one from the PRs tab doesn't show on Pipelines", async () => {
+  await approve()
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  assert.equal(panel.find({ type: 'Checkbox', label: 'Email' }), null)
+  assert.ok(panel.find({ label: 'Teams channels' }), 'the PRs tab shows its own view')
+  await panel.select({ type: 'Tabs' }, 'pipelines')
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share for approval')
+  await panel.press({ type: 'Button', text: 'Back' })
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  await closeCleanly(panel)
+
+  await share()
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share pull requests')
+  await panel.select({ type: 'Tabs' }, 'pipelines')
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  assert.ok(panel.find({ type: 'Button', text: 'Mine' }), 'the Pipelines tab shows its own view')
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share pull requests')
+})
+
+test('the channel manager belongs to the tab that opened it, and Back returns there', async () => {
+  await pipelinesWith({ 'share.channels': [RELEASES] })
+  await panel.press({ label: 'Teams channels' })
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Teams channels')
+  await panel.select({ type: 'Tabs' }, 'prs')
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  await panel.select({ type: 'Tabs' }, 'pipelines')
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Teams channels')
+  await panel.press({ type: 'Button', text: 'Back' })
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  assert.ok(panel.find({ type: 'Button', text: 'Mine' }))
+  await panel.press({ type: 'Button', text: 'Share for approval' })
+  await panel.press({ type: 'Button', text: 'Manage channels' })
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Teams channels')
+  await panel.press({ type: 'Button', text: 'Back' })
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share for approval')
+})
+
+test('the chat, email and reviewer pickers keep separate queries', async () => {
+  const found = (query: string): Identity[] => (query === 'gra' ? [GRACE] : [LINUS])
+  const host = await approve({ 'share.people': input => found(input.query) })
+  await panel.toggle({ type: 'Checkbox', label: 'Message in Teams' })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  await panel.type({ label: 'Find people' }, 'gra', { submit: true })
+  await panel.type({ label: 'Find people to email' }, 'lin', { submit: true })
+  assert.equal(panel.valueOf({ label: 'Find people' }), 'gra')
+  assert.equal(panel.valueOf({ label: 'Find people to email' }), 'lin')
+  assert.equal(panel.find({ label: 'Find people or groups' }), null)
+  assert.deepEqual(
+    requestsTo(host, 'share.people').map(call => call.input),
+    [
+      { org: 'contoso', query: 'gra', groups: false },
+      { org: 'contoso', query: 'lin', groups: false }
+    ]
+  )
+  await closeCleanly(panel)
+
+  await share({ 'share.people': input => found(input.query) })
+  await panel.toggle({ type: 'Checkbox', label: 'Message in Teams' })
+  await panel.toggle({ type: 'Checkbox', label: 'Add as reviewers' })
+  await panel.type({ label: 'Find people' }, 'gra', { submit: true })
+  await panel.type({ label: 'Find people or groups' }, 'lin', { submit: true })
+  assert.equal(panel.valueOf({ label: 'Find people' }), 'gra')
+  assert.equal(panel.valueOf({ label: 'Find people or groups' }), 'lin')
+  assert.equal(panel.find({ label: 'Find people to email' }), null)
 })

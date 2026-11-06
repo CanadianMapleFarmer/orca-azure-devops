@@ -681,3 +681,43 @@ test("switching organization loads that org and drops the other one's results", 
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.deepEqual(inputsTo(host, 'runs.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
 })
+
+test('every waiting approval offers Share for approval, whether or not the person can approve it', async () => {
+  const runs = [
+    waitingRun(21, [approvalOf('a', 21, { canApprove: true }), approvalOf('b', 21)]),
+    waitingRun(22, [approvalOf('c', 22)]),
+    runOf(23)
+  ]
+  await open(runsSnapshotOf({ runs }))
+  assert.equal(inside(cardOf(21), { type: 'Button', text: 'Share for approval' }).length, 2)
+  assert.equal(inside(cardOf(22), { type: 'Button', text: 'Share for approval' }).length, 1)
+  assert.equal(inside(cardOf(23), { type: 'Button', text: 'Share for approval' }).length, 0)
+  assert.equal(within(22, { type: 'Button', text: 'Share for approval' }).props.variant, 'outline')
+})
+
+test('Share for approval opens the composer for that approval only', async () => {
+  const runs = [waitingRun(31, [approvalOf('a', 31, { environment: 'staging' })]), waitingRun(32, [approvalOf('b', 32, { environment: null, stage: 'Deploy production' })])]
+  const host = await open(runsSnapshotOf({ runs }))
+  await panel.press(within(32, { type: 'Button', text: 'Share for approval' }))
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Share for approval')
+  assert.deepEqual(inputsTo(host, 'share.prefs'), [{ org: 'contoso', kind: 'approval' }])
+  assert.deepEqual(
+    panel.findAll({ type: 'Checkbox', label: /→/ }).map(box => [box.label, box.props.checked]),
+    [['web-app-cd 20261105.32 → Deploy production', true]]
+  )
+  assert.equal(panel.find({ type: 'Card' }), null)
+  await panel.press({ type: 'Button', text: 'Back' })
+  assert.equal(panel.findAll({ type: 'Card' }).length, 2)
+})
+
+test('the header has a Teams channels button that opens the manager and Back returns to the runs', async () => {
+  const host = await open(runsSnapshotOf({ runs: [runOf(41)] }), { 'share.channels': [] })
+  const settings = panel.find({ label: 'Teams channels' })
+  assert.equal(settings?.props.variant, 'ghost')
+  await panel.press({ label: 'Teams channels' })
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Teams channels')
+  assert.deepEqual(inputsTo(host, 'share.channels'), [{}])
+  assert.equal(panel.find({ type: 'Card' }), null)
+  await panel.press({ type: 'Button', text: 'Back' })
+  assert.deepEqual(ids(), [41])
+})

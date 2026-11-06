@@ -1,6 +1,6 @@
 import type { Identity } from '../types'
 
-export type ShareKind = 'pr'
+export type ShareKind = 'pr' | 'approval'
 
 export interface Segment {
   text: string
@@ -30,6 +30,7 @@ export type ShareDestination =
   | { kind: 'copy' }
   | { kind: 'channel'; id: string }
   | { kind: 'chat'; people: Identity[] }
+  | { kind: 'email'; people: Identity[] }
   | { kind: 'reviewers'; people: Person[] }
 
 export interface SharePrefs {

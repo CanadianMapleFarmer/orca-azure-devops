@@ -25,7 +25,7 @@ function Header({ org, current }: { org: string; current: PrSnapshot }): OrcaNod
           </Text>
         </Box>
         <Row gap="xs" align="center">
-          <IconButton icon="settings" label="Teams channels" variant="ghost" size="sm" onPress={openChannels} />
+          <IconButton icon="settings" label="Teams channels" variant="ghost" size="sm" onPress={() => openChannels('prs')} />
           <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
         </Row>
       </Row>
@@ -97,7 +97,7 @@ function ToReview({ current }: { current: PrSnapshot }): OrcaNode {
 }
 
 export function PrsTab({ org }: { org: OrgStatus }): OrcaNode {
-  const shown = shareView()
+  const shown = shareView('prs')
   if (shown === 'composer') return <Composer />
   if (shown === 'channels') return <Channels />
   const stored = read(snapshot)

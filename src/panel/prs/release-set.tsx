@@ -106,6 +106,7 @@ function shareSet(org: string, me: string | null, set: ReleaseSet): void {
   openComposer({
     org,
     kind: 'pr',
+    host: 'prs',
     title: 'Share pull requests',
     items: set.prs.map(pr => {
       const item = prShareItem(pr)
@@ -113,6 +114,8 @@ function shareSet(org: string, me: string | null, set: ReleaseSet): void {
     }),
     suggestions: reviewersOf(set, me),
     reviewers: true,
+    email: false,
+    subject: '',
     fallback: PR_TEMPLATE,
     vars: PR_VARS
   })

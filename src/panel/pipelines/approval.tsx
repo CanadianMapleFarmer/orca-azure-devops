@@ -1,5 +1,8 @@
 import { Button, Callout, RelativeTime, Row, Stack, Text, Textarea, type OrcaNode } from 'orca'
 import { MAX_COMMENT, type ApprovalSummary, type RunSummary } from '../../shared/pipelines'
+import { APPROVAL_TEMPLATE, APPROVAL_VARS, approvalShareItem } from '../../shared/share/approval-items'
+import type { Identity } from '../../shared/types'
+import { openComposer } from '../share/state'
 import { askToDecide, cancelDecision, confirmOf, decide, isBusy, outcomeOf, typeComment, type Outcome } from './state'
 
 const MAX_INSTRUCTIONS = 500
@@ -7,6 +10,29 @@ const MAX_INSTRUCTIONS = 500
 function clip(text: string): string {
   const letters = Array.from(text)
   return letters.length > MAX_INSTRUCTIONS ? `${letters.slice(0, MAX_INSTRUCTIONS - 1).join('')}…` : text
+}
+
+const placeOf = (approval: ApprovalSummary): string => approval.environment ?? approval.stage ?? 'A stage'
+
+function shareApproval(org: string, run: RunSummary, approval: ApprovalSummary): void {
+  const item = approvalShareItem(run, approval)
+  const runName = `${run.pipeline.name} ${run.runNumber}`
+  const approvers: Identity[] = approval.approvers
+    .filter(approver => !approver.isGroup)
+    .map(({ id, name, uniqueName }) => ({ id, displayName: name, uniqueName, kind: 'user' }))
+  openComposer({
+    org,
+    kind: 'approval',
+    host: 'pipelines',
+    title: 'Share for approval',
+    items: [{ key: item.key, label: `${runName} → ${placeOf(approval)}`, item, checked: true }],
+    suggestions: approvers,
+    reviewers: false,
+    email: true,
+    subject: `Approval needed: ${runName}`,
+    fallback: APPROVAL_TEMPLATE,
+    vars: APPROVAL_VARS
+  })
 }
 
 function approversLine(approval: ApprovalSummary): string | null {
@@ -52,7 +78,7 @@ function Decide({ org, approval }: { org: string; approval: ApprovalSummary }): 
   )
 }
 
-export function ApprovalBlock({ org, approval }: { org: string; run: RunSummary; approval: ApprovalSummary }): OrcaNode {
+export function ApprovalBlock({ org, run, approval }: { org: string; run: RunSummary; approval: ApprovalSummary }): OrcaNode {
   const approvers = approversLine(approval)
   const outcome = outcomeOf(approval.approvalId)
   return (
@@ -60,7 +86,7 @@ export function ApprovalBlock({ org, approval }: { org: string; run: RunSummary;
       <Callout tone="warning" title="Waiting for approval">
         <Stack gap="xs">
           <Text size="sm">
-            {approval.environment ?? approval.stage ?? 'A stage'} · waiting <RelativeTime at={approval.createdAt} format="duration" />
+            {placeOf(approval)} · waiting <RelativeTime at={approval.createdAt} format="duration" />
           </Text>
           {approvers ? <Text size="sm">{approvers}</Text> : null}
           {approval.instructions ? (
@@ -69,6 +95,11 @@ export function ApprovalBlock({ org, approval }: { org: string; run: RunSummary;
             </Text>
           ) : null}
           {approval.canApprove ? <Decide org={org} approval={approval} /> : null}
+          <Row gap="sm" wrap>
+            <Button size="sm" variant="outline" onPress={() => shareApproval(org, run, approval)}>
+              Share for approval
+            </Button>
+          </Row>
         </Stack>
       </Callout>
       {outcome ? <OutcomeCallout outcome={outcome} /> : null}
