@@ -1,11 +1,14 @@
 import { assert, test } from 'orca/testing'
 import type { ChangedFile, ReviewThread } from '../../../shared/reviews'
 import { NOW } from '../fixtures'
+import { utf8Length } from '../../label'
 import {
   anchorTitle,
+  FILE_ROWS_BYTES,
   FILE_THREADS_BYTES,
   fileRows,
   fitThreads,
+  matchingFiles,
   MAX_COMMENTS_SHOWN,
   MAX_FILE_ROWS,
   MAX_THREAD_CARDS,
@@ -101,6 +104,44 @@ test('fileRows filters by path text, case-insensitively, and caps the rows', () 
     fileRows(many, 'file-149').map(file => file.path),
     ['/gen/file-149.ts', ...Array.from({ length: 10 }, (_, index) => `/gen/file-149${index}.ts`)]
   )
+})
+
+const pathsOf = (count: number, size: number): ChangedFile[] =>
+  Array.from({ length: count }, (_, index) => ({ path: `/${'d'.repeat(size)}/${String(index).padStart(4, '0')}.ts`, originalPath: null, kind: 'edited' }))
+
+const rowBytes = (files: readonly ChangedFile[]) => files.reduce((total, file) => total + 2 * utf8Length(file.path), 0)
+
+test('fileRows stops before the rows pass the byte budget and keeps the order', () => {
+  const files = pathsOf(1_000, 250)
+  const rows = fileRows(files, '')
+  assert.ok(rows.length > 100 && rows.length < MAX_FILE_ROWS, `${rows.length} rows`)
+  assert.deepEqual(rows, files.slice(0, rows.length))
+  assert.ok(rowBytes(rows) < FILE_ROWS_BYTES)
+  assert.ok(rowBytes(files.slice(0, rows.length + 1)) > FILE_ROWS_BYTES - 64 * (rows.length + 1), 'it stops only when the next row no longer fits')
+  assert.deepEqual(
+    fileRows(files, '0999').map(file => file.path),
+    [files[999].path],
+    'the filter reaches the rows the budget left out'
+  )
+  assert.equal(fileRows(pathsOf(1_000, 40), '').length, MAX_FILE_ROWS, 'ordinary paths are only capped by count')
+})
+
+test('fileRows counts the bytes of wide characters and cuts a path past the label limit', () => {
+  const wide: ChangedFile[] = Array.from({ length: 1_000 }, (_, index) => ({ path: `/${'界'.repeat(60)}/${index}.ts`, originalPath: null, kind: 'edited' }))
+  assert.ok(fileRows(wide, '').length < 600, 'a character is up to four bytes, not one')
+  const huge = pathsOf(400, 5_000)
+  const rows = fileRows(huge, '')
+  assert.ok(rows.length > 50 && rows.length < 400, `${rows.length} rows`)
+})
+
+test('matchingFiles returns every match, uncapped', () => {
+  const many = pathsOf(1_500, 250)
+  assert.equal(matchingFiles(many, '').length, 1_500)
+  assert.deepEqual(
+    matchingFiles(many, ' 0149 ').map(file => file.path),
+    [many[149].path]
+  )
+  assert.deepEqual(matchingFiles(many, 'nothing'), [])
 })
 
 test('anchorTitle names general, file, line and old-line threads', () => {

@@ -1,11 +1,14 @@
 import type { ChangedFile, ReviewThread, ThreadAnchor } from '../../../shared/reviews'
-import { utf8Length } from '../../label'
+import { cutLabel, utf8Length } from '../../label'
 
 export const MAX_THREAD_CARDS = 30
 export const MAX_COMMENTS_SHOWN = 10
 export const THREADS_BYTES = 300 * 1024
 export const FILE_THREADS_BYTES = 100 * 1024
 export const MAX_FILE_ROWS = 1000
+export const FILE_ROWS_BYTES = 192 * 1024
+
+const FILE_ROW_OVERHEAD_BYTES = 64
 
 const WHOLE_NUMBER = /^\d+$/
 
@@ -36,10 +39,22 @@ function contentBytes(thread: ReviewThread): number {
   )
 }
 
-export function fileRows(files: readonly ChangedFile[], filter: string): ChangedFile[] {
+export function matchingFiles(files: readonly ChangedFile[], filter: string): ChangedFile[] {
   const needle = filter.trim().toLowerCase()
-  const matching = needle === '' ? files : files.filter(file => file.path.toLowerCase().includes(needle))
-  return matching.slice(0, MAX_FILE_ROWS)
+  return needle === '' ? [...files] : files.filter(file => file.path.toLowerCase().includes(needle))
+}
+
+const rowBytes = (file: ChangedFile): number => 2 * utf8Length(cutLabel(file.path)) + FILE_ROW_OVERHEAD_BYTES
+
+export function fileRows(files: readonly ChangedFile[], filter: string): ChangedFile[] {
+  const rows: ChangedFile[] = []
+  let used = 0
+  for (const file of matchingFiles(files, filter)) {
+    used += rowBytes(file)
+    if (rows.length === MAX_FILE_ROWS || used > FILE_ROWS_BYTES) break
+    rows.push(file)
+  }
+  return rows
 }
 
 export function anchorTitle(anchor: ThreadAnchor | null): string {

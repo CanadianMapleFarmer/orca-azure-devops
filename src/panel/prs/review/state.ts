@@ -192,19 +192,28 @@ export function cancelCheckout(): Promise<void> {
   })
 }
 
-export async function selectFile(path: string): Promise<void> {
+async function loadDiff(path: string, keepShown: boolean): Promise<void> {
   const key = keyOf(read(openReview))
   if (key === null) return
   diffs += 1
   const mine = diffs
   set(selectedFile, path)
-  set(fileDiff, { path, status: 'loading' })
+  if (!keepShown) set(fileDiff, { path, status: 'loading' })
   try {
     const diff = await plugin.request('reviews.diff', { ...key, path }, LONG_WAIT)
     if (mine === diffs) set(fileDiff, { path, status: 'ready', diff })
   } catch (error) {
     if (mine === diffs) set(fileDiff, { path, status: 'failed', message: messageOf(error) })
   }
+}
+
+export function selectFile(path: string): Promise<void> {
+  return loadDiff(path, false)
+}
+
+export async function refreshReview(): Promise<void> {
+  const path = read(selectedFile)
+  await Promise.all([reloadReview(), path === null ? undefined : loadDiff(path, true)])
 }
 
 export function comment({ text, path, lineText = '' }: { text: string; path?: string; lineText?: string }): Promise<void> {

@@ -37,6 +37,7 @@ import {
   loadedReview,
   loadReviewWhenIdle,
   openReview,
+  refreshReview,
   reloadReview,
   reviewLoad,
   reviewSection,
@@ -66,7 +67,7 @@ function Header({ review }: { review: PrReview }): OrcaNode {
     <Stack gap="xs">
       <Row justify="between" align="center" gap="sm">
         <IconButton icon="close" label="Back" variant="ghost" size="sm" onPress={() => closeReview()} />
-        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={reload.status === 'loading'} onPress={() => reloadReview()} />
+        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={reload.status === 'loading'} onPress={() => refreshReview()} />
       </Row>
       <Heading level={3}>{pr.title}</Heading>
       <Text muted size="sm">

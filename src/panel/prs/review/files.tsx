@@ -2,9 +2,9 @@ import { Button, CodeView, Input, read, Row, set, Skeleton, Stack, Table, Text, 
 import { MAX_REVIEW_COMMENT, type ChangedFile, type PrReview } from '../../../shared/reviews'
 import { cutLabel } from '../../label'
 import { LoadFailure } from '../../snapshot-parts'
-import { FILE_THREADS_BYTES, fileRows, fitThreads } from './fit'
+import { FILE_THREADS_BYTES, fileRows, fitThreads, matchingFiles } from './fit'
 import { comment, draftOf, fileDiff, fileFilter, isRunning, selectedFile, selectFile, setDraft } from './state'
-import { ResultCallout, ThreadCard } from './threads'
+import { ResultCallout, ThreadCard, ThreadsLeftOut } from './threads'
 
 const COLUMNS: readonly TableColumn[] = [
   { key: 'change', label: 'Change', width: 'sm' },
@@ -55,6 +55,7 @@ function SelectedFile({ review, file }: { review: PrReview; file: ChangedFile })
           {`Showing ${shown.length} of ${threads.length} comment threads on this file. Open the pull request in Azure DevOps for the rest.`}
         </Text>
       ) : null}
+      <ThreadsLeftOut shown={review.threads.length} total={review.threadCount} />
       <Text size="sm" muted>
         {file.kind === 'deleted' ? OLD_SIDE_HINT : NEW_SIDE_HINT}
       </Text>
@@ -74,6 +75,7 @@ export function FilesSection({ review }: { review: PrReview }): OrcaNode {
   const filter = read(fileFilter)
   const keys = rowKeys(review.files)
   const rows = fileRows(review.files, filter)
+  const matching = matchingFiles(review.files, filter).length
   const selectedPath = read(selectedFile)
   const selected = review.files.find(file => file.path === selectedPath) ?? null
   const selectedKey = selected !== null && rows.includes(selected) ? keys.get(selected.path) : undefined
@@ -93,6 +95,11 @@ export function FilesSection({ review }: { review: PrReview }): OrcaNode {
           if (file && file.path !== read(selectedFile)) void selectFile(file.path)
         }}
       />
+      {rows.length < matching ? (
+        <Text size="sm" muted>
+          {`Showing ${rows.length} of ${matching} files. Filter to narrow the list.`}
+        </Text>
+      ) : null}
       {selected !== null ? <SelectedFile review={review} file={selected} /> : null}
     </Stack>
   )

@@ -15,7 +15,7 @@ import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } 
 import { NOW, prOf, reviewerOf, snapshotOf } from '../fixtures'
 import { diffOf, OPEN_REVIEW, REDIRECT_DIFF, REVIEW_KEY, REVIEW_THREADS, REVIEW_TITLE, reviewOf, threadOf } from './fixtures'
 import { ReviewView } from './review-view'
-import { closeReview, reloadReview, showReview } from './state'
+import { closeReview, refreshReview, reloadReview, showReview } from './state'
 
 let panel: TestPanel
 
@@ -781,6 +781,85 @@ test('a quick second selection drops the first answer', async () => {
   )
 })
 
+test('the Files section says when the worker left comment threads out', async () => {
+  await openFiles({ 'reviews.open': input => reviewOf({ key: input, threadCount: 150 }) })
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.deepEqual(cardIds(), [102])
+  const note = panel.find({ type: 'Text', text: /^Showing/ })
+  assert.equal(note?.text, 'Showing 3 of 150 comment threads. Open the pull request in Azure DevOps for the rest.')
+  assert.equal(note?.props.muted, true)
+})
+
+test('Refresh reloads the open diff and keeps the old one on screen until the new one lands', async () => {
+  const next = held<FileDiff>()
+  let reads = 0
+  const host = await openFiles({
+    'reviews.diff': input => {
+      reads += 1
+      return reads === 2 ? next.promise : diffOf(input.path, { text: reads === 1 ? REDIRECT_DIFF : '+   1 │ after the push' })
+    }
+  })
+  await panel.press({ type: 'IconButton', label: 'Refresh' })
+  assert.deepEqual(requestsTo(host, 'reviews.diff'), [], 'no file is open yet')
+
+  await panel.selectRows(FILES, [REDIRECT])
+  const refreshing = panel.press({ type: 'IconButton', label: 'Refresh' })
+  await pause(10)
+  assert.deepEqual(inputsTo(host, 'reviews.diff'), [{ ...REVIEW_KEY, path: REDIRECT }, { ...REVIEW_KEY, path: REDIRECT }])
+  assert.equal(requestsTo(host, 'reviews.open').length, 3)
+  assert.equal(panel.find({ type: 'Skeleton' }), null)
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, REDIRECT_DIFF, 'the old diff stays until the new one lands')
+  next.release(diffOf(REDIRECT, { text: '+   1 │ the pushed change' }))
+  await refreshing
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, '+   1 │ the pushed change')
+
+  await panel.press({ type: 'IconButton', label: 'Refresh' })
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, '+   1 │ after the push')
+  assert.equal(requestsTo(host, 'reviews.diff').length, 3)
+})
+
+test('a refreshed diff that fails shows the failure instead of the old diff', async () => {
+  let reads = 0
+  await openFiles({
+    'reviews.diff': input => {
+      reads += 1
+      if (reads === 2) throw hostError('action_failed', 'Azure DevOps is unreachable.')
+      return diffOf(input.path)
+    }
+  })
+  await panel.selectRows(FILES, [REDIRECT])
+  await panel.press({ type: 'IconButton', label: 'Refresh' })
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  assert.deepEqual(callouts(), [['danger', 'Azure DevOps is unreachable.']])
+  await panel.press({ type: 'Button', text: 'Try again' })
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, REDIRECT_DIFF)
+  assert.deepEqual(callouts(), [])
+})
+
+test('a refresh answer for a file that is no longer open is dropped', async () => {
+  const slow = held<FileDiff>()
+  let reads = 0
+  await openFiles({
+    'reviews.diff': input => {
+      reads += 1
+      if (reads === 2) return slow.promise
+      return diffOf(input.path, { text: input.path === REDIRECT ? REDIRECT_DIFF : '+   1 │ the test file' })
+    }
+  })
+  await panel.selectRows(FILES, [REDIRECT])
+  const refreshing = refreshReview()
+  await pause(10)
+  const switching = panel.selectRows(FILES, [REDIRECT_TEST])
+  await pause(10)
+  slow.release(diffOf(REDIRECT, { text: '+   1 │ stale for this file' }))
+  await Promise.all([refreshing, switching])
+  await panel.rerender()
+  assert.deepEqual(
+    panel.findAll({ type: 'CodeView' }).map(view => [view.props.label, view.props.code]),
+    [[`Diff of ${REDIRECT_TEST}`, '+   1 │ the test file']]
+  )
+})
+
 test('a file comment sends the path and line; a bad line is refused in the panel', async () => {
   const host = await openFiles({ 'reviews.comment': input => ({ ok: true, message: `Commented on ${input.path}.` }) })
   await panel.selectRows(FILES, [REDIRECT])
@@ -1051,41 +1130,55 @@ test('closing the review forgets the selected file and the drafts', async () => 
   assert.equal(panel.valueOf(FILE_BOX), '')
 })
 
-test('the largest review stays under 4,000 nodes and 450 KiB in every section', async () => {
-  const files: ChangedFile[] = Array.from({ length: 1_000 }, (_, index) => ({
-    path: `/src/generated/module-${index}/component-${index}.generated.ts`,
-    originalPath: null,
-    kind: 'edited'
-  }))
-  const target = files[0].path
-  const threads = Array.from({ length: 100 }, (_, index) =>
+const DIFF_ROW = '+ 1234 │ export const value = "a generated line that fills the diff to its byte limit"\n'
+const LARGE_DIFF = DIFF_ROW.repeat(Math.floor((60 * 1024) / DIFF_ROW.length))
+
+const heavyThreads = (target: string) =>
+  Array.from({ length: 100 }, (_, index) =>
     threadOf(index + 1, { anchor: { path: target, line: index + 1, side: 'new' }, comments: commentsOf(20, () => 'w'.repeat(8_000)) })
   )
-  const row = '+ 1234 │ export const value = "a generated line that fills the diff to its byte limit"\n'
-  const diff = row.repeat(Math.floor((60 * 1024) / row.length))
-  await open({
-    'reviews.open': input => reviewOf({ key: input, files, threads, threadCount: 100 }),
-    'reviews.diff': input => diffOf(input.path, { text: diff })
+
+const generatedFiles = (count: number, directory: string): ChangedFile[] =>
+  Array.from({ length: count }, (_, index) => ({ path: `${directory}/file-${String(index).padStart(4, '0')}.generated.ts`, originalPath: null, kind: 'edited' }))
+
+function openLargest(files: ChangedFile[]) {
+  return open({
+    'reviews.open': input => reviewOf({ key: input, files, threads: heavyThreads(files[0].path), threadCount: 100 }),
+    'reviews.diff': input => diffOf(input.path, { text: LARGE_DIFF })
   })
-  const measure = (section: string) => {
-    const nodes = countNodes(panel.tree())
-    const bytes = treeBytes()
-    assert.ok(nodes < 4_000, `${section}: ${nodes} nodes`)
-    assert.ok(bytes < 450 * 1024, `${section}: ${bytes} bytes`)
-  }
-  measure('overview')
+}
+
+function measureTree(section: string) {
+  const nodes = countNodes(panel.tree())
+  const bytes = treeBytes()
+  assert.ok(nodes < 4_000, `${section}: ${nodes} nodes`)
+  assert.ok(bytes < 450 * 1024, `${section}: ${bytes} bytes`)
+}
+
+const FILES_NOTE = { type: 'Text', text: /^Showing \d+ of \d+ files\./ }
+
+test('the largest review stays under 4,000 nodes and 450 KiB in every section', async () => {
+  const files = Array.from({ length: 1_000 }, (_, index) => ({
+    path: `/src/generated/module-${index}/component-${index}.generated.ts`,
+    originalPath: null,
+    kind: 'edited' as const
+  }))
+  const target = files[0].path
+  await openLargest(files)
+  measureTree('overview')
 
   await showSection('files')
   await panel.selectRows(FILES, [target])
   assert.equal(panel.rowsOf(FILES).length, 1_000)
-  assert.equal(panel.find({ type: 'CodeView' })?.props.code, diff)
+  assert.equal(panel.find(FILES_NOTE), null)
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, LARGE_DIFF)
   assert.deepEqual(cardIds(), [1])
   assert.equal(inside(cardOf(1), { type: 'Markdown' }).length, 10)
   assert.equal(
     panel.find({ type: 'Text', text: /^Showing/ })?.text,
     'Showing 1 of 100 comment threads on this file. Open the pull request in Azure DevOps for the rest.'
   )
-  measure('files')
+  measureTree('files')
 
   await showSection('comments')
   assert.deepEqual(cardIds(), [1, 2, 3])
@@ -1093,7 +1186,42 @@ test('the largest review stays under 4,000 nodes and 450 KiB in every section', 
     panel.find({ type: 'Text', text: /^Showing/ })?.text,
     'Showing 3 of 100 comment threads. Open the pull request in Azure DevOps for the rest.'
   )
-  measure('comments')
+  measureTree('comments')
+})
+
+test('1,000 long paths cap the Files rows by bytes, say so, and the filter reaches the rest', async () => {
+  const files = generatedFiles(1_000, `/src/${'nested-module/'.repeat(17)}`.slice(0, -1))
+  const host = await openLargest(files)
+  await showSection('files')
+  await panel.selectRows(FILES, [files[0].path])
+  const shown = panel.rowsOf(FILES).length
+  assert.ok(shown > 100 && shown < 1_000, `${shown} rows`)
+  assert.deepEqual(panel.rowsOf(FILES), files.slice(0, shown).map(file => file.path))
+  const note = panel.find(FILES_NOTE)
+  assert.equal(note?.text, `Showing ${shown} of 1000 files. Filter to narrow the list.`)
+  assert.equal(note?.props.muted, true)
+  assert.ok(panel.find({ type: 'CodeView' }))
+  assert.deepEqual(cardIds(), [1])
+  measureTree('files')
+
+  const last = files[999].path
+  await panel.type({ type: 'Input', label: 'Filter files' }, 'file-0999')
+  assert.deepEqual(panel.rowsOf(FILES), [last])
+  assert.equal(panel.find(FILES_NOTE), null)
+  await panel.selectRows(FILES, [last])
+  assert.deepEqual(inputsTo(host, 'reviews.diff').at(-1), { ...REVIEW_KEY, path: last })
+  measureTree('filtered files')
+})
+
+test('more files than the row limit say how many are shown', async () => {
+  const files = generatedFiles(1_500, '/src/generated')
+  await open({ 'reviews.open': input => reviewOf({ key: input, files }) })
+  await showSection('files')
+  assert.equal(panel.rowsOf(FILES).length, 1_000)
+  assert.equal(panel.find(FILES_NOTE)?.text, 'Showing 1000 of 1500 files. Filter to narrow the list.')
+  await panel.type({ type: 'Input', label: 'Filter files' }, 'file-149')
+  assert.equal(panel.rowsOf(FILES).length, 10)
+  assert.equal(panel.find(FILES_NOTE), null)
 })
 
 test('thirty threads of ten short comments stay under 4,000 nodes in Files and Comments', async () => {

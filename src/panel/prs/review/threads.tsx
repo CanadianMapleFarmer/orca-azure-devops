@@ -49,6 +49,15 @@ export function ThreadCard({ thread }: { thread: ReviewThread }): OrcaNode {
   )
 }
 
+export function ThreadsLeftOut({ shown, total }: { shown: number; total: number }): OrcaNode {
+  if (shown >= total) return null
+  return (
+    <Text size="sm" muted>
+      {`Showing ${shown} of ${total} comment threads. Open the pull request in Azure DevOps for the rest.`}
+    </Text>
+  )
+}
+
 export function CommentsSection({ review }: { review: PrReview }): OrcaNode {
   const { shown } = fitThreads(review.threads)
   if (shown.length === 0 && review.threadCount === 0) {
@@ -59,11 +68,7 @@ export function CommentsSection({ review }: { review: PrReview }): OrcaNode {
       {shown.map(thread => (
         <ThreadCard key={thread.id} thread={thread} />
       ))}
-      {shown.length < review.threadCount ? (
-        <Text size="sm" muted>
-          {`Showing ${shown.length} of ${review.threadCount} comment threads. Open the pull request in Azure DevOps for the rest.`}
-        </Text>
-      ) : null}
+      <ThreadsLeftOut shown={shown.length} total={review.threadCount} />
     </Stack>
   )
 }
