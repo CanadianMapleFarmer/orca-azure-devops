@@ -214,7 +214,7 @@ Each card shows the pipeline, the run number, the branch, `PR N` when a pull req
 - **Open in Azure DevOps** opens the run on the website.
 - **Watch** (the bell) is described next.
 
-The stage bar has one segment per stage, coloured by its state, and a line below it with the stage names: `Build ✓ · Image ✓ · Deploy production ⏸`. The marks are ✓ succeeded, ✗ failed, ● running, ⏸ waiting for approval, ! succeeded with issues, ⊘ canceled, – skipped and ○ not started. Up to 12 stages show, then `+N more`.
+The stage bar has one segment per stage, coloured by its state, and a line below it with the stage names: `Build ✓ · Image ✓ · Deploy production ⏸`. The marks are ✓ succeeded, ✗ failed, ● running, ⏸ waiting for approval, ! succeeded with issues, ⊘ canceled, – skipped and ○ not started. Up to 12 stages show.
 
 The stages come from each run's timeline. A load reads them for up to 8 runs in progress and up to 8 finished runs it hasn't read yet, and keeps what it read, so a long list fills in over the next loads. Until then a run has no bar.
 

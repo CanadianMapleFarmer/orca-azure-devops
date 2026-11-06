@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises'
 import { assert, test } from 'orca/testing'
 import manifest from '../orca-plugin.json' with { type: 'json' }
+import { MAX_STAGE_CHIPS } from '../src/shared/pipelines'
 import { APPROVAL_TEMPLATE, APPROVAL_VARS } from '../src/shared/share/approval-items'
 
 const STATUS_BAR = 'ADO · N failed · N approvals · N to review'
@@ -57,4 +58,10 @@ test('the pending live checks name the Pipelines, run tab and notification check
   for (const topic of [/multi-stage/i, /Docker/, /Helm/, /rerun/i, /two-approver/i, /Teams chat/, /email/i, /notification/i, /X-RateLimit/, /360 px/]) {
     assert.match(pending, topic)
   }
+})
+
+test('the stage bar is documented with the cap the posted runs keep, and no overflow count', async () => {
+  const text = await readme()
+  assert.ok(text.includes(`Up to ${MAX_STAGE_CHIPS} stages show.`), 'the stage cap is stated')
+  assert.ok(!text.includes('`+N more`'), 'the trimmed chips leave nothing for a +N more count')
 })
