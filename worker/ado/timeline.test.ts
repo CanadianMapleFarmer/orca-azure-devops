@@ -606,6 +606,32 @@ test('mergeTimeline starts from the first answer and from nothing', () => {
   assert.deepEqual(mergeTimeline(null, null), { changeId: 0, records: [] })
 })
 
+test('mergeTimeline refuses a delta that closes a parent loop with the held records, and leaves the held timeline alone', () => {
+  const held: RawTimeline = {
+    changeId: 10,
+    records: [
+      { id: 's', type: 'Stage', name: 'Build' },
+      { id: 'j', type: 'Job', name: 'Build', parentId: 's' },
+      { id: 't', type: 'Task', name: 'Compile', parentId: 'j' }
+    ]
+  }
+  const before = structuredClone(held)
+  const loops: RawTimeline[] = [
+    { changeId: 11, records: [{ id: 's', type: 'Stage', name: 'Build', parentId: 't' }] },
+    { changeId: 11, records: [{ id: 'j', type: 'Job', name: 'Build', parentId: 't' }] },
+    { changeId: 11, records: [{ id: 'x', type: 'Task', name: 'Extra', parentId: 'y' }, { id: 'y', type: 'Task', name: 'Other', parentId: 'x' }] }
+  ]
+  for (const delta of loops) {
+    assert.throws(
+      () => mergeTimeline(held, delta),
+      (error: unknown) => error instanceof AdoError && isFixedError(error)
+    )
+  }
+  assert.deepEqual(held, before)
+  const moved = mergeTimeline(held, { changeId: 11, records: [{ id: 't', type: 'Task', name: 'Compile', parentId: 's' }] })
+  assert.deepEqual(moved.records.find(record => record.id === 't')?.parentId, 's', 'a reparent without a loop still merges')
+})
+
 test('getTimeline sends changeId only when held and maps 204 to null', async () => {
   const { ado, http } = setup()
   ado.on(isTimeline, () => json(200, fixture('timeline-4520')))

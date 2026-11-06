@@ -232,6 +232,23 @@ test('the second read sends the held changeId and merges the delta', async () =>
   assert.deepEqual(changeIds(h.ado.calls), [null, '41', '44'])
 })
 
+test('a delta that closes a parent loop with the held timeline leaves the view stale with the timeline message', async () => {
+  const h = harness()
+  h.show(4520)
+  await h.clock.tick(0)
+  const good = await h.view(4520)
+  const held = fixture<RawTimeline>('timeline-4520')
+  const stage = held.records.find(record => record.type === 'Stage') ?? assert.fail('no stage')
+  const job = held.records.find(record => record.type === 'Job' && record.parentId !== stage.id && held.records.some(phase => phase.id === record.parentId && phase.parentId === stage.id)) ?? assert.fail('no job under the stage')
+  h.ado.on(call => isTimeline(call) && call.query.get('changeId') === '41', () => json(200, { changeId: 44, records: [{ ...stage, parentId: job.id }] }))
+
+  await h.clock.tick(5_000)
+  const stale = await h.view(4520)
+  assert.deepEqual({ ...stale, updatedAt: good.updatedAt }, { ...good, stale: true, message: 'Azure DevOps returned an unexpected run timeline.' })
+  await h.clock.tick(5_000)
+  assert.deepEqual(changeIds(h.ado.calls), [null, '41', '41'], 'the looping delta is never held')
+})
+
 test('a finished run polls the build every minute', async () => {
   const h = harness()
   h.show(4512)

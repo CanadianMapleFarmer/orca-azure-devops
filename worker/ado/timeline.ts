@@ -85,7 +85,9 @@ export function mergeTimeline(previous: RawTimeline | null, next: RawTimeline | 
   const merged = new Map<string, RawRecord>()
   for (const record of previous?.records ?? []) merged.set(record.id, record)
   for (const record of next.records) merged.set(record.id, record)
-  return { changeId: next.changeId, records: [...merged.values()].sort(compareRecords) }
+  const records = [...merged.values()]
+  shaped(() => expectNoParentLoop(records), MALFORMED.timeline)
+  return { changeId: next.changeId, records: records.sort(compareRecords) }
 }
 
 export function stepStateOf(record: RawRecord, descendants: readonly RawRecord[] = []): StepState {
