@@ -1,6 +1,8 @@
 import { connect } from 'node:net'
 import { mock } from 'node:test'
 import { mountWorker, type MountWorkerOptions, type TestWorker, type WorkerModule } from 'orca/testing'
+import type { Timeout } from './auth/entra'
+import type { Listen, Redirect } from './auth/loopback'
 import type { SecretsPort } from './auth/pat'
 import type { StorePort } from './connections'
 
@@ -131,6 +133,41 @@ export function memorySecrets(initial: Record<string, string> = {}): { data: Map
     }
   }
   return { data, reads, secrets }
+}
+
+export function fakeListen(redirectUri: string, bindError?: Error) {
+  const calls: { state: string; signal: AbortSignal }[] = []
+  const pending: { resolve: (redirect: Redirect) => void; reject: (reason: unknown) => void }[] = []
+  const listen: Listen = async ({ state, signal }) => {
+    calls.push({ state, signal })
+    if (bindError) throw bindError
+    const result = new Promise<Redirect>((resolve, reject) => {
+      pending.push({ resolve, reject })
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+    return { redirectUri, result }
+  }
+  return {
+    listen,
+    calls,
+    deliver: (redirect: Redirect) => pending.at(-1)?.resolve(redirect),
+    fail: (reason: unknown) => pending.at(-1)?.reject(reason)
+  }
+}
+
+export function fakeTimeouts() {
+  const armed: { ms: number; controller: AbortController }[] = []
+  const timeout: Timeout = ms => {
+    const controller = new AbortController()
+    armed.push({ ms, controller })
+    return controller.signal
+  }
+  const fire = (ms: number) => {
+    for (const entry of armed) {
+      if (entry.ms === ms) entry.controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    }
+  }
+  return { timeout, armed, fire }
 }
 
 export async function withWorker(module: WorkerModule, options: MountWorkerOptions, run: (w: TestWorker) => Promise<void>): Promise<void> {

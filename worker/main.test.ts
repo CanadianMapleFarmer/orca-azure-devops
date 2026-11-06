@@ -351,7 +351,8 @@ test('deactivate during a Microsoft sign-in closes its port and the next start s
       assert.deepEqual(host.data().storage['signing-in'], ['contoso'])
     })
 
-    const next = mockHost({ ...MICROSOFT_HOST, storage: host.data().storage as Record<string, JsonValue> })
+    const leftover = JSON.stringify({ v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: 'rt-ada-1' })
+    const next = mockHost({ ...MICROSOFT_HOST, storage: host.data().storage as Record<string, JsonValue>, secrets: { 'entra:contoso': leftover } })
     await withWorker(worker, { host: next }, async w => {
       const [status] = await w.request('orgs.list', {})
       assert.equal(status.state, 'disconnected')

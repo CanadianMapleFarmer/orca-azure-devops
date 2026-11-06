@@ -4,15 +4,15 @@ import type { ConnectionData } from './ado/core'
 import { AdoError, type AdoRequest } from './ado/http'
 import { entraAuthorizeUrl } from './ado/org'
 import type { AzCliProvider } from './auth/azcli'
-import { createPkce, type Timeout } from './auth/entra'
+import { createPkce } from './auth/entra'
 import { createEntraProvider, ENTRA_SIGN_IN_TIMEOUT_MS } from './auth/entra-provider'
 import { accessToken, CLIENT_ID, entraErrorAnswer, fakeEntra, tokenAnswer } from './auth/fake-entra'
-import type { Listen, Redirect } from './auth/loopback'
+import type { Redirect } from './auth/loopback'
 import { basicAuth } from './auth/pat'
 import { createConnections, type Connections, type StorePort } from './connections'
 import { ENTRA } from './messages'
 import { CommandTimeoutError } from './sys/run'
-import { drain, memorySecrets } from './test-support'
+import { drain, fakeListen, fakeTimeouts, memorySecrets } from './test-support'
 
 const HOME = '/home/ada'
 const TENANT = '0f0e0d0c-0b0a-4908-8706-050403020100'
@@ -21,6 +21,7 @@ const OID_ADA = '6f1c2e2a-0ada-4c3e-9a1b-0d4e8c7b6a51'
 const OID_GRACE = '2b7d9f10-9ace-4e21-8d3c-71a0b5e4c9f2'
 const T0 = 1_800_000_000_000
 const HOUR = 3_600_000
+const REDIRECT_URI = 'http://localhost:53682'
 const PROFILE = `${HOME}/.orca-azure-devops/az/contoso`
 const PROJECTS: AdoRequest = { org: 'contoso', path: '/_apis/projects' }
 
@@ -233,41 +234,6 @@ function fakeAz(clock: { now: number }, profiles: string[]): FakeAz {
   return az
 }
 
-function fakeListen(bindError?: Error) {
-  const calls: { state: string; signal: AbortSignal }[] = []
-  const pending: { resolve: (redirect: Redirect) => void; reject: (reason: unknown) => void }[] = []
-  const listen: Listen = async ({ state, signal }) => {
-    calls.push({ state, signal })
-    if (bindError) throw bindError
-    const result = new Promise<Redirect>((resolve, reject) => {
-      pending.push({ resolve, reject })
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-    })
-    return { redirectUri: 'http://localhost:53682', result }
-  }
-  return {
-    listen,
-    calls,
-    deliver: (redirect: Redirect) => pending.at(-1)?.resolve(redirect),
-    fail: (reason: unknown) => pending.at(-1)?.reject(reason)
-  }
-}
-
-function fakeTimeouts() {
-  const armed: { ms: number; controller: AbortController }[] = []
-  const timeout: Timeout = ms => {
-    const controller = new AbortController()
-    armed.push({ ms, controller })
-    return controller.signal
-  }
-  const fire = (ms: number) => {
-    for (const entry of armed) {
-      if (entry.ms === ms) entry.controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
-    }
-  }
-  return { timeout, fire }
-}
-
 function adaTokens(refresh = REFRESH_ADA_1): Response {
   return tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com', refresh })
 }
@@ -303,7 +269,7 @@ function harness(
   const az = fakeAz(clock, seed.profiles ?? pinnedAzOrgs)
   const ado = fakeAdo()
   const entra = fakeEntra()
-  const listener = fakeListen(seed.bindError)
+  const listener = fakeListen(REDIRECT_URI, seed.bindError)
   const timeouts = fakeTimeouts()
   const provider = createEntraProvider({
     secrets,

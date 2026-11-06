@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import { assert, test } from 'orca/testing'
 import { entraAuthorizeUrl, entraTokenUrl } from '../ado/org'
 import { ENTRA, INVALID_ORG_NAME } from '../messages'
-import { connectError, drain, memorySecrets } from '../test-support'
-import { base64Url, ENTRA_REQUEST_TIMEOUT_MS, EntraError, type Timeout } from './entra'
+import { connectError, drain, fakeListen, fakeTimeouts, memorySecrets } from '../test-support'
+import { base64Url, ENTRA_REQUEST_TIMEOUT_MS, EntraError } from './entra'
 import {
   authorityFor,
   createEntraProvider,
@@ -37,45 +37,10 @@ function s256(verifier: string): string {
   return base64Url(createHash('sha256').update(verifier).digest())
 }
 
-function fakeListen(bindError?: Error) {
-  const calls: { state: string; signal: AbortSignal }[] = []
-  const pending: { resolve: (redirect: Redirect) => void; reject: (reason: unknown) => void }[] = []
-  const listen: Listen = async ({ state, signal }) => {
-    calls.push({ state, signal })
-    if (bindError) throw bindError
-    const result = new Promise<Redirect>((resolve, reject) => {
-      pending.push({ resolve, reject })
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
-    })
-    return { redirectUri: REDIRECT_URI, result }
-  }
-  return {
-    listen,
-    calls,
-    deliver: (redirect: Redirect) => pending.at(-1)?.resolve(redirect),
-    fail: (reason: unknown) => pending.at(-1)?.reject(reason)
-  }
-}
-
-function fakeTimeouts() {
-  const armed: { ms: number; controller: AbortController }[] = []
-  const timeout: Timeout = ms => {
-    const controller = new AbortController()
-    armed.push({ ms, controller })
-    return controller.signal
-  }
-  const fire = (ms: number) => {
-    for (const entry of armed) {
-      if (entry.ms === ms) entry.controller.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
-    }
-  }
-  return { timeout, armed, fire }
-}
-
 function setup(seed: { settings?: Record<string, unknown>; secrets?: Record<string, string>; listen?: Listen } = {}) {
   const entra = fakeEntra()
   const vault = memorySecrets(seed.secrets)
-  const listener = fakeListen()
+  const listener = fakeListen(REDIRECT_URI)
   const clock = fakeTimeouts()
   const logs: string[] = []
   const sizes: number[] = []
@@ -341,7 +306,7 @@ test('a redirect that reports an error rejects with its plain message and redeem
 
 test("a listener that can't start or stops with an error says the sign-in couldn't start, and other aborts pass through", async () => {
   const bindError = Object.assign(new Error('listen EADDRINUSE: address already in use 127.0.0.1'), { code: 'EADDRINUSE' })
-  const unbound = setup({ listen: fakeListen(bindError).listen })
+  const unbound = setup({ listen: fakeListen(REDIRECT_URI, bindError).listen })
   assert.equal(textOf(await failure(begin(unbound))), ENTRA.listenFailed)
 
   const broken = setup()
