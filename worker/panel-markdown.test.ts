@@ -130,6 +130,9 @@ test('panelMarkdown makes hostile and ADO-only markup safe to show', () => {
     const out = md(input)
     assert.ok(!LINKED_UNSAFE.test(out), `${JSON.stringify(input)} gave ${JSON.stringify(out)}`)
   }
+  for (const marker of ['- - ', '1. 2. ', '- > - ', '* + ', '> 1. - ', '-\t-\t', '2) \t-   '])
+    assert.equal(md(`[x][r]\n\n${marker}[r]: ${EVIL}`), `[x][r]\n\n${marker}[r]: ${resolve(EVIL)}`, JSON.stringify(marker))
+
   for (const input of ['!![x](p.png)', '!<img src=p.png>', '!<a></a>[x](p.png)']) {
     const out = md(input)
     assert.ok(!out.includes('!['), `${JSON.stringify(input)} gave ${JSON.stringify(out)}`)
@@ -194,7 +197,9 @@ test('panelMarkdown stays fast on adversarial input', () => {
     `${'['.repeat(40_000)}${'](x)'.repeat(40_000)}`,
     `${'![a'.repeat(30_000)}${'](x)'.repeat(30_000)}`,
     '![a](b =1x '.repeat(30_000),
-    `${'[![a](b)'.repeat(30_000)}${'](c)'.repeat(30_000)}`
+    `${'[![a](b)'.repeat(30_000)}${'](c)'.repeat(30_000)}`,
+    '-  '.repeat(5_000),
+    `\n${'-\t'.repeat(5_000)}x`
   ]
   for (const input of inputs) {
     const started = Date.now()

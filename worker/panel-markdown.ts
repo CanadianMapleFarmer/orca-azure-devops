@@ -68,7 +68,7 @@ const HTML_BLOCKS: [RegExp, RegExp | null][] = [
 const ATTRIBUTE_VALUE = /\s([A-Za-z_:][\w.:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g
 const AUTOLINK = /<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>\x00-\x1f\x7f]*)>/y
 const MENTION = /@<([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})>/iy
-const DEFINITION = /[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+[ \t>]*)?\[/y
+const DEFINITION = /[ \t>]*(?:(?:[-+*]|\d{1,9}[.)])[ \t][ \t>]*)*\[/y
 const SPECIAL = /[\\`<@!\[\]\n]/g
 const ESCAPABLE = /^[!-\/:-@\[-`{-~\n]$/
 const HREF_ESCAPE = /\\([!-\/:-@\[-`{-~])|&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi
