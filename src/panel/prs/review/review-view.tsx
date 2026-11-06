@@ -25,24 +25,26 @@ import type { OrgStatus } from '../../../shared/types'
 import { cutLabel } from '../../label'
 import { LoadFailure, SnapshotMessage } from '../../snapshot-parts'
 import { openPr, reviewNotice } from '../state'
+import { FilesSection } from './files'
 import {
   armedMessage,
   cancelCheckout,
   checkout,
   closeReview,
   comment,
-  commentDraft,
+  draftOf,
   isRunning,
   loadedReview,
   loadReviewWhenIdle,
   openReview,
   reloadReview,
-  resultOf,
   reviewLoad,
   reviewSection,
+  setDraft,
   vote,
   type ReviewSection
 } from './state'
+import { CommentsSection, ResultCallout } from './threads'
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
 
@@ -55,12 +57,6 @@ const REJECTED_VOTE = -10
 const isSection = (value: string): value is ReviewSection => value === 'overview' || value === 'files' || value === 'comments'
 
 const voteTone = (vote: number): Tone => (vote >= APPROVING_VOTE ? 'success' : vote > REJECTED_VOTE ? 'warning' : 'danger')
-
-function ResultCallout({ slot }: { slot: string }): OrcaNode {
-  const result = resultOf(slot)
-  if (!result) return null
-  return <Callout tone={!result.ok ? 'danger' : result.warn ? 'warning' : 'success'}>{result.message}</Callout>
-}
 
 function Header({ review }: { review: PrReview }): OrcaNode {
   const { pr } = review
@@ -179,9 +175,9 @@ function Overview({ review }: { review: PrReview }): OrcaNode {
       )}
       <Reviewers review={review} />
       <Stack gap="xs">
-        <Textarea label="Add a comment" rows={3} maxLength={MAX_REVIEW_COMMENT} value={read(commentDraft)} onChange={text => set(commentDraft, text)} />
+        <Textarea label="Add a comment" rows={3} maxLength={MAX_REVIEW_COMMENT} value={draftOf('comment')} onChange={text => setDraft('comment', text)} />
         <Row gap="sm">
-          <Button disabled={isRunning('comment')} onPress={() => comment({ text: read(commentDraft) })}>
+          <Button disabled={isRunning('comment')} onPress={() => comment({ text: draftOf('comment') })}>
             Comment
           </Button>
         </Row>
@@ -204,8 +200,12 @@ function Sections({ review }: { review: PrReview }): OrcaNode {
       <Tab value="overview" label="Overview">
         {shown === 'overview' ? <Overview review={review} /> : null}
       </Tab>
-      <Tab value="files" label={`Files (${review.files.length}${review.moreFiles ? '+' : ''})`} />
-      <Tab value="comments" label={`Comments (${review.threadCount})`} />
+      <Tab value="files" label={`Files (${review.files.length}${review.moreFiles ? '+' : ''})`}>
+        {shown === 'files' ? <FilesSection review={review} /> : null}
+      </Tab>
+      <Tab value="comments" label={`Comments (${review.threadCount})`}>
+        {shown === 'comments' ? <CommentsSection review={review} /> : null}
+      </Tab>
     </Tabs>
   )
 }

@@ -1,24 +1,30 @@
 import { atom, plugin, read, set, update } from 'orca'
-import { messageOf } from '../../../shared/messages'
+import { BAD_LINE, messageOf } from '../../../shared/messages'
 import type { PrSummary } from '../../../shared/prs'
-import type { PrReview, ReviewKey, ReviewResult, VoteChoice } from '../../../shared/reviews'
+import type { FileDiff, PrReview, ReviewKey, ReviewResult, VoteChoice } from '../../../shared/reviews'
 import { LONG_WAIT } from '../../state'
 import { reviewNotice } from '../state'
+import { parseLine } from './fit'
 
 export type ReviewSection = 'overview' | 'files' | 'comments'
 export type OpenReview = ReviewKey & { title: string }
 type Load = { status: 'idle' | 'loading' | 'ready' } | { status: 'failed'; message: string }
+type DiffLoad = { path: string } & ({ status: 'loading' } | { status: 'ready'; diff: FileDiff } | { status: 'failed'; message: string })
 
 export const openReview = atom<OpenReview | null>('openReview', null, { persist: 'workspace' })
 export const reviewSection = atom<ReviewSection>('reviewSection', 'overview', { persist: 'workspace' })
 export const loadedReview = atom<PrReview | null>(null)
 export const reviewLoad = atom<Load>({ status: 'idle' })
-export const commentDraft = atom('')
+export const selectedFile = atom<string | null>(null)
+export const fileDiff = atom<DiffLoad | null>(null)
+export const fileFilter = atom('')
+const drafts = atom<Record<string, string>>({})
 const results = atom<Record<string, ReviewResult>>({})
 const running = atom<string[]>([])
 const armed = atom<{ key: ReviewKey; message: string } | null>(null)
 
 let loads = 0
+let diffs = 0
 
 const keyText = ({ org, projectId, repoId, prId }: ReviewKey): string => JSON.stringify([org, projectId, repoId, prId])
 
@@ -59,6 +65,23 @@ function setResult(key: ReviewKey, slot: string, result: ReviewResult | null): v
   })
 }
 
+export function draftOf(id: string): string {
+  return read(drafts)[id] ?? ''
+}
+
+export function setDraft(id: string, text: string): void {
+  update(drafts, all => {
+    const next = { ...all }
+    if (text === '') delete next[id]
+    else next[id] = text
+    return next
+  })
+}
+
+function clearSent(id: string, sent: string): void {
+  if (draftOf(id) === sent) setDraft(id, '')
+}
+
 async function exclusively(slot: string, work: (key: ReviewKey) => Promise<void>): Promise<void> {
   const key = keyOf(read(openReview))
   if (key === null || isRunning(slot)) return
@@ -95,14 +118,22 @@ export async function reloadReview(): Promise<void> {
   }
 }
 
+function forgetDetails(): void {
+  diffs += 1
+  set(drafts, {})
+  set(results, {})
+  set(selectedFile, null)
+  set(fileDiff, null)
+  set(fileFilter, '')
+}
+
 export function showReview(org: string, pr: PrSummary): void {
   const { projectId, repoId, prId, title } = pr
   set(openReview, { org, projectId, repoId, prId, title })
   set(reviewSection, 'overview')
   set(reviewNotice, null)
-  set(commentDraft, '')
-  set(results, {})
   set(loadedReview, null)
+  forgetDetails()
   void reloadReview()
 }
 
@@ -111,8 +142,7 @@ export function closeReview(): void {
   set(openReview, null)
   set(loadedReview, null)
   set(reviewLoad, { status: 'idle' })
-  set(commentDraft, '')
-  set(results, {})
+  forgetDetails()
 }
 
 export function syncReview(org: string | null): void {
@@ -162,13 +192,58 @@ export function cancelCheckout(): Promise<void> {
   })
 }
 
-export function comment(input: { text: string }): Promise<void> {
-  return exclusively('comment', async key => {
-    setResult(key, 'comment', null)
-    const result = await answered(plugin.request('reviews.comment', { ...key, text: input.text }, LONG_WAIT))
-    setResult(key, 'comment', result)
+export async function selectFile(path: string): Promise<void> {
+  const key = keyOf(read(openReview))
+  if (key === null) return
+  diffs += 1
+  const mine = diffs
+  set(selectedFile, path)
+  set(fileDiff, { path, status: 'loading' })
+  try {
+    const diff = await plugin.request('reviews.diff', { ...key, path }, LONG_WAIT)
+    if (mine === diffs) set(fileDiff, { path, status: 'ready', diff })
+  } catch (error) {
+    if (mine === diffs) set(fileDiff, { path, status: 'failed', message: messageOf(error) })
+  }
+}
+
+export function comment({ text, path, lineText = '' }: { text: string; path?: string; lineText?: string }): Promise<void> {
+  const slot = path === undefined ? 'comment' : `file:${path}`
+  return exclusively(slot, async key => {
+    setResult(key, slot, null)
+    const line = parseLine(lineText)
+    if (line === 'bad') {
+      setResult(key, slot, { ok: false, message: BAD_LINE })
+      return
+    }
+    const input = { ...key, text, ...(path === undefined ? {} : { path }), ...(line === null ? {} : { line }) }
+    const result = await answered(plugin.request('reviews.comment', input, LONG_WAIT))
+    setResult(key, slot, result)
     if (!result.ok || !isOpen(key)) return
-    if (read(commentDraft) === input.text) set(commentDraft, '')
+    clearSent(slot, text)
+    if (path !== undefined) clearSent(`line:${path}`, lineText)
     await reloadReview()
+  })
+}
+
+export function reply(threadId: number, text: string): Promise<void> {
+  const slot = `thread:${threadId}`
+  return exclusively(slot, async key => {
+    setResult(key, slot, null)
+    const result = await answered(plugin.request('reviews.reply', { ...key, threadId, text }, LONG_WAIT))
+    setResult(key, slot, result)
+    if (!result.ok || !isOpen(key)) return
+    clearSent(slot, text)
+    await reloadReview()
+  })
+}
+
+export function markThread(threadId: number, status: 'fixed' | 'active'): Promise<void> {
+  const slot = `thread:${threadId}`
+  return exclusively(slot, async key => {
+    setResult(key, slot, null)
+    const result = await answered(plugin.request('reviews.setStatus', { ...key, threadId, status }, LONG_WAIT))
+    setResult(key, slot, result)
+    if (result.ok && isOpen(key)) await reloadReview()
   })
 }

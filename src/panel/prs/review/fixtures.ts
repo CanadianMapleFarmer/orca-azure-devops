@@ -1,4 +1,4 @@
-import type { PrReview, ReviewKey, ReviewThread } from '../../../shared/reviews'
+import type { FileDiff, PrReview, ReviewKey, ReviewThread } from '../../../shared/reviews'
 import { NOW, prOf, reviewerOf } from '../fixtures'
 
 export const REVIEW_KEY: ReviewKey = { org: 'contoso', projectId: 'proj-web', repoId: 'repo-web', prId: 4110 }
@@ -38,6 +38,31 @@ export const REVIEW_THREADS: ReviewThread[] = [
     hidden: 0
   }
 ]
+
+export const REDIRECT_DIFF = [
+  '@@ -10,4 +10,5 @@',
+  ' 10 10 │ export function safeReturn(target: string): string {',
+  '-11    │   if (target.startsWith("/")) return target',
+  '+   11 │   const url = new URL(decodeURIComponent(target), ORIGIN)',
+  '+   12 │   if (url.origin === ORIGIN) return url.pathname',
+  ' 12 13 │   return "/"',
+  ' 13 14 │ }'
+].join('\n')
+
+export function diffOf(path: string, over: Partial<FileDiff> = {}): FileDiff {
+  return { path, text: REDIRECT_DIFF, lines: { old: 40, new: 41 }, ...over }
+}
+
+export function threadOf(id: number, over: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    id,
+    status: 'active',
+    anchor: null,
+    comments: [{ id: 1, author: 'Dennis Ritchie', at: NOW - HOUR, content: `Thread ${id}.` }],
+    hidden: 0,
+    ...over
+  }
+}
 
 export function reviewOf(over: Partial<PrReview> = {}): PrReview {
   return {

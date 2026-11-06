@@ -1,9 +1,19 @@
-import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
-import { VOTE_BUTTON, VOTE_VALUE, type CheckoutResult, type PrReview, type ReviewResult } from '../../../shared/reviews'
+import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery } from 'orca/testing'
+import { BAD_LINE } from '../../../shared/messages'
+import {
+  VOTE_BUTTON,
+  VOTE_VALUE,
+  type ChangedFile,
+  type CheckoutResult,
+  type FileDiff,
+  type PrReview,
+  type ReviewResult,
+  type ReviewThread
+} from '../../../shared/reviews'
 import type { OrgStatus } from '../../../shared/types'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } from '../../test-support'
 import { NOW, prOf, reviewerOf, snapshotOf } from '../fixtures'
-import { OPEN_REVIEW, REVIEW_KEY, REVIEW_TITLE, reviewOf } from './fixtures'
+import { diffOf, OPEN_REVIEW, REDIRECT_DIFF, REVIEW_KEY, REVIEW_THREADS, REVIEW_TITLE, reviewOf, threadOf } from './fixtures'
 import { ReviewView } from './review-view'
 import { closeReview, reloadReview, showReview } from './state'
 
@@ -586,4 +596,515 @@ test('the largest overview stays within the panel limits', async () => {
   })
   assert.ok(countNodes(panel.tree()) < 1_000, `${countNodes(panel.tree())} nodes`)
   assert.ok(new TextEncoder().encode(JSON.stringify(panel.tree())).length < 450 * 1024)
+})
+
+const FILES = { type: 'Table', label: 'Changed files' }
+const REDIRECT = '/src/auth/redirect.ts'
+const REDIRECT_TEST = '/src/auth/redirect.test.ts'
+const REMOVED = '/src/auth/legacy-return.ts'
+const NEW_HINT = 'Line numbers refer to the new version: the second number on each diff line.'
+const OLD_HINT = 'Line numbers refer to the old version: the first number on each diff line.'
+const LINE = { type: 'Input', label: 'Line (optional)' }
+const FILE_BOX = { type: 'Textarea', label: 'Comment on this file' }
+
+const showSection = (value: 'files' | 'comments') => panel.select({ type: 'Tabs', label: 'Pull request' }, value)
+
+const inside = (scope: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${scope.path}/`))
+
+const threadIdOf = (card: TestElement) => Number(card.path.slice(card.path.lastIndexOf('.') + 1))
+
+function cardOf(id: number): TestElement {
+  const card = panel.findAll({ type: 'Card' }).find(item => threadIdOf(item) === id)
+  assert.ok(card, `thread ${id} is drawn`)
+  return card
+}
+
+function inCard(id: number, query: TestQuery): TestElement {
+  const found = inside(cardOf(id), query)[0]
+  assert.ok(found, `${JSON.stringify(query)} is drawn in thread ${id}`)
+  return found
+}
+
+const cardIds = () => panel.findAll({ type: 'Card' }).map(threadIdOf)
+
+const cardCallouts = (id: number) => inside(cardOf(id), { type: 'Callout' }).map(callout => [callout.props.tone, callout.text])
+
+const tableRows = () => (panel.find(FILES)?.props.rows ?? []) as { key: string; cells: Record<string, unknown> }[]
+
+const treeBytes = () => new TextEncoder().encode(JSON.stringify(panel.tree())).length
+
+const commentsOf = (count: number, content: (index: number) => string) =>
+  Array.from({ length: count }, (_, index) => ({ id: index + 1, author: 'Grace Hopper', at: NOW + index, content: content(index) }))
+
+async function openFiles(requests: MockRequests = {}) {
+  const host = await open({ 'reviews.diff': input => diffOf(input.path), ...requests })
+  await showSection('files')
+  return host
+}
+
+test('Files lists the changes and selecting one shows its diff', async () => {
+  const host = await openFiles()
+  const filter = panel.find({ type: 'Input', label: 'Filter files' })
+  assert.deepEqual([filter?.props.type, filter?.props.labelHidden, filter?.props.placeholder], ['search', true, 'Filter files'])
+  const table = panel.find(FILES)
+  assert.deepEqual([table?.props.selectionMode, table?.props.maxHeight, table?.props.emptyText], ['single', 'md', 'No files match.'])
+  assert.deepEqual(table?.props.columns, [
+    { key: 'change', label: 'Change', width: 'sm' },
+    { key: 'path', label: 'File' }
+  ])
+  assert.deepEqual(panel.rowsOf(FILES), [REDIRECT, REDIRECT_TEST, REMOVED, '/docs/auth.md', '/assets/lock.png'])
+  assert.deepEqual(
+    tableRows().map(row => [row.cells.change, row.cells.path]),
+    [
+      ['edited', REDIRECT],
+      ['added', REDIRECT_TEST],
+      ['deleted', REMOVED],
+      ['renamed', '/docs/auth.md'],
+      ['added', '/assets/lock.png']
+    ]
+  )
+  assert.deepEqual(panel.valueOf(FILES), [])
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  assert.equal(panel.find(FILE_BOX), null)
+  assert.deepEqual(requestsTo(host, 'reviews.diff'), [])
+
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.deepEqual(inputsTo(host, 'reviews.diff'), [{ ...REVIEW_KEY, path: REDIRECT }])
+  assert.equal(requestsTo(host, 'reviews.diff')[0]?.timeoutMs, 90000)
+  assert.deepEqual(panel.valueOf(FILES), [REDIRECT])
+  const title = panel.find({ type: 'Text', text: REDIRECT })
+  assert.deepEqual([title?.props.weight, title?.props.truncate], ['semibold', true])
+  const code = panel.find({ type: 'CodeView' })
+  assert.deepEqual(
+    [code?.props.language, code?.props.label, code?.props.lineNumbers, code?.props.maxHeight, code?.props.code],
+    ['diff', `Diff of ${REDIRECT}`, false, 'lg', REDIRECT_DIFF]
+  )
+  assert.equal(panel.find({ type: 'Text', text: NEW_HINT })?.props.muted, true)
+  assert.equal(panel.find({ type: 'Text', text: OLD_HINT }), null)
+  assert.deepEqual(cardIds(), [102], 'the threads on this file')
+  assert.equal(cardOf(102).label, '/src/auth/redirect.ts, line 12')
+  assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
+  const line = panel.find(LINE)
+  assert.deepEqual([line?.props.placeholder, line?.props.maxLength], ['42', 7])
+  assert.deepEqual([panel.find(FILE_BOX)?.props.rows, panel.find(FILE_BOX)?.props.maxLength], [3, 10_000])
+  assert.equal(button('Comment on file')?.disabled, false)
+
+  await panel.type({ type: 'Input', label: 'Filter files' }, 'TEST')
+  assert.deepEqual(panel.rowsOf(FILES), [REDIRECT_TEST])
+  assert.ok(panel.find({ type: 'CodeView', label: `Diff of ${REDIRECT}` }), 'the selected file stays open while filtered out')
+  await panel.type({ type: 'Input', label: 'Filter files' }, 'nothing', { replace: true })
+  assert.deepEqual(panel.rowsOf(FILES), [])
+  await panel.type({ type: 'Input', label: 'Filter files' }, '', { replace: true })
+
+  await panel.selectRows(FILES, [REMOVED])
+  assert.deepEqual(
+    inputsTo(host, 'reviews.diff').map(input => (input as { path: string }).path),
+    [REDIRECT, REMOVED]
+  )
+  assert.equal(panel.find({ type: 'CodeView' })?.props.label, `Diff of ${REMOVED}`)
+  assert.equal(panel.find({ type: 'Text', text: OLD_HINT })?.props.muted, true)
+  assert.equal(panel.find({ type: 'Text', text: NEW_HINT }), null)
+  assert.deepEqual(cardIds(), [103])
+  assert.equal(cardOf(103).label, REMOVED)
+})
+
+test('the diff shows a skeleton while it loads and a failure with Try again', async () => {
+  const loading = held<FileDiff>()
+  let reads = 0
+  await openFiles({
+    'reviews.diff': input => {
+      reads += 1
+      if (reads === 1) return loading.promise
+      if (reads === 2) throw hostError('action_failed', "That file isn't part of this pull request any more.")
+      return diffOf(input.path)
+    }
+  })
+  const pending = panel.selectRows(FILES, [REDIRECT])
+  await pause(10)
+  const skeleton = panel.find({ type: 'Skeleton' })
+  assert.deepEqual([skeleton?.props.lines, skeleton?.props.label], [6, 'Loading the diff'])
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  assert.ok(panel.find(FILE_BOX), 'the comment box does not wait for the diff')
+  loading.release(diffOf(REDIRECT))
+  await pending
+  assert.equal(panel.find({ type: 'Skeleton' }), null)
+  assert.ok(panel.find({ type: 'CodeView' }))
+
+  await panel.selectRows(FILES, [REDIRECT_TEST])
+  assert.deepEqual(callouts(), [['danger', "That file isn't part of this pull request any more."]])
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  await panel.press({ type: 'Button', text: 'Try again' })
+  assert.deepEqual(callouts(), [])
+  assert.equal(panel.find({ type: 'CodeView' })?.props.label, `Diff of ${REDIRECT_TEST}`)
+})
+
+test('a binary or too-large file shows the message instead of a diff', async () => {
+  const answers: Record<string, FileDiff> = {
+    '/assets/lock.png': diffOf('/assets/lock.png', { text: null, message: "Binary file; it isn't shown here.", lines: { old: null, new: 'unknown' } }),
+    [REDIRECT]: diffOf(REDIRECT, { text: null, message: 'This file is too large to show here. Check out the branch in Orca to see it.' }),
+    '/docs/auth.md': diffOf('/docs/auth.md', { message: 'Renamed from /docs/login.md.' })
+  }
+  await openFiles({ 'reviews.diff': input => answers[input.path] })
+  await panel.selectRows(FILES, ['/assets/lock.png'])
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  assert.equal(panel.find({ type: 'Skeleton' }), null)
+  assert.equal(panel.find({ type: 'Text', text: "Binary file; it isn't shown here." })?.props.muted, true)
+  assert.ok(panel.find({ type: 'Text', text: '/assets/lock.png' }))
+
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.equal(panel.find({ type: 'CodeView' }), null)
+  assert.equal(panel.find({ type: 'Text', text: 'This file is too large to show here. Check out the branch in Orca to see it.' })?.props.muted, true)
+  assert.equal(panel.find({ type: 'Text', text: "Binary file; it isn't shown here." }), null)
+
+  await panel.selectRows(FILES, ['/docs/auth.md'])
+  assert.equal(panel.find({ type: 'Text', text: 'Renamed from /docs/login.md.' })?.props.muted, true)
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, REDIRECT_DIFF)
+})
+
+test('a quick second selection drops the first answer', async () => {
+  const first = held<FileDiff>()
+  const host = await openFiles({ 'reviews.diff': input => (input.path === REDIRECT ? first.promise : diffOf(input.path, { text: '+   1 │ second' })) })
+  const firstPick = panel.selectRows(FILES, [REDIRECT])
+  await pause(10)
+  const secondPick = panel.selectRows(FILES, [REDIRECT_TEST])
+  await pause(10)
+  first.release(diffOf(REDIRECT, { text: '+   1 │ first' }))
+  await Promise.all([firstPick, secondPick])
+  await panel.rerender()
+  assert.equal(requestsTo(host, 'reviews.diff').length, 2)
+  assert.deepEqual(panel.valueOf(FILES), [REDIRECT_TEST])
+  assert.ok(panel.find({ type: 'Text', text: REDIRECT_TEST }))
+  const code = panel.findAll({ type: 'CodeView' })
+  assert.deepEqual(
+    code.map(view => [view.props.label, view.props.code]),
+    [[`Diff of ${REDIRECT_TEST}`, '+   1 │ second']]
+  )
+})
+
+test('a file comment sends the path and line; a bad line is refused in the panel', async () => {
+  const host = await openFiles({ 'reviews.comment': input => ({ ok: true, message: `Commented on ${input.path}.` }) })
+  await panel.selectRows(FILES, [REDIRECT])
+  await panel.type(LINE, '12')
+  await panel.type(FILE_BOX, 'Decode once, here.')
+  await panel.press({ type: 'Button', text: 'Comment on file' })
+  assert.deepEqual(inputsTo(host, 'reviews.comment'), [{ ...REVIEW_KEY, text: 'Decode once, here.', path: REDIRECT, line: 12 }])
+  assert.equal(requestsTo(host, 'reviews.comment')[0]?.timeoutMs, 90000)
+  assert.deepEqual(callouts(), [['success', `Commented on ${REDIRECT}.`]])
+  assert.deepEqual([panel.valueOf(LINE), panel.valueOf(FILE_BOX)], ['', ''])
+  assert.equal(requestsTo(host, 'reviews.open').length, 2, 'the review reloads')
+  assert.equal(panel.find({ type: 'CodeView' })?.props.label, `Diff of ${REDIRECT}`, 'the file stays open after the reload')
+
+  await panel.type(FILE_BOX, 'About the whole file.')
+  await panel.press({ type: 'Button', text: 'Comment on file' })
+  assert.deepEqual(inputsTo(host, 'reviews.comment')[1], { ...REVIEW_KEY, text: 'About the whole file.', path: REDIRECT })
+
+  for (const bad of ['4.5', '0', 'twelve']) {
+    await panel.type(LINE, bad, { replace: true })
+    await panel.type(FILE_BOX, 'Which line?', { replace: true })
+    await panel.press({ type: 'Button', text: 'Comment on file' })
+    assert.equal(requestsTo(host, 'reviews.comment').length, 2, bad)
+    assert.deepEqual(callouts(), [['danger', BAD_LINE]], bad)
+    assert.deepEqual([panel.valueOf(LINE), panel.valueOf(FILE_BOX)], [bad, 'Which line?'])
+  }
+  assert.equal(requestsTo(host, 'reviews.open').length, 3)
+  assert.equal(button('Comment on file')?.disabled, false)
+})
+
+test('a refused file comment keeps the text and stays with its file', async () => {
+  const host = await openFiles({ 'reviews.comment': { ok: false, message: 'Line 99 is past the end of the file, which has 41 lines.' } })
+  await panel.selectRows(FILES, [REDIRECT])
+  await panel.type(LINE, '99')
+  await panel.type(FILE_BOX, 'Past the end.')
+  await panel.press({ type: 'Button', text: 'Comment on file' })
+  assert.deepEqual(callouts(), [['danger', 'Line 99 is past the end of the file, which has 41 lines.']])
+  assert.deepEqual([panel.valueOf(LINE), panel.valueOf(FILE_BOX)], ['99', 'Past the end.'])
+  assert.equal(requestsTo(host, 'reviews.open').length, 1)
+
+  await panel.selectRows(FILES, [REDIRECT_TEST])
+  assert.deepEqual(callouts(), [], 'the result belongs to the other file')
+  assert.deepEqual([panel.valueOf(LINE), panel.valueOf(FILE_BOX)], ['', ''])
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.deepEqual(callouts(), [['danger', 'Line 99 is past the end of the file, which has 41 lines.']])
+  assert.deepEqual([panel.valueOf(LINE), panel.valueOf(FILE_BOX)], ['99', 'Past the end.'])
+})
+
+test('Comments shows threads unresolved first with status, and Reply sends reviews.reply', async () => {
+  const host = await open({ 'reviews.reply': { ok: true, message: 'Reply posted.' } })
+  await showSection('comments')
+  assert.deepEqual(cardIds(), [101, 103, 102])
+  assert.deepEqual(
+    panel.findAll({ type: 'Card' }).map(card => [card.label, card.props.description]),
+    [
+      ['General', 'Active'],
+      [REMOVED, 'Pending'],
+      ['/src/auth/redirect.ts, line 12', 'Resolved']
+    ]
+  )
+  const bylines = inside(cardOf(101), { type: 'Text', text: /^(Grace Hopper|Alex Contoso) · / })
+  assert.deepEqual(
+    bylines.map(line => [line.props.size, line.props.weight]),
+    [['sm', 'medium'], ['sm', 'medium']]
+  )
+  assert.deepEqual(
+    inside(cardOf(101), { type: 'RelativeTime' }).map(time => time.props.at),
+    REVIEW_THREADS[0].comments.map(comment => comment.at)
+  )
+  assert.deepEqual(
+    inside(cardOf(101), { type: 'Markdown' }).map(markdown => markdown.props.content),
+    REVIEW_THREADS[0].comments.map(comment => comment.content)
+  )
+  assert.deepEqual(
+    [101, 103, 102].map(id => inside(cardOf(id), { type: 'Button' }).map(item => [item.text, item.props.size, item.props.variant ?? 'solid'])),
+    [
+      [['Reply', 'sm', 'solid'], ['Resolve', 'sm', 'outline']],
+      [['Reply', 'sm', 'solid'], ['Resolve', 'sm', 'outline']],
+      [['Reply', 'sm', 'solid'], ['Reactivate', 'sm', 'outline']]
+    ]
+  )
+  const box = inCard(101, { type: 'Textarea', label: 'Reply' })
+  assert.deepEqual([box.props.rows, box.props.maxLength], [2, 10_000])
+  assert.equal(panel.find({ type: 'EmptyState' }), null)
+  assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
+
+  await panel.type(box, 'Decoding happens once now.')
+  await panel.press(inCard(101, { type: 'Button', text: 'Reply' }))
+  assert.deepEqual(inputsTo(host, 'reviews.reply'), [{ ...REVIEW_KEY, threadId: 101, text: 'Decoding happens once now.' }])
+  assert.equal(requestsTo(host, 'reviews.reply')[0]?.timeoutMs, 90000)
+  assert.deepEqual(cardCallouts(101), [['success', 'Reply posted.']])
+  assert.deepEqual(cardCallouts(103), [])
+  assert.equal(panel.valueOf(inCard(101, { type: 'Textarea', label: 'Reply' })), '')
+  assert.equal(requestsTo(host, 'reviews.open').length, 2, 'the review reloads')
+})
+
+test('a refused reply keeps the text and does not reload', async () => {
+  const host = await open({ 'reviews.reply': { ok: false, message: 'That comment thread no longer exists.' } })
+  await showSection('comments')
+  await panel.type(inCard(103, { type: 'Textarea', label: 'Reply' }), 'Nothing else called it.')
+  await panel.press(inCard(103, { type: 'Button', text: 'Reply' }))
+  assert.deepEqual(cardCallouts(103), [['danger', 'That comment thread no longer exists.']])
+  assert.equal(panel.valueOf(inCard(103, { type: 'Textarea', label: 'Reply' })), 'Nothing else called it.')
+  assert.equal(panel.valueOf(inCard(101, { type: 'Textarea', label: 'Reply' })), '', 'each thread keeps its own reply')
+  assert.equal(requestsTo(host, 'reviews.open').length, 1)
+})
+
+test('Resolve and Reactivate send reviews.setStatus', async () => {
+  const host = await open({ 'reviews.setStatus': input => ({ ok: true, message: input.status === 'fixed' ? 'Resolved.' : 'Reactivated.' }) })
+  await showSection('comments')
+  await panel.press(inCard(101, { type: 'Button', text: 'Resolve' }))
+  assert.deepEqual(inputsTo(host, 'reviews.setStatus'), [{ ...REVIEW_KEY, threadId: 101, status: 'fixed' }])
+  assert.equal(requestsTo(host, 'reviews.setStatus')[0]?.timeoutMs, 90000)
+  assert.deepEqual(cardCallouts(101), [['success', 'Resolved.']])
+  assert.equal(requestsTo(host, 'reviews.open').length, 2)
+
+  await panel.press(inCard(102, { type: 'Button', text: 'Reactivate' }))
+  assert.deepEqual(inputsTo(host, 'reviews.setStatus')[1], { ...REVIEW_KEY, threadId: 102, status: 'active' })
+  assert.deepEqual(cardCallouts(102), [['success', 'Reactivated.']])
+  assert.equal(requestsTo(host, 'reviews.open').length, 3)
+})
+
+test('a thread action that throws shows the message in its card', async () => {
+  const host = await open({
+    'reviews.setStatus': () => {
+      throw hostError('action_failed', 'Azure DevOps is unreachable.')
+    }
+  })
+  await showSection('comments')
+  await panel.press(inCard(102, { type: 'Button', text: 'Reactivate' }))
+  assert.deepEqual(cardCallouts(102), [['danger', 'Azure DevOps is unreachable.']])
+  assert.equal(requestsTo(host, 'reviews.open').length, 1)
+  assert.equal(inCard(102, { type: 'Button', text: 'Reactivate' }).disabled, false)
+})
+
+test('a result stays with its thread after a reload reorders the threads', async () => {
+  let reads = 0
+  const [general, removed, redirect] = REVIEW_THREADS
+  const reordered: ReviewThread[] = [{ ...redirect, status: 'active' }, removed, { ...general, status: 'fixed' }]
+  await open({
+    'reviews.open': input => {
+      reads += 1
+      return reviewOf({ key: input, threads: reads === 1 ? REVIEW_THREADS : reordered })
+    },
+    'reviews.setStatus': { ok: true, message: 'Resolved.' }
+  })
+  await showSection('comments')
+  await panel.press(inCard(101, { type: 'Button', text: 'Resolve' }))
+  assert.deepEqual(cardIds(), [102, 103, 101])
+  assert.deepEqual(cardCallouts(101), [['success', 'Resolved.']])
+  assert.deepEqual(cardCallouts(102), [])
+  assert.deepEqual(cardCallouts(103), [])
+  assert.ok(inCard(101, { type: 'Button', text: 'Reactivate' }))
+  assert.ok(inCard(102, { type: 'Button', text: 'Resolve' }))
+})
+
+test('a second Reply or Comment on file press before the buttons redraw sends nothing', async () => {
+  const replied = held<ReviewResult>()
+  const commented = held<ReviewResult>()
+  const host = await openFiles({ 'reviews.reply': () => replied.promise, 'reviews.comment': () => commented.promise, 'reviews.setStatus': { ok: true, message: 'Resolved.' } })
+  await panel.selectRows(FILES, [REDIRECT])
+  await panel.type(inCard(102, { type: 'Textarea', label: 'Reply' }), 'Once only.')
+  const reply = inCard(102, { type: 'Button', text: 'Reply' })
+  const reactivate = inCard(102, { type: 'Button', text: 'Reactivate' })
+  const replies = [panel.press(reply), panel.press(reply), panel.press(reactivate)]
+  await pause(10)
+  assert.deepEqual(
+    [inCard(102, { type: 'Button', text: 'Reply' }).disabled, inCard(102, { type: 'Button', text: 'Reactivate' }).disabled, inCard(102, { type: 'Textarea', label: 'Reply' }).disabled],
+    [true, true, true]
+  )
+  replied.release({ ok: true, message: 'Reply posted.' })
+  await Promise.all(replies)
+  assert.equal(requestsTo(host, 'reviews.reply').length, 1)
+  assert.equal(requestsTo(host, 'reviews.setStatus').length, 0)
+
+  await panel.type(FILE_BOX, 'Once only.')
+  const commentOnFile = button('Comment on file')
+  assert.ok(commentOnFile)
+  const comments = [panel.press(commentOnFile), panel.press(commentOnFile)]
+  await pause(10)
+  assert.equal(button('Comment on file')?.disabled, true)
+  commented.release({ ok: true, message: 'Commented.' })
+  await Promise.all(comments)
+  assert.equal(requestsTo(host, 'reviews.comment').length, 1)
+  assert.equal(button('Comment on file')?.disabled, false)
+})
+
+test('the Comments footer counts the threads the worker left out', async () => {
+  const threads = Array.from({ length: 100 }, (_, index) => threadOf(index + 1))
+  await open({ 'reviews.open': input => reviewOf({ key: input, threads, threadCount: 150 }) })
+  assert.deepEqual(sectionLabels(), ['Overview', 'Files (5)', 'Comments (150)'])
+  await showSection('comments')
+  assert.deepEqual(cardIds(), threads.slice(0, 30).map(thread => thread.id))
+  const footer = panel.find({ type: 'Text', text: /^Showing/ })
+  assert.equal(footer?.text, 'Showing 30 of 150 comment threads. Open the pull request in Azure DevOps for the rest.')
+  assert.equal(footer?.props.muted, true)
+})
+
+test('no threads shows an empty state, and dropped replies are counted', async () => {
+  let threads: ReviewThread[] = []
+  await open({ 'reviews.open': input => reviewOf({ key: input, threads, threadCount: threads.length }) })
+  await showSection('comments')
+  const empty = panel.find({ type: 'EmptyState' })
+  assert.deepEqual([empty?.label, empty?.props.description], ['No comments yet', 'Comments on this pull request show up here.'])
+  assert.equal(panel.find({ type: 'Card' }), null)
+
+  threads = [
+    threadOf(1, { comments: commentsOf(12, index => `Note ${index}.`) }),
+    threadOf(2, { hidden: 1 }),
+    threadOf(3, { comments: commentsOf(20, index => `Note ${index}.`), hidden: 3 })
+  ]
+  await panel.press({ type: 'IconButton', label: 'Refresh' })
+  assert.equal(panel.find({ type: 'EmptyState' }), null)
+  assert.deepEqual(
+    [1, 2, 3].map(id => inside(cardOf(id), { type: 'Text', text: /more repl(y is|ies are) in Azure DevOps\.$/ }).map(note => [note.text, note.props.muted])),
+    [
+      [['2 more replies are in Azure DevOps.', true]],
+      [['1 more reply is in Azure DevOps.', true]],
+      [['13 more replies are in Azure DevOps.', true]]
+    ]
+  )
+  assert.equal(inside(cardOf(1), { type: 'Markdown' }).length, 10)
+  assert.deepEqual(
+    inside(cardOf(1), { type: 'Markdown' }).map(markdown => markdown.props.content),
+    ['Note 0.', ...Array.from({ length: 9 }, (_, index) => `Note ${index + 3}.`)]
+  )
+})
+
+test('long paths are cut to the label limit and still select the file', async () => {
+  const long = `/src/${'deep/'.repeat(300)}file.ts`
+  const twin = `/src/${'deep/'.repeat(300)}other.ts`
+  const files: ChangedFile[] = [
+    { path: long, originalPath: null, kind: 'edited' },
+    { path: twin, originalPath: null, kind: 'added' }
+  ]
+  const host = await openFiles({
+    'reviews.open': input =>
+      reviewOf({ key: input, files, threads: [threadOf(9, { anchor: { path: long, line: 3, side: 'old' } })], threadCount: 1 })
+  })
+  const keys = panel.rowsOf(FILES)
+  assert.equal(keys.length, 2)
+  assert.equal(new Set(keys).size, 2)
+  for (const key of keys) assert.ok(new TextEncoder().encode(key).length <= 1024)
+  for (const row of tableRows()) assert.ok(new TextEncoder().encode(String(row.cells.path)).length <= 1024)
+
+  await panel.selectRows(FILES, [keys[0]])
+  assert.deepEqual(inputsTo(host, 'reviews.diff'), [{ ...REVIEW_KEY, path: long }])
+  assert.deepEqual(panel.valueOf(FILES), [keys[0]])
+  assert.ok(new TextEncoder().encode(String(panel.find({ type: 'CodeView' })?.props.label)).length <= 1024)
+  assert.ok(new TextEncoder().encode(cardOf(9).label ?? '').length <= 1024)
+  assert.match(cardOf(9).label ?? '', /^\/src\/deep\/.*…$/)
+  await panel.selectRows(FILES, [keys[1]])
+  assert.deepEqual(inputsTo(host, 'reviews.diff')[1], { ...REVIEW_KEY, path: twin })
+})
+
+test('closing the review forgets the selected file and the drafts', async () => {
+  await openFiles({ 'prs.snapshot': snapshotOf({ toReview: [prOf(4110, { title: REVIEW_TITLE })], toReviewCount: 1 }) })
+  await panel.selectRows(FILES, [REDIRECT])
+  await panel.type(FILE_BOX, 'Draft.')
+  await panel.type({ type: 'Input', label: 'Filter files' }, 'redirect')
+  await panel.press({ type: 'IconButton', label: 'Back' })
+  await panel.toggle({ type: 'Collapsible' })
+  await panel.press({ type: 'ListItem', label: REVIEW_TITLE })
+  await showSection('files')
+  assert.equal(panel.valueOf({ type: 'Input', label: 'Filter files' }), '')
+  assert.deepEqual(panel.valueOf(FILES), [])
+  assert.equal(panel.find(FILE_BOX), null)
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.equal(panel.valueOf(FILE_BOX), '')
+})
+
+test('the largest review stays under 4,000 nodes and 450 KiB in every section', async () => {
+  const files: ChangedFile[] = Array.from({ length: 1_000 }, (_, index) => ({
+    path: `/src/generated/module-${index}/component-${index}.generated.ts`,
+    originalPath: null,
+    kind: 'edited'
+  }))
+  const target = files[0].path
+  const threads = Array.from({ length: 100 }, (_, index) =>
+    threadOf(index + 1, { anchor: { path: target, line: index + 1, side: 'new' }, comments: commentsOf(20, () => 'w'.repeat(8_000)) })
+  )
+  const row = '+ 1234 │ export const value = "a generated line that fills the diff to its byte limit"\n'
+  const diff = row.repeat(Math.floor((60 * 1024) / row.length))
+  await open({
+    'reviews.open': input => reviewOf({ key: input, files, threads, threadCount: 100 }),
+    'reviews.diff': input => diffOf(input.path, { text: diff })
+  })
+  const measure = (section: string) => {
+    const nodes = countNodes(panel.tree())
+    const bytes = treeBytes()
+    assert.ok(nodes < 4_000, `${section}: ${nodes} nodes`)
+    assert.ok(bytes < 450 * 1024, `${section}: ${bytes} bytes`)
+  }
+  measure('overview')
+
+  await showSection('files')
+  await panel.selectRows(FILES, [target])
+  assert.equal(panel.rowsOf(FILES).length, 1_000)
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, diff)
+  assert.deepEqual(cardIds(), [1])
+  assert.equal(inside(cardOf(1), { type: 'Markdown' }).length, 10)
+  assert.equal(
+    panel.find({ type: 'Text', text: /^Showing/ })?.text,
+    'Showing 1 of 100 comment threads on this file. Open the pull request in Azure DevOps for the rest.'
+  )
+  measure('files')
+
+  await showSection('comments')
+  assert.deepEqual(cardIds(), [1, 2, 3])
+  assert.equal(
+    panel.find({ type: 'Text', text: /^Showing/ })?.text,
+    'Showing 3 of 100 comment threads. Open the pull request in Azure DevOps for the rest.'
+  )
+  measure('comments')
+})
+
+test('thirty threads of ten short comments stay under 4,000 nodes in Files and Comments', async () => {
+  const threads = Array.from({ length: 100 }, (_, index) =>
+    threadOf(index + 1, { anchor: { path: REDIRECT, line: index + 1, side: 'new' }, comments: commentsOf(20, at => `Reply ${at}.`), hidden: 4 })
+  )
+  await openFiles({ 'reviews.open': input => reviewOf({ key: input, threads, threadCount: 150 }) })
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.equal(cardIds().length, 30)
+  assert.ok(countNodes(panel.tree()) < 4_000, `files: ${countNodes(panel.tree())} nodes`)
+  await showSection('comments')
+  assert.equal(cardIds().length, 30)
+  assert.ok(countNodes(panel.tree()) < 4_000, `comments: ${countNodes(panel.tree())} nodes`)
 })

@@ -9,10 +9,14 @@ function utf8Bytes(char: string): number {
   return point < 0x10000 ? 3 : 4
 }
 
-export function cutLabel(text: string): string {
+export function utf8Length(text: string): number {
   let total = 0
   for (const char of text) total += utf8Bytes(char)
-  if (total <= MAX_LABEL_BYTES) return text
+  return total
+}
+
+export function cutLabel(text: string): string {
+  if (utf8Length(text) <= MAX_LABEL_BYTES) return text
   let room = MAX_LABEL_BYTES - utf8Bytes(ELLIPSIS)
   let head = ''
   for (const char of text) {

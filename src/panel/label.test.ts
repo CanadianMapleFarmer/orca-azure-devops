@@ -1,7 +1,11 @@
 import { assert, test } from 'orca/testing'
-import { cutLabel, MAX_LABEL_BYTES } from './label'
+import { cutLabel, MAX_LABEL_BYTES, utf8Length } from './label'
 
 const bytes = (text: string) => new TextEncoder().encode(text).length
+
+test('utf8Length counts the UTF-8 bytes of a text', () => {
+  for (const text of ['', 'line 12', 'é', '界', '😀', 'a界😀é\n']) assert.equal(utf8Length(text), bytes(text), JSON.stringify(text))
+})
 
 test('cutLabel leaves a label that fits and cuts one that does not at a whole character', () => {
   assert.equal(cutLabel(''), '')
