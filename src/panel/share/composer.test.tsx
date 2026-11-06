@@ -633,6 +633,24 @@ test("the approval composer doesn't suggest the signed-in approver to themselves
   assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Grace Hopper'])
 })
 
+test("the approval composer doesn't suggest an approver without a sign-in name", async () => {
+  const nameless: Approver = { id: 'u-ada', name: 'Ada Lovelace', uniqueName: '', isGroup: false }
+  const runs = [waitingRun(5, [approvalOf('ap-1', 5, { approvers: [APPROVER_GRACE, nameless, APPROVER_LINUS] })])]
+  await approve({ 'runs.snapshot': runsSnapshotOf({ runs }) })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Grace Hopper', 'Linus Torvalds'])
+})
+
+test('a chosen person without a sign-in name never becomes an empty recipient', async () => {
+  const nameless: Identity = { id: 'u-ada', displayName: 'Ada Lovelace', uniqueName: '', kind: 'user' }
+  const host = await approve({
+    'share.prefs': approvalPrefs({ prefs: { destinations: [{ kind: 'email', people: [nameless, PERSON_LINUS] }] } }),
+    'share.send': { results: [] }
+  })
+  await panel.press({ type: 'Button', text: 'Share' })
+  assert.deepEqual(opens(host), [{ url: mailTo(['linus@contoso.com']) }])
+})
+
 test('with chat and email chosen, the Teams link opens first and email waits for its own button', async () => {
   const host = await approve({
     'share.prefs': approvalPrefs({

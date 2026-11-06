@@ -239,7 +239,7 @@ A run waiting at an environment check shows a **Waiting for approval** box. It s
 
 - **Copy as rich text**, **Post to a Teams channel** and **Message in Teams** work as described under Sharing, with the same channels. **Teams channels** in the tab's header manages them.
 - **Email** opens a draft in your mail app. The subject is `Approval needed: <pipeline> <run>` and the body is the message. Pick people with **Find people to email**. A link over 2,000 characters isn't opened, and the composer suggests Copy.
-- The approvers who are people, apart from you, show as suggestions in both people lists. Groups aren't suggested.
+- The approvers who are people, apart from you, show as suggestions in both people lists. Groups aren't suggested, and neither is anyone Azure DevOps lists without a sign-in name, since a link can't reach them.
 - Orca opens one link per press. With Teams chat and email both chosen, the chat opens first and **Open email** opens the draft.
 - There is no **Add as reviewers** for approvals.
 

@@ -26,7 +26,7 @@ function openLink(kind: LinkKind, url: string): Promise<LinkResult> {
   )
 }
 
-const uniqueNames = (people: Identity[]): string[] => people.map(person => person.uniqueName)
+const uniqueNames = (people: Identity[]): string[] => people.map(person => person.uniqueName).filter(name => name !== '')
 
 function linkUrls(plan: Plan, subject: string, tenantId: string | null): LinkUrls {
   const body = toPlain(plan.message)

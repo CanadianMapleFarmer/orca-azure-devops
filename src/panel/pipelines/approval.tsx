@@ -19,7 +19,7 @@ function shareApproval(org: string, me: string | null, run: RunSummary, approval
   const item = approvalShareItem(run, approval)
   const runName = `${run.pipeline.name} ${run.runNumber}`
   const approvers: Identity[] = approval.approvers
-    .filter(approver => !approver.isGroup && approver.id.toLowerCase() !== me?.toLowerCase())
+    .filter(approver => !approver.isGroup && approver.uniqueName !== '' && approver.id.toLowerCase() !== me?.toLowerCase())
     .map(({ id, name, uniqueName }) => ({ id, displayName: name, uniqueName, kind: 'user' }))
   openComposer({
     org,
