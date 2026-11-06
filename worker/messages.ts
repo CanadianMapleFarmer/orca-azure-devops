@@ -118,6 +118,12 @@ export const CHECKOUT_FORK = "This pull request comes from a fork. Check it out 
 export const CHECKOUT_NEEDS_GIT_PROJECT =
   "This repository is open in Orca only as a folder, which can't create worktrees. Open it as a git project in Orca, then press Check out in Orca again."
 export const ARM_ANY_PROJECT = 'Create it before any other new workspace: the next one, in any project, gets this branch.'
+export const WIKIS_LOAD_FAILED = "Couldn't load wikis."
+export const WIKI_NEEDS_READ = 'The wiki needs Wiki (Read) access.'
+export const UNKNOWN_WIKI = "That wiki no longer exists, or you can't see it."
+export const WIKI_PAGE_GONE = 'This page was moved or deleted in Azure DevOps.'
+export const WIKI_READ_ONLY = 'This wiki is published from a repository. Edit its files there.'
+export const WIKI_SEARCH_UNAVAILABLE = "Wiki search isn't available in this organization."
 
 export const VOTED: Record<VoteChoice, string> = {
   approve: PR_APPROVED,
@@ -138,7 +144,8 @@ export const MALFORMED = {
   timeline: 'Azure DevOps returned an unexpected run timeline.',
   log: 'Azure DevOps returned an unexpected log response.',
   approval: 'Azure DevOps returned an unexpected approval response.',
-  review: 'Azure DevOps returned an unexpected pull request review response.'
+  review: 'Azure DevOps returned an unexpected pull request review response.',
+  wiki: 'Azure DevOps returned an unexpected wiki response.'
 } as const
 
 export function diffCut(lines: number): string {

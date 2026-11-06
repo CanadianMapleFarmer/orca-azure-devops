@@ -27,6 +27,7 @@ import {
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
 import { fakeReviews, isThreads } from './reviews/fake-reviews'
 import { drain, withWorker } from './test-support'
+import { fakeWiki, isPage, isSearch } from './wiki/fake-wiki'
 
 function running(pattern: string): boolean {
   return spawnSync('pgrep', ['-f', pattern]).status === 0
@@ -780,6 +781,47 @@ test('reviews.vote answers through the handler', async () => {
         message: 'Connect this organization first.'
       })
       assert.equal(ado.count(call => call.method === 'PUT'), 1)
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('wiki.list and wiki.page answer through the handlers', async () => {
+  const ado = fakeWiki()
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const gone = adoErrorWith('unauthorized', 401, 'Connect this organization first.')
+      const wikis = await w.request('wiki.list', { org: 'contoso' })
+      assert.deepEqual(wikis.map(item => [item.name, item.editable]), [['api-docs', false], ['Fabrikam Web.wiki', true]])
+      const ref = { org: 'contoso', projectId: PROJECT, wikiId: wikis[1].id, path: '/Release process/Checklist' }
+      const level = await w.request('wiki.pages', { ...ref, path: '/' })
+      assert.deepEqual(level.pages.map(page => page.title), ['Home', 'Release process', 'Onboarding', 'Résumé'])
+      const page = await w.request('wiki.page', ref)
+      assert.deepEqual([page.title, page.editable, page.content.includes('[[_TOC_]]')], ['Checklist', true, false])
+      assert.ok(
+        page.content.includes('[Rollback](https://dev.azure.com/contoso/Fabrikam%20Web/_wiki/wikis/Fabrikam%20Web.wiki?pagePath=%2FRelease%20process%2FRollback)'),
+        page.content
+      )
+      const found = await w.request('wiki.search', { org: 'contoso', projectId: PROJECT, wikiId: wikis[1].id, text: 'smoke' })
+      assert.deepEqual(found.hits.map(hit => hit.path), ['/Release process/Checklist', '/FAQ: login'])
+      assert.equal(ado.calls.filter(isSearch)[0].host, 'almsearch.dev.azure.com')
+      await assert.rejects(
+        w.request('wiki.search', { org: 'contoso', projectId: PROJECT, wikiId: wikis[1].id, text: 'a' }),
+        adoErrorWith('bad_request', 400, 'Type at least 2 characters to search.')
+      )
+      await assert.rejects(
+        w.request('wiki.page', { ...ref, path: '/Gone' }),
+        adoErrorWith('not_found', 404, 'This page was moved or deleted in Azure DevOps.')
+      )
+      await assert.rejects(w.request('wiki.list', { org: 'fabrikam' }), gone)
+
+      const hung = ado.hang(isPage)
+      const answer = w.request('wiki.page', ref).then(() => null, (error: unknown) => error)
+      assert.ok(await until(() => hung.length > 0), 'the page read is in flight')
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.ok(gone(await answer))
+      assert.equal(hung[0].signal?.aborted, true)
+      await assert.rejects(w.request('wiki.list', { org: 'contoso' }), gone)
       assert.equal(w.refusals.length, 0)
     })
   })

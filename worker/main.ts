@@ -39,6 +39,8 @@ import { createClipboard, spawnWithInput } from './sys/clipboard'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
 import { registerVisibilityHandler } from './visibility-handler'
+import { registerWikiHandlers } from './wiki/handlers'
+import { createWikiService } from './wiki/service'
 import { createArm } from './workspace/arm'
 import type { HostCall } from './workspace/focused'
 import { registerWorkspaceHandlers } from './workspace/handlers'
@@ -83,6 +85,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       pipelines.onOrgs(orgs)
       runViews.onOrgs(orgs)
       reviews.onOrgs(orgs)
+      wiki.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
     now: Date.now
@@ -140,6 +143,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     me: org => prs.me(org),
     after: org => void prs.reloadFresh(org).catch(() => {})
   })
+  const wiki = createWikiService({ http, orgs: () => connections.list(), now: Date.now })
   const prActions = createPrActions({ http, prs, settings: prSettings })
   const runActions = createRunActions({
     http,
@@ -200,6 +204,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     actions: reviewActions,
     checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
   })
+  registerWikiHandlers(orca, { wiki })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,
@@ -216,5 +221,6 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   pipelines.onOrgs(orgs)
   runViews.onOrgs(orgs)
   reviews.onOrgs(orgs)
+  wiki.onOrgs(orgs)
   bar.setOrgs(orgs)
 }

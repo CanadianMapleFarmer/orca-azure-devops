@@ -3,6 +3,7 @@ import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
 import type { CheckoutResult, FileDiff, PrReview, ReviewKey, ReviewResult, VoteChoice } from './shared/reviews'
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
+import type { WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef } from './shared/wiki'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
   interface PluginRequests {
@@ -63,6 +64,10 @@ declare module 'orca' {
     'reviews.setStatus': { input: ReviewKey & { threadId: number; status: 'fixed' | 'active' }; output: ReviewResult }
     'reviews.comment': { input: ReviewKey & { text: string; path?: string; line?: number }; output: ReviewResult }
     'reviews.checkout': { input: ReviewKey; output: CheckoutResult }
+    'wiki.list': { input: { org: string }; output: WikiRef[] }
+    'wiki.pages': { input: WikiPageRef; output: WikiLevel }
+    'wiki.page': { input: WikiPageRef; output: WikiPage }
+    'wiki.search': { input: Omit<WikiPageRef, 'path'> & { text: string }; output: { hits: WikiHit[]; total: number } }
     'runs.snapshot': { input: { org: string }; output: RunsSnapshot }
     'runs.refresh': { input: { org: string }; output: RunsSnapshot }
     'runs.watch': { input: { org: string; projectId: string; buildId: number; watched: boolean }; output: RunsSnapshot }
