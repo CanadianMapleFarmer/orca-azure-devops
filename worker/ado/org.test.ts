@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { discoverTenant, isValidOrgName, orgVsspsUrl, parseOrgInput } from './org'
+import { discoverTenant, isValidOrgName, orgSearchUrl, orgVsspsUrl, parseOrgInput } from './org'
 
 test('isValidOrgName accepts lower-case names up to 50 characters and nothing else', () => {
   for (const name of ['contoso', 'a', '0abc', 'fab-rikam', 'a'.repeat(50)]) assert.equal(isValidOrgName(name), true, name)
@@ -41,6 +41,11 @@ test('discoverTenant asks the vssps host from orgVsspsUrl', async () => {
   }
   await discoverTenant('a/b', fake as typeof fetch)
   assert.deepEqual(urls, [orgVsspsUrl('a/b')])
+})
+
+test('orgSearchUrl encodes the org', () => {
+  assert.equal(orgSearchUrl('contoso'), 'https://almsearch.dev.azure.com/contoso')
+  assert.equal(orgSearchUrl('a/b?c'), 'https://almsearch.dev.azure.com/a%2Fb%3Fc')
 })
 
 test('discoverTenant returns null when the header is missing', async () => {

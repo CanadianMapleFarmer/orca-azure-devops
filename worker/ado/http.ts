@@ -1,4 +1,4 @@
-import { orgVsspsUrl, orgWebUrl } from './org'
+import { orgSearchUrl, orgVsspsUrl, orgWebUrl } from './org'
 
 export type AdoErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'precondition_failed'
   | 'rate_limited' | 'bad_request' | 'server' | 'network'
@@ -19,7 +19,7 @@ export class AdoError extends Error {
 
 export interface AdoRequest {
   org: string
-  host?: 'vssps'
+  host?: 'vssps' | 'almsearch'
   project?: string
   path: string
   query?: Record<string, string | number | boolean | undefined>
@@ -49,6 +49,10 @@ const DEFAULT_RETRY_AFTER_MS = 1000
 const MAX_THROTTLE_RETRIES = 2
 const MAX_RETRY_WAIT_MS = 10_000
 const PREVIEW_VERSION_EXCEPTION = 'VssInvalidPreviewVersionException'
+const HOST_URL: Record<NonNullable<AdoRequest['host']>, (org: string) => string> = {
+  vssps: orgVsspsUrl,
+  almsearch: orgSearchUrl
+}
 
 const FIXED_MESSAGE: Record<AdoErrorCode, string> = {
   unauthorized: 'Azure DevOps rejected the credentials.',
@@ -151,7 +155,7 @@ function buildUrl(req: AdoRequest, apiVersion: string): string {
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
     .map(([key, value]) => `${encodeQuery(key)}=${encodeQuery(String(value))}`)
   pairs.push(`api-version=${encodeQuery(apiVersion)}`)
-  const base = req.host === 'vssps' ? orgVsspsUrl(req.org) : orgWebUrl(req.org)
+  const base = req.host ? HOST_URL[req.host](req.org) : orgWebUrl(req.org)
   return `${base}${project}${req.path}?${pairs.join('&')}`
 }
 

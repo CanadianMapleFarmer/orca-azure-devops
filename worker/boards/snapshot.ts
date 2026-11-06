@@ -4,14 +4,13 @@ import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
 import { loadPrChips, type PrChipCache } from '../ado/pr-links'
 import { hydrate, queryBoardIds, queryIds, textOr, toSummary, WIQL_TOP, wiqlMine, type PrRef, type RawWorkItem } from '../ado/workitems'
-import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import { ANSWER_BUDGET_BYTES, byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { joinMessages, showingNewest } from '../messages'
 import type { BoardResult } from './board-views'
 
 const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
 const MAX_ITEMS = 1000
-const BOARD_BUDGET_BYTES = 900 * 1024
 
 type Base = ReturnType<typeof toSummary>
 type StatesByType = Map<string, TypeState[]>
@@ -108,7 +107,7 @@ export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
 
 export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
   const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
-  const kept = newestThatFit(result.items, BOARD_BUDGET_BYTES - header, item => item.changedAt)
+  const kept = newestThatFit(result.items, ANSWER_BUDGET_BYTES - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result
   return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
 }

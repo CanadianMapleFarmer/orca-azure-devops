@@ -19,7 +19,7 @@ import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { isMalformed } from '../ado/shape'
 import { failuresOf, getTimeline, mergeTimeline, runStages, type RawTimeline } from '../ado/timeline'
-import { byteLength, itemBytes } from '../budget'
+import { ANSWER_BUDGET_BYTES, byteLength, itemBytes } from '../budget'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -96,7 +96,6 @@ const FINISHED_MS = { visibleMs: 60_000, backgroundMs: 60_000 }
 const FRESH_MS = 5_000
 const MAX_CACHED_VIEWS = 10
 const IN_FLIGHT = 4
-const ANSWER_BUDGET_BYTES = 900 * 1024
 const TRIMMED_ISSUES = 3
 const ISSUE_LIMITS = [Infinity, TRIMMED_ISSUES, 0]
 const MAX_RECORDS = 2_000

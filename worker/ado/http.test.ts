@@ -68,6 +68,29 @@ test('host vssps builds the vssps URL', async () => {
   assert.equal(calls[1].url, 'https://dev.azure.com/contoso/_apis/projects?api-version=7.1')
 })
 
+test('a search request goes to almsearch.dev.azure.com', async () => {
+  const { fetch, calls } = fakeFetch(jsonResponse({ count: 0, results: [] }), jsonResponse({}))
+  const http = clientFor(fetch)
+  const body = { searchText: 'redirect', $top: 25, $skip: 0, filters: { Wiki: ['Fabrikam Web.wiki'] }, includeFacets: false }
+  await http.json({
+    org: 'contoso',
+    host: 'almsearch',
+    project: '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d',
+    method: 'POST',
+    path: '/_apis/search/wikisearchresults',
+    body
+  })
+  assert.equal(
+    calls[0].url,
+    'https://almsearch.dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/search/wikisearchresults?api-version=7.1'
+  )
+  assert.equal(calls[0].method, 'POST')
+  assert.equal(calls[0].headers.get('authorization'), AUTH)
+  assert.deepEqual(await calls[0].json(), body)
+  await http.json({ org: 'contoso', path: '/_apis/projects' })
+  assert.equal(calls[1].url, 'https://dev.azure.com/contoso/_apis/projects?api-version=7.1')
+})
+
 test('per-call apiVersion and query', async () => {
   const { fetch, calls } = fakeFetch(jsonResponse({}))
   await clientFor(fetch).json({ ...REPOS, apiVersion: '7.1-preview.4', query: { $top: 5, x: undefined, name: 'a b', all: true } })

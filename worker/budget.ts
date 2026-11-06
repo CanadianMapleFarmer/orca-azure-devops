@@ -1,4 +1,5 @@
 export const POST_BUDGET_BYTES = 240 * 1024
+export const ANSWER_BUDGET_BYTES = 900 * 1024
 
 export function byteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value))

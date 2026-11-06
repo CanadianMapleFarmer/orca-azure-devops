@@ -22,6 +22,10 @@ export function orgVsspsUrl(org: string): string {
   return `https://vssps.dev.azure.com/${encodeURIComponent(org)}`
 }
 
+export function orgSearchUrl(org: string): string {
+  return `https://almsearch.dev.azure.com/${encodeURIComponent(org)}`
+}
+
 function orgFromUrl(text: string): string | null {
   let url: URL
   try {

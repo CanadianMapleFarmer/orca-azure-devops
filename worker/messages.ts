@@ -89,6 +89,7 @@ export const RUN_TRIMMED = 'Some issue details were left out to keep this run vi
 export const RUN_CUT = 'Some steps were left out to keep this run view small.'
 export const NOT_A_FILE_PATH = "That isn't a file path Orca can open."
 export const GIT_REMOTES_FAILED = "Couldn't read the git remotes of a local workspace."
+export const MARKDOWN_CUT_NOTE = 'The rest is in Azure DevOps.'
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -192,6 +193,10 @@ export function noRepoWorkspace(repo: string): string {
 
 export function fileNotFound(path: string, repo: string): string {
   return `Couldn't find ${path} in your local workspaces of ${repo}.`
+}
+
+export function imageLink(alt: string): string {
+  return `Image: ${alt}`
 }
 
 export function joinMessages(...messages: (string | undefined)[]): string | undefined {
