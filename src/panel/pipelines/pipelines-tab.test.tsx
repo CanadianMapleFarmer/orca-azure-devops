@@ -1,7 +1,7 @@
-import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TreeSnapshot } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel } from 'orca/testing'
 import type { RunActionResult, RunFilter, RunState, StepState } from '../../shared/pipelines'
 import type { OrgStatus } from '../../shared/types'
-import { closeCleanly, mountPanel, org, requestsTo, type TestHost } from '../test-support'
+import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } from '../test-support'
 import { approvalOf, HOUR, MINUTE, NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './fixtures'
 import { stageLine } from './run-card'
 
@@ -49,9 +49,6 @@ const within = (buildId: number, query: Parameters<TestPanel['findAll']>[0]): Te
 }
 
 const waitingBlocks = (buildId: number) => inside(cardOf(buildId), { type: 'Callout' }).filter(callout => callout.props.title === 'Waiting for approval')
-
-const countNodes = (node: TreeSnapshot | string | null): number =>
-  node === null ? 0 : typeof node === 'string' ? 1 : 1 + (node.children ?? []).reduce((total, child) => total + countNodes(child), 0)
 
 const KEPT = 'Azure DevOps is unreachable. Showing the last results.'
 

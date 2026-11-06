@@ -1,7 +1,7 @@
-import { afterEach, assert, hostError, test, type MockRequests, type TestPanel, type TreeSnapshot } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import { VOTE_BUTTON, VOTE_VALUE, type CheckoutResult, type PrReview, type ReviewResult } from '../../../shared/reviews'
 import type { OrgStatus } from '../../../shared/types'
-import { closeCleanly, mountPanel, org, requestsTo, type TestHost } from '../../test-support'
+import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } from '../../test-support'
 import { NOW, prOf, reviewerOf, snapshotOf } from '../fixtures'
 import { OPEN_REVIEW, REVIEW_KEY, REVIEW_TITLE, reviewOf } from './fixtures'
 import { ReviewView } from './review-view'
@@ -33,9 +33,6 @@ const heading = () => panel.find({ type: 'Heading' })?.text
 const button = (text: string) => panel.find({ type: 'Button', text })
 
 const callouts = () => panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text])
-
-const countNodes = (node: TreeSnapshot | string | null): number =>
-  node === null ? 0 : typeof node === 'string' ? 1 : 1 + (node.children ?? []).reduce((total, child) => total + countNodes(child), 0)
 
 function held<T>() {
   let release: (value: T) => void = () => {}

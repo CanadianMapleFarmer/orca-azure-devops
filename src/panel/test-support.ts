@@ -1,4 +1,4 @@
-import { assert, mockHost, mount, type MockRequests, type TestPanel } from 'orca/testing'
+import { assert, mockHost, mount, type MockRequests, type TestPanel, type TreeSnapshot } from 'orca/testing'
 import { APPROVAL_TEMPLATE } from '../shared/share/approval-items'
 import { PR_TEMPLATE } from '../shared/share/template'
 import type { OrgStatus } from '../shared/types'
@@ -68,3 +68,6 @@ export const requestsTo = (host: TestHost, name: string) =>
 
 export const optionValuesOf = (panel: TestPanel, label: string) =>
   ((panel.find({ label })?.props as { options: { value: string }[] }).options ?? []).map(option => option.value)
+
+export const countNodes = (node: TreeSnapshot | string | null): number =>
+  node === null ? 0 : typeof node === 'string' ? 1 : 1 + (node.children ?? []).reduce((total, child) => total + countNodes(child), 0)
