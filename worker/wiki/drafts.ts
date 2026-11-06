@@ -17,6 +17,7 @@ import {
 import { TAB_FOLDER, writeTabFile } from '../tab-files'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import { assertInside, baseName, draftName, sameFile, theirsName, type DraftFs } from './draft-files'
+import { MAX_PUBLISH_BYTES } from './publish'
 import type { WikiService } from './service'
 
 export interface StoredDraft {
@@ -64,7 +65,6 @@ export interface DraftsDeps {
 }
 
 const DRAFTS_KEY = 'wiki:drafts'
-const MAX_PAGE_BYTES = 1024 * 1024
 const TEXT_FIELDS = ['key', 'org', 'projectId', 'wikiId', 'wikiName', 'path', 'version', 'workspaceId', 'workspacePath', 'workspaceName', 'file'] as const
 
 export function draftKey(ref: WikiPageRef): string {
@@ -160,7 +160,7 @@ export function createDrafts(deps: DraftsDeps): Drafts {
     if (!workspace || workspace.hostId !== null) return refused(NO_LOCAL_WORKSPACE_WIKI)
     const page = await deps.wiki.fresh(ref)
     if (!page) return refused(WIKI_PAGE_GONE)
-    if (Buffer.byteLength(page.content) > MAX_PAGE_BYTES) return refused(WIKI_PAGE_TOO_LARGE)
+    if (Buffer.byteLength(page.content) > MAX_PUBLISH_BYTES) return refused(WIKI_PAGE_TOO_LARGE)
     if (drafts.length >= MAX_DRAFTS) return refused(TOO_MANY_DRAFTS)
     const file = draftName(ref.org, wiki.name, ref.path)
     if (drafts.some(draft => inWorkspace(draft, workspace) && sameFile(draft.file, file))) return refused(DRAFT_FILE_TAKEN)
