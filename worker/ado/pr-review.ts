@@ -37,6 +37,11 @@ export interface FileFacts extends ChangedFile {
   originalObjectId: string | null
 }
 
+export interface NewThread {
+  content: string
+  file?: { path: string; line: number | null; side: 'new' | 'old'; changeTrackingId: number; iterationId: number }
+}
+
 interface RawIteration {
   id?: unknown
   sourceRefCommit?: { commitId?: unknown } | null
@@ -53,6 +58,7 @@ interface RawChange {
 const MAX_CHANGES = 1_000
 const FOLDER_TYPE = 'tree'
 const NUL = '\u0000'
+const COMMENT_TYPE = 'text'
 
 export async function latestIteration(http: AdoHttp, org: string, key: PrKey, signal?: AbortSignal): Promise<IterationFacts> {
   const { data } = await http.json<{ value?: RawIteration[] }>({ org, project: key.projectId, path: `${prPath(key)}/iterations`, signal })
@@ -152,6 +158,50 @@ export async function fileText(
     const text = data.content === undefined ? '' : expectText(data.content)
     return { text, binary: data.contentMetadata?.isBinary === true || text.includes(NUL) }
   })
+}
+
+export async function replyTo(
+  http: AdoHttp,
+  org: string,
+  key: PrKey,
+  threadId: number,
+  parentCommentId: number,
+  content: string
+): Promise<void> {
+  await http.json({
+    org,
+    project: key.projectId,
+    method: 'POST',
+    path: `${prPath(key)}/threads/${threadId}/comments`,
+    body: { content, parentCommentId, commentType: COMMENT_TYPE }
+  })
+}
+
+export async function setThreadStatus(http: AdoHttp, org: string, key: PrKey, threadId: number, status: 'fixed' | 'active'): Promise<void> {
+  await http.json({ org, project: key.projectId, method: 'PATCH', path: `${prPath(key)}/threads/${threadId}`, body: { status } })
+}
+
+export async function createThread(http: AdoHttp, org: string, key: PrKey, { content, file }: NewThread): Promise<void> {
+  await http.json({
+    org,
+    project: key.projectId,
+    method: 'POST',
+    path: `${prPath(key)}/threads`,
+    body: {
+      comments: [{ parentCommentId: 0, content, commentType: COMMENT_TYPE }],
+      status: 'active',
+      ...(file ? fileContext(file) : {})
+    }
+  })
+}
+
+function fileContext({ path, line, side, changeTrackingId, iterationId }: NonNullable<NewThread['file']>) {
+  const edge = side === 'new' ? 'right' : 'left'
+  const position = { line, offset: 1 }
+  return {
+    threadContext: { filePath: path, ...(line === null ? {} : { [`${edge}FileStart`]: position, [`${edge}FileEnd`]: position }) },
+    pullRequestThreadContext: { changeTrackingId, iterationContext: { firstComparingIteration: 1, secondComparingIteration: iterationId } }
+  }
 }
 
 function repoPath(key: PrKey): string {

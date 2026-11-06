@@ -1,6 +1,6 @@
 import type { LogChunk, RunActionResult, RunKey, RunsSnapshot, RunView } from './shared/pipelines'
 import type { PrKey, PrSnapshot, RowResult } from './shared/prs'
-import type { FileDiff, PrReview, ReviewKey } from './shared/reviews'
+import type { FileDiff, PrReview, ReviewKey, ReviewResult, VoteChoice } from './shared/reviews'
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
 import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
@@ -58,6 +58,10 @@ declare module 'orca' {
     'prs.autoComplete': { input: { org: string; prs: PrKey[] }; output: { results: RowResult[] } }
     'reviews.open': { input: ReviewKey; output: PrReview }
     'reviews.diff': { input: ReviewKey & { path: string }; output: FileDiff }
+    'reviews.vote': { input: ReviewKey & { vote: VoteChoice }; output: ReviewResult }
+    'reviews.reply': { input: ReviewKey & { threadId: number; text: string }; output: ReviewResult }
+    'reviews.setStatus': { input: ReviewKey & { threadId: number; status: 'fixed' | 'active' }; output: ReviewResult }
+    'reviews.comment': { input: ReviewKey & { text: string; path?: string; line?: number }; output: ReviewResult }
     'runs.snapshot': { input: { org: string }; output: RunsSnapshot }
     'runs.refresh': { input: { org: string }; output: RunsSnapshot }
     'runs.watch': { input: { org: string; projectId: string; buildId: number; watched: boolean }; output: RunsSnapshot }

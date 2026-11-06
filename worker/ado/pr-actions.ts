@@ -7,8 +7,12 @@ import { expectList, shaped } from './shape'
 export const APPROVED_VOTE = 10
 const NO_VOTE = 0
 
+export function setVote(http: AdoHttp, org: string, key: PrKey, me: string, isRequired: boolean, vote: number): Promise<RawReviewer> {
+  return putReviewer(http, org, key, me, { vote, isRequired })
+}
+
 export async function castVote(http: AdoHttp, org: string, key: PrKey, me: string, isRequired: boolean): Promise<void> {
-  await putReviewer(http, org, key, me, { vote: APPROVED_VOTE, isRequired })
+  await setVote(http, org, key, me, isRequired, APPROVED_VOTE)
 }
 
 export async function setAutoComplete(
@@ -59,14 +63,15 @@ async function putReviewer(
   key: PrKey,
   reviewerId: string,
   body: { vote: number; isRequired: boolean }
-): Promise<void> {
-  await http.json({
+): Promise<RawReviewer> {
+  const { data } = await http.json<RawReviewer>({
     org,
     project: key.projectId,
     method: 'PUT',
     path: `${reviewersPath(key)}/${encodeURIComponent(reviewerId)}`,
     body
   })
+  return data
 }
 
 function reviewersPath(key: PrKey): string {

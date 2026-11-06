@@ -751,6 +751,40 @@ test('reviews.open and reviews.diff answer through the handlers', async () => {
   })
 })
 
+test('reviews.vote answers through the handler', async () => {
+  const ado = fakeReviews()
+  ado.on(call => call.method === 'PUT' && call.path.includes('/reviewers/'), call => reply(200, call.body))
+  ado.on(call => ['POST', 'PATCH'].includes(call.method) && call.path.includes('/threads'), call => reply(200, call.body))
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const key = { org: 'contoso', projectId: PROJECT, repoId: REPO, prId: 4110 }
+      const pr = `/contoso/${PROJECT}/_apis/git/repositories/${REPO}/pullRequests/4110`
+      assert.deepEqual(await w.request('reviews.vote', { ...key, vote: 'suggestions' }), { ok: true, message: 'Approved with suggestions.' })
+      const [vote] = ado.calls.filter(call => call.method === 'PUT')
+      assert.equal(vote.path, `${pr}/reviewers/${ME}`)
+      assert.deepEqual(vote.body, { vote: 5, isRequired: true })
+      assert.ok(await until(() => prsChanged(w.posts).length > 0), 'the vote reloaded the pull request list')
+
+      assert.deepEqual(await w.request('reviews.reply', { ...key, threadId: 101, text: 'Thanks' }), { ok: true, message: 'Reply posted.' })
+      assert.deepEqual(await w.request('reviews.setStatus', { ...key, threadId: 101, status: 'fixed' }), { ok: true, message: 'Resolved.' })
+      const posted = await w.request('reviews.comment', { ...key, text: 'Why decode here?', path: '/src/auth/redirect.ts', line: 42 })
+      assert.deepEqual(posted, { ok: true, message: 'Comment posted on /src/auth/redirect.ts, line 42.' })
+      const writes = ado.calls.filter(call => call.method !== 'GET' && call.method !== 'PUT')
+      assert.deepEqual(writes.map(call => [call.method, call.path]), [
+        ['POST', `${pr}/threads/101/comments`],
+        ['PATCH', `${pr}/threads/101`],
+        ['POST', `${pr}/threads`]
+      ])
+      assert.deepEqual(await w.request('reviews.vote', { ...key, org: 'fabrikam', vote: 'approve' }), {
+        ok: false,
+        message: 'Connect this organization first.'
+      })
+      assert.equal(ado.count(call => call.method === 'PUT'), 1)
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
 const SIG = 'wQ3vN8sXkP2mR7tY1uZ4aB6cD9eF0gH5iJ'
 const WEBHOOK_HOST = 'default0f0e0d0c.environment.api.powerplatform.com'
 const WEBHOOK = `https://${WEBHOOK_HOST}/powerautomate/automations/direct/workflows/5d1c2b3a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=${SIG}`

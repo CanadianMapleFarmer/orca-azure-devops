@@ -1,3 +1,4 @@
+import type { VoteChoice } from '../src/shared/reviews'
 import { AdoError } from './ado/http'
 
 export { CHANNEL_NAME_TOO_LONG, TOO_MANY_ITEMS, TOO_MANY_PEOPLE } from '../src/shared/share/limits'
@@ -100,6 +101,26 @@ export const DIFF_NO_BASE =
   "Azure DevOps hasn't worked out this pull request's base yet, so the diff can't be shown. Refresh in a moment, or check the branch out in Orca."
 export const REVIEW_FILES_CAPPED = 'More than 1,000 files changed. Open the pull request in Azure DevOps, or check it out in Orca, to see them all.'
 export const FILE_NOT_IN_PR = "That file isn't changed in this pull request any more."
+export const REVIEW_PR_CLOSED = 'This pull request is no longer active.'
+export const REVIEW_DRAFT_NO_VOTES = 'Votes are off while a pull request is a draft.'
+export const REVIEW_COMMENT_TOO_LONG = 'Keep the comment under 10,000 characters.'
+export const THREAD_GONE = 'That comment thread no longer exists.'
+export const REPLIED = 'Reply posted.'
+export const ALREADY_RESOLVED = 'This thread is already resolved.'
+export const ALREADY_ACTIVE = 'This thread is already active.'
+export const RESOLVED = 'Resolved.'
+export const REACTIVATED = 'Reactivated.'
+export const COMMENTED = 'Comment posted.'
+export const BINARY_NO_LINES = 'Binary files take comments on the whole file only.'
+export const LINE_UNCHECKED = 'This file is too large to check the line. Comment on the whole file, or comment in Azure DevOps.'
+export const NO_LINES = 'This file has no lines; comment on the whole file instead.'
+
+export const VOTED: Record<VoteChoice, string> = {
+  approve: PR_APPROVED,
+  suggestions: 'Approved with suggestions.',
+  waitForAuthor: 'Marked as waiting for the author.',
+  reject: REJECTED
+}
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -118,6 +139,22 @@ export const MALFORMED = {
 
 export function diffCut(lines: number): string {
   return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
+}
+
+export function alreadyVoted(phrase: string): string {
+  return `You already voted: ${phrase}.`
+}
+
+export function votedAs(phrase: string): string {
+  return `Azure DevOps recorded your vote as ${phrase}.`
+}
+
+export function lineOutOfRange(lines: number): string {
+  return `Pick a line from 1 to ${lines}.`
+}
+
+export function commentedOn(path: string, line: number | null): string {
+  return `Comment posted on ${path}${line === null ? '' : `, line ${line}`}.`
 }
 
 export function renamedFrom(path: string): string {

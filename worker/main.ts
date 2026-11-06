@@ -26,6 +26,7 @@ import { registerPrHandlers } from './prs/handlers'
 import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
 import { prShareSource } from './prs/share-source'
+import { createReviewActions } from './reviews/actions'
 import { registerReviewHandlers } from './reviews/handlers'
 import { createReviews } from './reviews/service'
 import { createChannelStore } from './share/channels'
@@ -131,6 +132,12 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const reviews = createReviews({ http, orgs: () => connections.list(), now: Date.now })
+  const reviewActions = createReviewActions({
+    http,
+    reviews,
+    me: org => prs.me(org),
+    after: org => void prs.reloadFresh(org).catch(() => {})
+  })
   const prActions = createPrActions({ http, prs, settings: prSettings })
   const runActions = createRunActions({
     http,
@@ -184,7 +191,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
-  registerReviewHandlers(orca, { reviews })
+  registerReviewHandlers(orca, { reviews, actions: reviewActions })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,

@@ -117,6 +117,6 @@ function lineOf(position: { line: number } | null | undefined): number | null {
   return typeof line === 'number' && Number.isSafeInteger(line) && line > 0 ? line : null
 }
 
-function statusOf(status: string | undefined): ThreadStatus {
+export function statusOf(status: string | undefined): ThreadStatus {
   return status !== undefined && STATUSES.has(status) ? (status as ThreadStatus) : 'unknown'
 }

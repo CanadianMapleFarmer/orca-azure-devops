@@ -3,7 +3,7 @@ import type { AutoCompleteOptions, PrKey } from '../../src/shared/prs'
 import { fakeAdo, fixture, isPatch, json, ORG, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { MALFORMED } from '../messages'
 import { AdoError, createAdoHttp } from './http'
-import { addReviewer, castVote, listReviewers, setAutoComplete } from './pr-actions'
+import { addReviewer, castVote, listReviewers, setAutoComplete, setVote } from './pr-actions'
 
 const KEY: PrKey = { projectId: PROJECT, repoId: REPO, prId: 4101 }
 const REVIEWERS = `/${ORG}/${PROJECT}/_apis/git/repositories/${REPO}/pullRequests/4101/reviewers`
@@ -43,6 +43,22 @@ test('castVote puts vote 10 on my reviewer entry and keeps the required flag', a
   assert.deepEqual(puts.map(call => call.body), [{ vote: 10, isRequired: true }, { vote: 10, isRequired: false }])
   assert.equal(puts[0].query.get('api-version'), '7.1')
   assert.equal(puts[0].host, 'dev.azure.com')
+})
+
+test('setVote sends the vote and castVote still approves', async () => {
+  const { ado, http } = setup()
+  const answer = await setVote(http, ORG, KEY, 'u1', true, -5)
+  assert.deepEqual(answer, { id: 'u1', vote: -5, isRequired: true })
+  await setVote(http, ORG, KEY, 'u1', false, 5)
+  await castVote(http, ORG, KEY, 'u1', true)
+  const puts = ado.calls.filter(isPutReviewer)
+  assert.deepEqual(puts.map(call => call.path), [`${REVIEWERS}/u1`, `${REVIEWERS}/u1`, `${REVIEWERS}/u1`])
+  assert.deepEqual(puts.map(call => call.body), [
+    { vote: -5, isRequired: true },
+    { vote: 5, isRequired: false },
+    { vote: 10, isRequired: true }
+  ])
+  assert.equal(puts[0].query.get('api-version'), '7.1')
 })
 
 test('castVote lets a refusal through with the server message and nothing else from the body', async () => {
