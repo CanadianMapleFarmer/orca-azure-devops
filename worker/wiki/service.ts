@@ -1,11 +1,10 @@
 import { SEARCH_TOO_SHORT } from '../../src/shared/messages'
 import type { OrgStatus } from '../../src/shared/types'
 import { MIN_SEARCH_CHARS, type WikiHit, type WikiLevel, type WikiNode, type WikiPage, type WikiPageRef, type WikiRef } from '../../src/shared/wiki'
-import { linkedAbort } from '../abort'
 import { listProjects } from '../ado/core'
 import { cutText } from '../ado/cut-text'
 import { decode } from '../ado/html-text'
-import { AdoError, withSignal, type AdoHttp } from '../ado/http'
+import { AdoError, type AdoHttp } from '../ado/http'
 import { parsedHref } from '../ado/pr-links'
 import { getPage, listWikis, pageLevel, pagePathOf, searchWiki, titleText, wikiPageUrl, type RawSearchResult, type RawWiki } from '../ado/wiki'
 import {
@@ -17,7 +16,8 @@ import {
   WIKI_SEARCH_UNAVAILABLE,
   WIKIS_LOAD_FAILED
 } from '../messages'
-import { isSignedIn, loadFailure, notConnected, signedInStatus } from '../org-status'
+import { createOrgLoads, type OrgLoad } from '../org-loads'
+import { isSignedIn } from '../org-status'
 import { panelMarkdown } from '../panel-markdown'
 
 export interface WikiService {
@@ -34,11 +34,6 @@ export interface WikiServiceDeps {
   http: AdoHttp
   orgs: () => Promise<OrgStatus[]>
   now: () => number
-}
-
-interface Load {
-  http: AdoHttp
-  signal: AbortSignal
 }
 
 interface Listing {
@@ -60,38 +55,12 @@ const TAGS = /<\/?[A-Za-z][^<>]*>/g
 const ANCHOR_OR_QUERY = /[#?]/
 
 export function createWikiService(deps: WikiServiceDeps): WikiService {
-  const scopes = new Map<string, AbortController>()
+  const loads = createOrgLoads({ http: deps.http, orgs: deps.orgs, fallback: WIKIS_LOAD_FAILED, forbidden: WIKI_NEEDS_READ })
   const listings = new Map<string, Listing>()
 
-  function scopeOf(org: string): AbortController {
-    const existing = scopes.get(org)
-    if (existing) return existing
-    const controller = new AbortController()
-    scopes.set(org, controller)
-    return controller
-  }
-
   function forget(org: string): void {
-    scopes.get(org)?.abort()
-    scopes.delete(org)
+    loads.forget(org)
     listings.delete(org)
-  }
-
-  async function load<T>(org: string, work: (load: Load) => Promise<T>): Promise<T> {
-    const link = linkedAbort(scopeOf(org).signal)
-    try {
-      if (link.signal.aborted) throw notConnected()
-      await signedInStatus(deps.orgs, org, WIKIS_LOAD_FAILED, () => false)
-      const result = await work({ http: withSignal(deps.http, link.signal), signal: link.signal })
-      link.signal.throwIfAborted()
-      return result
-    } catch (error) {
-      if (link.signal.aborted) throw notConnected()
-      if (error instanceof AdoError && error.code === 'forbidden') throw new AdoError('forbidden', 403, WIKI_NEEDS_READ)
-      throw loadFailure(error, WIKIS_LOAD_FAILED)
-    } finally {
-      link.release()
-    }
   }
 
   function cached(org: string): Listing | undefined {
@@ -99,7 +68,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
     return listing && deps.now() - listing.at < WIKIS_TTL_MS ? listing : undefined
   }
 
-  async function readWikis({ http, signal }: Load, org: string): Promise<Listing> {
+  async function readWikis({ http, signal }: OrgLoad, org: string): Promise<Listing> {
     const [wikis, projects] = await Promise.all([listWikis(http, org), listProjects(http, org)])
     const names = new Map(projects.map(project => [project.id, project.name]))
     const refs = wikis.map(raw => toRef(raw, names.get(raw.projectId) ?? raw.projectId))
@@ -108,7 +77,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
     return listing
   }
 
-  async function wikiOf(current: Load, org: string, wikiId: string): Promise<WikiRef> {
+  async function wikiOf(current: OrgLoad, org: string, wikiId: string): Promise<WikiRef> {
     const known = cached(org)?.wikis.find(wiki => wiki.id === wikiId)
     if (known) return known
     const found = (await readWikis(current, org)).wikis.find(wiki => wiki.id === wikiId)
@@ -119,15 +88,15 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
   return {
     onOrgs(orgs) {
       const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
-      for (const org of new Set([...scopes.keys(), ...listings.keys()])) if (!signedIn.has(org)) forget(org)
+      for (const org of new Set([...loads.orgs(), ...listings.keys()])) if (!signedIn.has(org)) forget(org)
     },
 
-    wikis: org => load(org, async current => (cached(org) ?? (await readWikis(current, org))).wikis.slice(0, MAX_WIKIS)),
+    wikis: org => loads.load(org, async current => (cached(org) ?? (await readWikis(current, org))).wikis.slice(0, MAX_WIKIS)),
 
-    wiki: (org, wikiId) => load(org, current => wikiOf(current, org, wikiId)),
+    wiki: (org, wikiId) => loads.load(org, current => wikiOf(current, org, wikiId)),
 
     level: ref =>
-      load(ref.org, async ({ http }) => {
+      loads.load(ref.org, async ({ http }) => {
         const gone = ref.path === ROOT ? UNKNOWN_WIKI : WIKI_PAGE_GONE
         const raw = await missingAs(pageLevel(http, ref.org, ref.projectId, ref.wikiId, ref.path), gone)
         const nodes = (raw.subPages ?? []).map(sub => ({
@@ -139,7 +108,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
       }),
 
     page: ref =>
-      load(ref.org, async current => {
+      loads.load(ref.org, async current => {
         const wiki = await wikiOf(current, ref.org, ref.wikiId)
         const { page } = await missingAs(getPage(current.http, ref.org, ref.projectId, ref.wikiId, ref.path), WIKI_PAGE_GONE)
         const urlOf = (path: string) => wikiPageUrl(ref.org, wiki.projectName, wiki.name, path)
@@ -161,7 +130,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
       }),
 
     fresh: ref =>
-      load(ref.org, async ({ http }) => {
+      loads.load(ref.org, async ({ http }) => {
         try {
           const { page, etag } = await getPage(http, ref.org, ref.projectId, ref.wikiId, ref.path)
           return { content: page.content ?? '', etag, title: titleText(ref.path) }
@@ -173,7 +142,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
 
     async search(input) {
       const text = queryOf(input.text)
-      return load(input.org, async current => {
+      return loads.load(input.org, async current => {
         const wiki = await wikiOf(current, input.org, input.wikiId)
         const found = await missingAs(searchWiki(current.http, input.org, input.projectId, wiki.name, text), WIKI_SEARCH_UNAVAILABLE)
         const folder = wiki.editable ? '' : folderOf(wiki.mappedPath)

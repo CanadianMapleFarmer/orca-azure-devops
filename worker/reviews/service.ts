@@ -1,7 +1,6 @@
 import type { ChangedFile, FileDiff, LineCount, PrReview, ReviewKey } from '../../src/shared/reviews'
 import type { OrgStatus } from '../../src/shared/types'
-import { linkedAbort } from '../abort'
-import { AdoError, withSignal, type AdoHttp } from '../ado/http'
+import { AdoError, type AdoHttp } from '../ado/http'
 import { blobSize, fileText, latestIteration, listChanges, listThreads, type FileFacts, type IterationFacts } from '../ado/pr-review'
 import { getPullRequest, toPrSummary, type RawPullRequest } from '../ado/pullrequests'
 import { textOr } from '../ado/workitems'
@@ -20,7 +19,8 @@ import {
   REVIEW_FILES_CAPPED,
   REVIEW_PR_GONE
 } from '../messages'
-import { isSignedIn, loadFailure, notConnected, signedInStatus } from '../org-status'
+import { createOrgLoads } from '../org-loads'
+import { isSignedIn } from '../org-status'
 import { panelMarkdown } from '../panel-markdown'
 import { sameId } from '../prs/release-sets'
 import { diffText, splitLines } from './diff'
@@ -72,22 +72,13 @@ const MAX_BLOB_CACHE_BYTES = 32 * 1024 * 1024
 const UNREAD: SideText = { text: null, binary: false }
 
 export function createReviews(deps: ReviewsDeps): Reviews {
-  const scopes = new Map<string, AbortController>()
+  const loads = createOrgLoads({ http: deps.http, orgs: deps.orgs, fallback: PRS_LOAD_FAILED, forbidden: PRS_NEED_CODE_READ })
   const facts = new Map<string, { org: string; facts: Facts }>()
   const blobs = new Map<string, { org: string; blob: SideText; bytes: number }>()
   let blobBytes = 0
 
-  function scopeOf(org: string): AbortController {
-    const existing = scopes.get(org)
-    if (existing) return existing
-    const controller = new AbortController()
-    scopes.set(org, controller)
-    return controller
-  }
-
   function forget(org: string): void {
-    scopes.get(org)?.abort()
-    scopes.delete(org)
+    loads.forget(org)
     for (const [key, kept] of facts) if (kept.org === org) facts.delete(key)
     for (const [key, kept] of blobs) {
       if (kept.org !== org) continue
@@ -96,22 +87,9 @@ export function createReviews(deps: ReviewsDeps): Reviews {
     }
   }
 
-  async function load<T>(input: ReviewKey, work: (load: Load) => Promise<T>): Promise<T> {
-    const link = linkedAbort(scopeOf(input.org).signal)
-    try {
-      if (link.signal.aborted) throw notConnected()
-      const status = await signedInStatus(deps.orgs, input.org, PRS_LOAD_FAILED, () => false)
-      const key: ReviewKey = { org: input.org, projectId: input.projectId, repoId: input.repoId, prId: input.prId }
-      const result = await work({ http: withSignal(deps.http, link.signal), key, me: status.account.adoId, signal: link.signal })
-      link.signal.throwIfAborted()
-      return result
-    } catch (error) {
-      if (link.signal.aborted) throw notConnected()
-      if (error instanceof AdoError && error.code === 'forbidden') throw new AdoError('forbidden', 403, PRS_NEED_CODE_READ)
-      throw loadFailure(error, PRS_LOAD_FAILED)
-    } finally {
-      link.release()
-    }
+  function load<T>(input: ReviewKey, work: (load: Load) => Promise<T>): Promise<T> {
+    const key: ReviewKey = { org: input.org, projectId: input.projectId, repoId: input.repoId, prId: input.prId }
+    return loads.load(input.org, ({ http, signal, status }) => work({ http, key, me: status.account.adoId, signal }))
   }
 
   function keptFacts(key: ReviewKey): Facts | undefined {
@@ -199,7 +177,7 @@ export function createReviews(deps: ReviewsDeps): Reviews {
   return {
     onOrgs(orgs) {
       const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
-      const known = new Set([...scopes.keys(), ...[...facts.values(), ...blobs.values()].map(kept => kept.org)])
+      const known = new Set([...loads.orgs(), ...[...facts.values(), ...blobs.values()].map(kept => kept.org)])
       for (const org of known) if (!signedIn.has(org)) forget(org)
     },
 
