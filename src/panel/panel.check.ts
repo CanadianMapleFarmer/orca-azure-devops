@@ -4,6 +4,7 @@ import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
+import { draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -172,6 +173,27 @@ export default defineCheck({
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },
       'runs.snapshot': runsSnapshot
+    }
+  },
+  wiki: {
+    persisted: { workspace: { tab: 'wiki', wikiPage: OPEN_PAGE } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'wiki.list': [PROJECT_WIKI],
+      'wiki.pages': input => LEVELS[input.path] ?? { pages: [], total: 0 },
+      'wiki.page': pageOf('/Runbooks/Deploy'),
+      'wiki.drafts': [draftOf('/Runbooks/Deploy', { changed: true })]
+    }
+  },
+  wikiTree: {
+    persisted: { workspace: { tab: 'wiki' } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'wiki.list': [PROJECT_WIKI],
+      'wiki.pages': input => LEVELS[input.path] ?? { pages: [], total: 0 },
+      'wiki.drafts': [draftOf('/Runbooks/Deploy', { changed: true }), draftOf('/Home', { publishedAt: 1_700_000_000_000 })]
     }
   },
   mismatch: {

@@ -3,7 +3,6 @@ import {
   Box,
   Button,
   Callout,
-  EmptyState,
   IconButton,
   plugin,
   read,
@@ -30,6 +29,8 @@ import { syncReview } from './prs/review/state'
 import { acceptPrs, hidePrs, syncPrs } from './prs/state'
 import { syncShare } from './share/state'
 import { watchVisibility } from './visibility'
+import { syncWiki } from './wiki/state'
+import { WikiTab } from './wiki/wiki-tab'
 import { acceptChange, hideWork, syncWork } from './work/state'
 import { WorkTab } from './work/work-tab'
 
@@ -99,7 +100,8 @@ export function TabBody(props: { tab: string }): OrcaNode {
   if (org && props.tab === 'work') return <WorkTab org={org} />
   if (org && props.tab === 'pipelines') return <PipelinesTab org={org} />
   if (org && props.tab === 'prs') return <PrsTab org={org} />
-  return <EmptyState title="Coming in a later update" />
+  if (org && props.tab === 'wiki') return <WikiTab org={org} />
+  return null
 }
 
 function Workspace(): OrcaNode {
@@ -228,6 +230,7 @@ export default function Panel(): OrcaNode {
   syncPipelines(org, onScreen)
   syncShare(org?.org ?? null)
   syncReview(loaded.status === 'ready' && org?.state === 'connected' ? org.org : null)
+  syncWiki(loaded.status === 'ready' && org?.state === 'connected' ? org.org : null)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {
     return (

@@ -297,7 +297,8 @@ test('connected shows who is signed in, a success badge and the four tabs', asyn
   )
   assert.equal(tabs?.props?.value, 'work')
   await panel.select({ type: 'Tabs' }, 'wiki')
-  assert.ok(summaryText().includes('EmptyState "Coming in a later update"'))
+  assert.equal(summaryText().includes('Coming in a later update'), false)
+  assert.ok(summaryText().includes('EmptyState "No wikis"'))
 })
 
 test('the hub names the pinned account when the org is expired, mismatched or signed out', async () => {
