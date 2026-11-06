@@ -124,7 +124,7 @@ async function failure(promise: Promise<unknown>): Promise<unknown> {
   return assert.fail('expected a rejection')
 }
 
-function messageOf(error: unknown): string {
+function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
@@ -314,7 +314,7 @@ test('aborting right after begin raises no unhandled rejection', async () => {
     timedOut.clock.fire(ENTRA_SIGN_IN_TIMEOUT_MS)
     await drain()
 
-    assert.deepEqual(unhandled.map(messageOf), [])
+    assert.deepEqual(unhandled.map(textOf), [])
     assert.equal(await failure(session.tokens), caller.signal.reason)
     assert.ok((await failure(late.tokens)) instanceof EntraTimeout)
   } finally {
@@ -342,12 +342,12 @@ test('a redirect that reports an error rejects with its plain message and redeem
 test("a listener that can't start or stops with an error says the sign-in couldn't start, and other aborts pass through", async () => {
   const bindError = Object.assign(new Error('listen EADDRINUSE: address already in use 127.0.0.1'), { code: 'EADDRINUSE' })
   const unbound = setup({ listen: fakeListen(bindError).listen })
-  assert.equal(messageOf(await failure(begin(unbound))), ENTRA.listenFailed)
+  assert.equal(textOf(await failure(begin(unbound))), ENTRA.listenFailed)
 
   const broken = setup()
   const session = await begin(broken)
   broken.listener.fail(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))
-  assert.equal(messageOf(await failure(session.tokens)), ENTRA.listenFailed)
+  assert.equal(textOf(await failure(session.tokens)), ENTRA.listenFailed)
 
   const closed = setup()
   const closing = await begin(closed)
@@ -394,7 +394,7 @@ test('save keeps only the refresh token, app ID and tenant under entra:<org>', a
   const locked = setup()
   locked.state.failWrites = true
   const error = await failure(locked.provider.save(ORG, signedIn))
-  assert.equal(messageOf(error), ENTRA.notSaved)
+  assert.equal(textOf(error), ENTRA.notSaved)
   assert.equal(locked.secrets.size, 0)
 })
 
@@ -465,7 +465,7 @@ test('hasSession is false for a missing or unreadable secret and forget deletes 
 })
 
 test("entraKey refuses names that aren't org names", async () => {
-  const invalidOrg = (error: unknown) => messageOf(error) === INVALID_ORG_NAME
+  const invalidOrg = (error: unknown) => textOf(error) === INVALID_ORG_NAME
   assert.equal(entraKey('contoso'), 'entra:contoso')
   assert.equal(entraKey('my-org-2'), 'entra:my-org-2')
   for (const org of ['', 'Contoso', '../evil', 'a/b', 'entra:contoso', '-contoso', 'a'.repeat(51)]) {
