@@ -318,7 +318,10 @@ function renderInline(s: string, ctx: Context): string {
     const opener = openers.pop()
     const bracket = i
     i += 1
-    if (s[i] !== '(') return
+    if (s[i] !== '(') {
+      if (opener?.image) out[opener.at] = `${joinGuard(s, opener.source)}[`
+      return
+    }
     const tail = linkTail(s, i + 1, opener?.image === true)
     if (!tail) return
     const { dest } = tail

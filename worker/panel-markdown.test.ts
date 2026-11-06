@@ -62,7 +62,11 @@ test('panelMarkdown turns images into links and resolves relative links', () => 
     ['[![badge](/badge.png "b")](/pipelines "Runs")', `[Image: badge](${resolve('/pipelines')} "Runs")`],
     ['[![badge](/badge.png =80x)](https://dev.azure.com/contoso)', '[Image: badge](https://dev.azure.com/contoso)'],
     ['[<img src="/badge.png" alt="badge">](/pipelines)', `[Image: badge](${resolve('/pipelines')})`],
-    ['[![badge](/badge.png) status](/pipelines)', `[[Image: badge](${resolve('/badge.png')}) status](${resolve('/pipelines')})`]
+    ['[![badge](/badge.png) status](/pipelines)', `[[Image: badge](${resolve('/badge.png')}) status](${resolve('/pipelines')})`],
+    ['![a][r]\n\n[r]: https://cdn.fabrikam.test/a.png', '[a][r]\n\n[r]: https://cdn.fabrikam.test/a.png'],
+    ['![a][]\n\n[a]: https://cdn.fabrikam.test/a.png', '[a][]\n\n[a]: https://cdn.fabrikam.test/a.png'],
+    ['![r]\n\n[r]: https://cdn.fabrikam.test/r.png', '[r]\n\n[r]: https://cdn.fabrikam.test/r.png'],
+    ['See ![the flow][flow].\n\n[flow]: /.attachments/flow.png', `See [the flow][flow].\n\n[flow]: ${resolve('/.attachments/flow.png')}`]
   ]
   for (const [input, expected] of cases) assert.equal(md(input), expected, input)
 })
@@ -133,7 +137,7 @@ test('panelMarkdown makes hostile and ADO-only markup safe to show', () => {
   for (const marker of ['- - ', '1. 2. ', '- > - ', '* + ', '> 1. - ', '-\t-\t', '2) \t-   '])
     assert.equal(md(`[x][r]\n\n${marker}[r]: ${EVIL}`), `[x][r]\n\n${marker}[r]: ${resolve(EVIL)}`, JSON.stringify(marker))
 
-  for (const input of ['!![x](p.png)', '!<img src=p.png>', '!<a></a>[x](p.png)']) {
+  for (const input of ['!![x](p.png)', '!<img src=p.png>', '!<a></a>[x](p.png)', '!![x][r]\n\n[r]: p.png']) {
     const out = md(input)
     assert.ok(!out.includes('!['), `${JSON.stringify(input)} gave ${JSON.stringify(out)}`)
   }
@@ -199,7 +203,8 @@ test('panelMarkdown stays fast on adversarial input', () => {
     '![a](b =1x '.repeat(30_000),
     `${'[![a](b)'.repeat(30_000)}${'](c)'.repeat(30_000)}`,
     '-  '.repeat(5_000),
-    `\n${'-\t'.repeat(5_000)}x`
+    `\n${'-\t'.repeat(5_000)}x`,
+    '![a]'.repeat(30_000)
   ]
   for (const input of inputs) {
     const started = Date.now()
