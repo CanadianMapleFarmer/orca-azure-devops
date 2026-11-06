@@ -185,6 +185,14 @@ export function entraFailed(code: string | null): string {
   return code ? `Microsoft sign-in failed (${code}).` : 'Microsoft sign-in failed.'
 }
 
+export const REDIRECT_PAGE = {
+  title: 'Azure DevOps for Orca',
+  done: "You're signed in. You can close this tab and go back to Orca.",
+  failed: "Sign-in didn't finish. Go back to Orca to see why.",
+  stale: 'This sign-in page is out of date. Start again in Orca.',
+  notHere: 'Nothing here.'
+} as const
+
 export function diffCut(lines: number): string {
   return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
 }
