@@ -39,6 +39,7 @@ import { createClipboard, spawnWithInput } from './sys/clipboard'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
 import { registerVisibilityHandler } from './visibility-handler'
+import { createDrafts } from './wiki/drafts'
 import { registerWikiHandlers } from './wiki/handlers'
 import { createWikiService } from './wiki/service'
 import { createArm } from './workspace/arm'
@@ -204,7 +205,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     actions: reviewActions,
     checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
   })
-  registerWikiHandlers(orca, { wiki })
+  registerWikiHandlers(orca, { wiki, drafts: createDrafts({ store, fs, call, wiki, now: Date.now }) })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,

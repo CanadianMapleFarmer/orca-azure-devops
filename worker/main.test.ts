@@ -827,6 +827,47 @@ test('wiki.list and wiki.page answer through the handlers', async () => {
   })
 })
 
+test('wiki.edit and wiki.drafts answer through the handlers', async () => {
+  const ado = fakeWiki()
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await withFetch(signedIn(ado), async () => {
+      const host = mockHost({
+        capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+        storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME } }] },
+        secrets: { 'pat:contoso': PAT },
+        results: { 'workspace.readContext': () => FOCUSED, 'workspace.list': () => workspaceAt(dir), 'editor.open': { opened: true } }
+      })
+      await withWorker(worker, { host }, async w => {
+        const wikiId = ado.wikis.find(wiki => wiki.name === 'Fabrikam Web.wiki')!.id
+        const ref = { org: 'contoso', projectId: PROJECT, wikiId, path: '/Release process/Checklist' }
+        const file = 'wiki/contoso/Fabrikam Web.wiki/Release process/Checklist.md'
+        const key = `contoso:${wikiId}:/Release process/Checklist`
+        assert.deepEqual(await w.request('wiki.edit', ref), {
+          opened: true,
+          message: 'Opened Checklist in Orca. Save your changes there, then press Publish here.'
+        })
+        assert.deepEqual(host.callsOf('editor.open'), [{ workspaceId: 'ws-web', path: `.orca-ado/${file}` }])
+        assert.equal(await fs.readFile(path.join(dir, '.orca-ado', ...file.split('/')), 'utf8'), ado.pages.get(ref.path)?.content)
+        assert.equal(await fs.readFile(path.join(dir, '.orca-ado', '.gitignore'), 'utf8'), '*\n')
+        assert.deepEqual(await w.request('wiki.drafts', { org: 'contoso' }), [
+          { ...ref, key, wikiName: 'Fabrikam Web.wiki', title: 'Checklist', file, workspaceName: 'web-app', changed: false, publishedAt: null }
+        ])
+        assert.deepEqual(
+          (w.host.data().storage['wiki:drafts'] as { key: string }[]).map(draft => draft.key),
+          [key]
+        )
+        assert.deepEqual(await w.request('wiki.discard', { key }), { ok: true, message: 'Draft discarded.' })
+        assert.deepEqual(await w.request('wiki.drafts', { org: 'contoso' }), [])
+        await assert.rejects(w.request('wiki.discard', { key }), adoErrorWith('bad_request', 400, 'That draft no longer exists.'))
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 const SIG = 'wQ3vN8sXkP2mR7tY1uZ4aB6cD9eF0gH5iJ'
 const WEBHOOK_HOST = 'default0f0e0d0c.environment.api.powerplatform.com'
 const WEBHOOK = `https://${WEBHOOK_HOST}/powerautomate/automations/direct/workflows/5d1c2b3a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=${SIG}`

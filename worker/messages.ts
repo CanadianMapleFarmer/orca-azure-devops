@@ -1,4 +1,5 @@
 import type { VoteChoice } from '../src/shared/reviews'
+import { MAX_DRAFTS } from '../src/shared/wiki'
 import { AdoError } from './ado/http'
 
 export { CHANNEL_NAME_TOO_LONG, TOO_MANY_ITEMS, TOO_MANY_PEOPLE } from '../src/shared/share/limits'
@@ -124,6 +125,15 @@ export const UNKNOWN_WIKI = "That wiki no longer exists, or you can't see it."
 export const WIKI_PAGE_GONE = 'This page was moved or deleted in Azure DevOps.'
 export const WIKI_READ_ONLY = 'This wiki is published from a repository. Edit its files there.'
 export const WIKI_SEARCH_UNAVAILABLE = "Wiki search isn't available in this organization."
+export const BAD_TAB_FILE = "That file name can't be used."
+export const DRAFT_OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
+export const DRAFT_WORKSPACE_GONE = 'The workspace holding this draft is gone. Discard the draft to edit the page again.'
+export const NO_LOCAL_WORKSPACE_WIKI = 'Open a local workspace first; wiki pages open in a tab there.'
+export const WIKI_PAGE_TOO_LARGE = 'This page is too large to edit here. Edit it in Azure DevOps.'
+export const TOO_MANY_DRAFTS = `You have ${MAX_DRAFTS} wiki drafts. Publish or discard some first.`
+export const DRAFT_FILE_TAKEN = 'Another draft already uses that file name. Publish or discard it first.'
+export const DRAFT_DISCARDED = 'Draft discarded.'
+export const DRAFT_GONE = 'That draft no longer exists.'
 
 export const VOTED: Record<VoteChoice, string> = {
   approve: PR_APPROVED,
@@ -181,6 +191,10 @@ export function armedCheckout({ repo, branch, base, prId, target }: { repo: stri
     `Now create a new workspace in Orca from the ${repo} project. It will check out ${branch} from ${base} (or ${branch}-2 if that name is taken), ` +
     `the source of Pull Request ${prId}. To review it, set Source Control's compare base to ${target}.`
   )
+}
+
+export function openedDraft(title: string): string {
+  return `Opened ${title} in Orca. Save your changes there, then press Publish here.`
 }
 
 export function noBoardNamed(name: string): string {

@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
+import { AdoError } from './ado/http'
 import { openTabFile, TAB_FOLDER, writeTabFile, type TabFileFs } from './tab-files'
 import type { HostCall } from './workspace/focused'
 
@@ -92,4 +93,27 @@ test('openTabFile refuses a missing or remote workspace with the given message a
     assert.deepEqual(await openTabFile({ call, fs: untouched }, 'contoso.4512.adorun', 'text\n', NO_WORKSPACE), { opened: false, message: NO_WORKSPACE })
     assert.equal(calls.some(entry => entry.method === 'editor.open'), false)
   }
+})
+
+test('writeTabFile creates nested folders and refuses names that leave the folder', async () => {
+  await withTempDir(async dir => {
+    const name = 'wiki/contoso/Fabrikam Web.wiki/Release process/Checklist.md'
+    const file = await writeTabFile(fs, dir, name, '# Checklist\n')
+    assert.equal(file, path.join(dir, TAB_FOLDER, 'wiki', 'contoso', 'Fabrikam Web.wiki', 'Release process', 'Checklist.md'))
+    assert.equal(await fs.readFile(file, 'utf8'), '# Checklist\n')
+    assert.equal(await fs.readFile(path.join(dir, TAB_FOLDER, '.gitignore'), 'utf8'), '*\n')
+
+    const workspace = path.join(dir, 'web-app')
+    await fs.mkdir(workspace)
+    const refused = (name: string) => (error: unknown) => {
+      assert.ok(error instanceof AdoError, name)
+      assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, "That file name can't be used."], name)
+      return true
+    }
+    for (const bad of ['/etc/passwd', '../outside.md', 'wiki/../../outside.md', 'wiki/..', 'wiki//Checklist.md', 'wiki/', '', '..', 'wiki\\..\\..\\outside.md']) {
+      await assert.rejects(writeTabFile(fs, workspace, bad, 'outside\n'), refused(bad))
+    }
+    assert.deepEqual(await fs.readdir(workspace), [], 'nothing is created in the workspace')
+    assert.deepEqual((await fs.readdir(dir)).sort(), [TAB_FOLDER, 'web-app'], 'nothing is created beside it')
+  })
 })
