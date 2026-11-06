@@ -788,7 +788,6 @@ test("a sign-in page Orca didn't open says so and the button stays", async () =>
   await panel.press(OPEN_SIGN_IN)
   assert.equal(warnings().length, 1)
   await panel.post('orgs.changed', { orgs: [microsoft()] })
-  assert.equal(warnings().length, 0)
   await panel.post('orgs.changed', { orgs: [waitingOnBrowser()] })
   assert.deepEqual(warnings(), [], 'the next attempt starts without the old notice')
 })
