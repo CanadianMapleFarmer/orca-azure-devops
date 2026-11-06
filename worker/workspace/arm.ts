@@ -4,12 +4,13 @@ const ARMED_MS = 600_000
 const CLAIM_MS = 30_000
 const SLUG_MAX = 40
 
-export interface ArmedBranch { org: string; itemId: number; branch: string }
+export type ArmedBranch = { org: string; branch: string; itemId: number } | { org: string; branch: string; base: string; prId: number }
+export type ItemArm = Extract<ArmedBranch, { itemId: number }>
 
 export interface Arm {
   arm(armed: ArmedBranch): number
   take(): ArmedBranch | null
-  claim(branch: string): ArmedBranch | null
+  claim(branch: string): ItemArm | null
   disarm(): void
 }
 
@@ -62,7 +63,7 @@ export function createArm(now: () => number): Arm {
     },
     claim(branch) {
       const current = taken
-      if (!current || now() - current.at > CLAIM_MS) return null
+      if (!current || !('itemId' in current.value) || now() - current.at > CLAIM_MS) return null
       const wanted = current.value.branch
       if (branch !== wanted && !branch.endsWith(`/${wanted}`)) return null
       taken = null

@@ -1252,6 +1252,62 @@ test('runs.openFile answers through the handler', async () => {
   }
 })
 
+function checkoutHost(entries: ReturnType<typeof workspaceAt>['workspaces']) {
+  return mockHost({
+    capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards: BOARDS }] },
+    secrets: { 'pat:contoso': PAT },
+    results: {
+      'workspace.readContext': () => FOCUSED,
+      'workspace.list': () => ({ workspaces: entries, truncated: false }),
+      'workspace.open': { opened: true }
+    }
+  })
+}
+
+test('reviews.checkout and work.cancelWorkspace share one arm', async () => {
+  const ado = fakeReviews()
+  const web = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await repositoryAt(web, 'https://ada@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app')
+    await withFetch(signedIn(ado), async () => {
+      const host = checkoutHost([{ id: 'ws-web', kind: 'worktree', name: 'web-app', path: web, branch: 'main', hostId: null }])
+      await withWorker(worker, { host }, async w => {
+        const key = { org: 'contoso', projectId: PROJECT, repoId: REPO, prId: 4110 }
+        const source = 'hotfix/1211-login-redirect'
+        const create = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2' } as const
+        const passes = { kind: 'continue', event: create }
+        const reviewing = { kind: 'continue', event: { ...create, branch: source, name: source, base: `origin/${source}` } }
+        const before = Date.now()
+
+        const armed = await w.request('reviews.checkout', key)
+        assert.equal(armed.status, 'armed')
+        assert.ok(armed.status === 'armed' && armed.armedUntil >= before + 600_000 && armed.armedUntil <= Date.now() + 600_000)
+        assert.match(armed.message, /^Now create a new workspace in Orca from the web-app project\. /)
+        assert.deepEqual(host.callsOf('workspace.open'), [{ workspaceId: 'ws-web' }])
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), reviewing, "the workspace hooks take checkout's arm")
+
+        await w.request('reviews.checkout', key)
+        assert.deepEqual(await w.request('work.cancelWorkspace', {}), { ok: true })
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), passes, 'the cancel disarmed the pull request')
+
+        const started = await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+        await w.request('reviews.checkout', key)
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), reviewing, 'checkout replaced the work item')
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), passes, 'one slot, used once')
+
+        await w.request('reviews.checkout', key)
+        await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+        const item = { kind: 'continue', event: { ...create, branch: started.branch, name: started.branch } }
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), item, 'the work item replaced the checkout')
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(web, { recursive: true, force: true })
+  }
+})
+
 test('ui.visibility routes run to the run views', async () => {
   const ado = pipelinesAt(Date.now() - 60_000)
   await withFetch(signedIn(ado), async () => {

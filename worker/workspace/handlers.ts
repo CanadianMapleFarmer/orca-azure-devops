@@ -2,17 +2,16 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import type { BoardsService } from '../boards/service'
 import type { StorePort } from '../connections'
 import { createContextCache, startAgent } from './agents'
-import { branchFor, createArm } from './arm'
+import { branchFor, type Arm } from './arm'
 import type { HostCall } from './focused'
 import { registerWorkspaceHooks } from './hooks'
 import { createLinkStore } from './links'
 import { watchWorkspaceSettings } from './settings'
 
-export interface WorkspaceHandlerDeps { boards: BoardsService; store: StorePort; call: HostCall }
+export interface WorkspaceHandlerDeps { boards: BoardsService; store: StorePort; call: HostCall; arm: Arm }
 
-export async function registerWorkspaceHandlers(orca: OrcaWorkerApi, { boards, store, call }: WorkspaceHandlerDeps): Promise<void> {
+export async function registerWorkspaceHandlers(orca: OrcaWorkerApi, { boards, store, call, arm }: WorkspaceHandlerDeps): Promise<void> {
   const settings = await watchWorkspaceSettings(orca.settings, message => orca.log(message))
-  const arm = createArm(Date.now)
   const links = await createLinkStore(store, Date.now)
   const context = createContextCache()
   registerWorkspaceHooks(orca, {

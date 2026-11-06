@@ -13,6 +13,9 @@ const ARMED = { org: 'contoso', itemId: 1204, branch: BRANCH }
 const ITEM_URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/1204'
 const PREFIX = `[ADO User Story #1204: Add vehicle search filters](${ITEM_URL})`
 const CREATE = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2', base: 'main' } as const
+const SOURCE = 'hotfix/1211-login-redirect'
+const PR_ARMED = { org: 'contoso', branch: SOURCE, base: `origin/${SOURCE}`, prId: 4110 }
+const REVIEWING = { ...CREATE, branch: SOURCE, name: SOURCE, base: `origin/${SOURCE}` }
 const HOOKS = ['workspace.create.before', 'workspace.create.after', 'agent.prompt.before', 'agent.launch.before']
 
 async function setup(over: Partial<WorkspaceHookDeps> = {}) {
@@ -74,6 +77,59 @@ test('a folder creation passes unchanged and leaves the arm for the next worktre
   const folder = { kind: 'folder', projectId: 'repo-web', name: 'notes' } as const
   assert.deepEqual(await w.hooks.fire('workspace.create.before', folder), { kind: 'continue', event: folder })
   assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
+})
+
+test('an armed pull request sets the branch, name and base and links nothing', async () => {
+  const { w, arm, links, data } = await setup()
+  arm.arm(PR_ARMED)
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: REVIEWING })
+  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: SOURCE })
+  await drain()
+  assert.equal(links.byWorkspace('ws-9'), null)
+  assert.equal(data[LINKS_KEY], undefined)
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE }, 'used once')
+  assert.deepEqual(w.logs, [])
+})
+
+test('a pull request arm skips folder workspaces and stays armed for a worktree in any project', async () => {
+  const { w, arm } = await setup()
+  arm.arm(PR_ARMED)
+  const folder = { kind: 'folder', projectId: 'repo-web', name: 'notes' } as const
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', folder), { kind: 'continue', event: folder })
+  const elsewhere = { ...CREATE, projectId: 'repo-api' }
+  assert.deepEqual(
+    await w.hooks.fire('workspace.create.before', elsewhere),
+    { kind: 'continue', event: { ...REVIEWING, projectId: 'repo-api' } },
+    'no project ties the arm, so the next worktree in any project takes it, as the armed message warns'
+  )
+})
+
+test('a pull request arm replaces an armed work item and the reverse', async () => {
+  const { w, arm, links } = await setup()
+  arm.arm(ARMED)
+  arm.arm(PR_ARMED)
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: REVIEWING })
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
+
+  arm.arm(PR_ARMED)
+  arm.arm(ARMED)
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
+  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
+  await drain()
+  assert.deepEqual(links.byWorkspace('ws-9'), { org: 'contoso', itemId: 1204 })
+})
+
+test('a pull request taken after a work item leaves the work item nothing to link', async () => {
+  const { w, arm, links } = await setup()
+  arm.arm(ARMED)
+  await w.hooks.fire('workspace.create.before', CREATE)
+  arm.arm(PR_ARMED)
+  await w.hooks.fire('workspace.create.before', CREATE)
+  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
+  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-10', kind: 'worktree', path: '/repos/web-app-3', branch: SOURCE })
+  await drain()
+  assert.equal(links.byWorkspace('ws-9'), null)
+  assert.equal(links.byWorkspace('ws-10'), null)
 })
 
 test('create.after links the workspace to the item', async () => {

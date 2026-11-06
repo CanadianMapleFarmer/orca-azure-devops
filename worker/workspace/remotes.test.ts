@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { parseAdoRemote, remotesOf } from './remote'
+import { parseAdoRemote, remotesOf, sameRepo } from './remotes'
 
 const WEB = { org: 'contoso', project: 'Fabrikam Web', repo: 'web-app' }
 
@@ -77,7 +77,11 @@ test('remotesOf reads git remote -v output', () => {
     'lazy\tno_push (push)',
     ''
   ].join('\n')
-  assert.deepEqual(remotesOf(output), [WEB, { org: 'contoso', project: 'Fabrikam Web', repo: 'api' }, { org: 'contoso', project: 'Fabrikam Web', repo: 'lazy' }])
+  assert.deepEqual(remotesOf(output), [
+    { remote: 'origin', ...WEB },
+    { remote: 'api', org: 'contoso', project: 'Fabrikam Web', repo: 'api' },
+    { remote: 'lazy', org: 'contoso', project: 'Fabrikam Web', repo: 'lazy' }
+  ])
 })
 
 test('remotesOf copes with CRLF, blank lines, junk and no remotes', () => {
@@ -87,14 +91,50 @@ test('remotesOf copes with CRLF, blank lines, junk and no remotes', () => {
   assert.deepEqual(remotesOf('origin\thttps://github.com/contoso/web-app.git (fetch)\r\n'), [])
   assert.deepEqual(
     remotesOf('origin\thttps://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app (fetch)\r\norigin\thttps://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app (push)\r\n'),
-    [WEB]
+    [{ remote: 'origin', ...WEB }]
   )
-  assert.deepEqual(remotesOf('origin https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app (fetch)'), [WEB])
+  assert.deepEqual(remotesOf('origin https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app (fetch)'), [{ remote: 'origin', ...WEB }])
 })
 
 test('remotesOf drops the credentials a remote URL carries', () => {
   const secret = 'pat-remote-test-1f2e3d'
   const remotes = remotesOf(`origin\thttps://ada:${secret}@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app (fetch)\n`)
-  assert.deepEqual(remotes, [WEB])
+  assert.deepEqual(remotes, [{ remote: 'origin', ...WEB }])
   assert.ok(!JSON.stringify(remotes).includes(secret))
+})
+
+test("remotesOf keeps each remote's name", () => {
+  const output = [
+    'origin\thttps://ada@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app-ada (fetch)',
+    'origin\thttps://ada@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app-ada (push)',
+    'upstream\tgit@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app (fetch)',
+    'upstream\tgit@ssh.dev.azure.com:v3/contoso/Fabrikam%20Web/web-app (push)',
+    'vsts-mirror\thttps://contoso.visualstudio.com/Fabrikam%20Web/_git/web-app (fetch)',
+    'review.team\thttps://dev.azure.com/contoso/_git/docs (fetch)'
+  ].join('\n')
+  assert.deepEqual(remotesOf(output), [
+    { remote: 'origin', org: 'contoso', project: 'Fabrikam Web', repo: 'web-app-ada' },
+    { remote: 'upstream', ...WEB },
+    { remote: 'review.team', org: 'contoso', project: '', repo: 'docs' }
+  ])
+})
+
+test('sameRepo matches org, project and repo case-insensitively', () => {
+  const origin = { remote: 'origin', ...WEB }
+  assert.equal(sameRepo(origin, WEB), true)
+  assert.equal(sameRepo({ remote: 'upstream', org: 'Contoso', project: 'FABRIKAM WEB', repo: 'Web-App' }, WEB), true)
+  assert.equal(sameRepo(origin, { org: 'CONTOSO', project: 'fabrikam web', repo: 'WEB-APP' }), true)
+  assert.equal(sameRepo({ remote: 'origin', org: 'contoso', project: 'Café', repo: 'résumé' }, { org: 'contoso', project: 'CAFÉ', repo: 'RÉSUMÉ' }), true)
+  assert.equal(sameRepo({ ...origin, org: 'fabrikam' }, WEB), false)
+  assert.equal(sameRepo({ ...origin, project: 'Other' }, WEB), false)
+  assert.equal(sameRepo({ ...origin, repo: 'api' }, WEB), false)
+  assert.equal(sameRepo({ ...origin, repo: 'web-app-ada' }, WEB), false)
+})
+
+test('sameRepo compares org and repo when the remote names no project', () => {
+  const noProject = { remote: 'origin', org: 'Contoso', project: '', repo: 'WEB-APP' }
+  assert.equal(sameRepo(noProject, WEB), true)
+  assert.equal(sameRepo(noProject, { ...WEB, project: 'Other' }), true)
+  assert.equal(sameRepo({ ...noProject, org: 'fabrikam' }, WEB), false)
+  assert.equal(sameRepo({ ...noProject, repo: 'api' }, WEB), false)
 })

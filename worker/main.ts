@@ -27,6 +27,7 @@ import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
 import { prShareSource } from './prs/share-source'
 import { createReviewActions } from './reviews/actions'
+import { checkoutPr } from './reviews/checkout'
 import { registerReviewHandlers } from './reviews/handlers'
 import { createReviews } from './reviews/service'
 import { createChannelStore } from './share/channels'
@@ -38,6 +39,7 @@ import { createClipboard, spawnWithInput } from './sys/clipboard'
 import { findExecutable } from './sys/find-executable'
 import { runCommand, stopAllCommands } from './sys/run'
 import { registerVisibilityHandler } from './visibility-handler'
+import { createArm } from './workspace/arm'
 import type { HostCall } from './workspace/focused'
 import { registerWorkspaceHandlers } from './workspace/handlers'
 
@@ -179,19 +181,25 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
   const gitPath = findExecutable('git', { pathEnv: process.env.PATH })
+  const remotes = gitRemotes(runCommand, gitPath, Date.now)
+  const arm = createArm(Date.now)
   const openFileDeps: OpenFileDeps = {
     call,
     gitAvailable: gitPath !== null,
-    remotes: gitRemotes(runCommand, gitPath, Date.now),
+    remotes,
     log,
     isFileInside: fileInside(fs)
   }
-  await registerWorkspaceHandlers(orca, { boards, store, call })
+  await registerWorkspaceHandlers(orca, { boards, store, call, arm })
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
-  registerReviewHandlers(orca, { reviews, actions: reviewActions })
+  registerReviewHandlers(orca, {
+    reviews,
+    actions: reviewActions,
+    checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
+  })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,

@@ -5,7 +5,7 @@ import { mapLimit } from '../ado/limit'
 import { fileNotFound, GIT_REMOTES_FAILED, NO_LOCAL_WORKSPACE_FILE, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
 import type { RunCommand } from '../sys/run'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
-import { remotesOf, type AdoRemote } from './remote'
+import { remotesOf, sameRepo, type AdoRemote } from '../workspace/remotes'
 
 export interface OpenFileDeps {
   call: HostCall
@@ -93,8 +93,9 @@ async function repositoryWorkspaces(
 ): Promise<WorkspaceEntry[]> {
   if (!deps.gitAvailable) return focusedLocal ? [focusedLocal] : []
   const known = await mapLimit(local, REMOTE_LOOKUPS, async workspace => ({ workspace, remotes: await remotesOrNone(deps, workspace.path) }))
+  const target = { org: run.org, project: run.projectName, repo: run.repository?.name ?? '' }
   return known
-    .filter(({ remotes }) => remotes.some(remote => isRunsRepository(run, remote)))
+    .filter(({ remotes }) => remotes.some(remote => sameRepo(remote, target)))
     .map(({ workspace }) => workspace)
     .sort((a, b) => rank(a, run, focusedLocal) - rank(b, run, focusedLocal))
 }
@@ -104,18 +105,6 @@ function remotesOrNone(deps: OpenFileDeps, workspacePath: string): Promise<AdoRe
     deps.log(GIT_REMOTES_FAILED)
     return []
   })
-}
-
-function isRunsRepository(run: RunSummary, remote: AdoRemote): boolean {
-  return (
-    sameName(remote.org, run.org) &&
-    sameName(remote.repo, run.repository?.name ?? '') &&
-    (remote.project === '' || sameName(remote.project, run.projectName))
-  )
-}
-
-function sameName(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase()
 }
 
 function rank(workspace: WorkspaceEntry, run: RunSummary, focusedLocal: WorkspaceEntry | null): number {

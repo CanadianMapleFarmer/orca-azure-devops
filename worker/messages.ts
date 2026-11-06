@@ -114,6 +114,10 @@ export const COMMENTED = 'Comment posted.'
 export const BINARY_NO_LINES = 'Binary files take comments on the whole file only.'
 export const LINE_UNCHECKED = 'This file is too large to check the line. Comment on the whole file, or comment in Azure DevOps.'
 export const NO_LINES = 'This file has no lines; comment on the whole file instead.'
+export const CHECKOUT_FORK = "This pull request comes from a fork. Check it out from the fork's repository instead."
+export const CHECKOUT_NEEDS_GIT_PROJECT =
+  "This repository is open in Orca only as a folder, which can't create worktrees. Open it as a git project in Orca, then press Check out in Orca again."
+export const ARM_ANY_PROJECT = 'Create it before any other new workspace: the next one, in any project, gets this branch.'
 
 export const VOTED: Record<VoteChoice, string> = {
   approve: PR_APPROVED,
@@ -159,6 +163,17 @@ export function commentedOn(path: string, line: number | null): string {
 
 export function renamedFrom(path: string): string {
   return `Renamed from ${path}.`
+}
+
+export function openedCheckout(name: string, source: string): string {
+  return `Opened ${name}. It's already on ${source}.`
+}
+
+export function armedCheckout({ repo, branch, base, prId, target }: { repo: string; branch: string; base: string; prId: number; target: string }): string {
+  return (
+    `Now create a new workspace in Orca from the ${repo} project. It will check out ${branch} from ${base} (or ${branch}-2 if that name is taken), ` +
+    `the source of Pull Request ${prId}. To review it, set Source Control's compare base to ${target}.`
+  )
 }
 
 export function noBoardNamed(name: string): string {

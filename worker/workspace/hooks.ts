@@ -15,7 +15,8 @@ export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookD
   orca.hooks.on('workspace.create.before', (event, next) => {
     if (event.kind !== 'worktree') return
     const armed = deps.arm.take()
-    return armed ? next({ ...event, branch: armed.branch, name: armed.branch }) : undefined
+    if (!armed) return
+    return next({ ...event, branch: armed.branch, name: armed.branch, ...('base' in armed ? { base: armed.base } : {}) })
   })
 
   orca.hooks.on('workspace.create.after', event => {

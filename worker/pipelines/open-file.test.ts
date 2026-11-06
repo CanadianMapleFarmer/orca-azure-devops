@@ -5,11 +5,11 @@ import { assert, test } from 'orca/testing'
 import type { RunSummary } from '../../src/shared/pipelines'
 import type { RunCommand, RunResult } from '../sys/run'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
+import type { AdoRemote } from '../workspace/remotes'
 import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './open-file'
-import type { AdoRemote } from './remote'
 
-const WEB = { org: 'contoso', project: 'Fabrikam Web', repo: 'web-app' }
-const API = { org: 'contoso', project: 'Fabrikam Web', repo: 'api' }
+const WEB = { remote: 'origin', org: 'contoso', project: 'Fabrikam Web', repo: 'web-app' }
+const API = { remote: 'origin', org: 'contoso', project: 'Fabrikam Web', repo: 'api' }
 const MINUTE = 60_000
 const NOT_A_FILE = "That isn't a file path Orca can open."
 const AGENT = '/home/vsts/work/1/s'
@@ -191,7 +191,7 @@ test('openRunFile opens the deepest existing match in the workspace of the run r
       [dir('wrong')]: [{ ...WEB, project: 'Other' }],
       [dir('remote')]: [WEB],
       [dir('dev')]: [WEB],
-      [dir('main')]: [{ org: 'Contoso', project: 'FABRIKAM WEB', repo: 'Web-App' }]
+      [dir('main')]: [{ remote: 'origin', org: 'Contoso', project: 'FABRIKAM WEB', repo: 'Web-App' }]
     })
 
     const program = await openRunFile(deps, { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 42 })
@@ -369,7 +369,7 @@ test('a remote that names no project matches a run of any project in its organiz
     await write(base, 'src/Api/Program.cs')
     const web = workspace('ws-web', base, 'main')
     const { call, opened } = host([web], web)
-    const noProject = { org: 'Contoso', project: '', repo: 'WEB-APP' }
+    const noProject = { remote: 'origin', org: 'Contoso', project: '', repo: 'WEB-APP' }
     const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 1 }
 
     assert.deepEqual(await openRunFile(depsOf(call, { [base]: [noProject] }).deps, request), { opened: true, path: 'src/Api/Program.cs', line: 1 })
