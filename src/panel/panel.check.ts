@@ -142,6 +142,20 @@ const runsSnapshot = runsSnapshotOf({
 export default defineCheck({
   empty: { requests: { 'orgs.list': [] } },
   'signing-in': { requests: { 'orgs.list': [org('contoso', { state: 'signing-in', account: null })] } },
+  'signing-in-microsoft': {
+    requests: {
+      'orgs.list': [
+        org('contoso', {
+          method: 'entra',
+          state: 'signing-in',
+          account: null,
+          tokenStore: { kind: 'orca-secrets' },
+          signInUrl:
+            'https://login.microsoftonline.com/0f0e0d0c-0b0a-4908-8706-050403020100/oauth2/v2.0/authorize?client_id=6a1d3b5c-7e9f-4b2d-8c4a-1f3e5d7b9a20'
+        })
+      ]
+    }
+  },
   connected: { requests: { 'orgs.list': [org('contoso'), org('fabrikam')] } },
   work: {
     requests: {

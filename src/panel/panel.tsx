@@ -21,7 +21,7 @@ import {
 import type { OrgState, OrgStatus } from '../shared/types'
 import { acceptArm } from './arm'
 import { OrgSettings, cancelSignIn, openSettings, settingsOrg, signOut, syncSettings } from './org-settings'
-import { Setup, connecting, openSetup, reconnect, showConnectFailure } from './setup'
+import { Setup, connecting, openSetup, openSignIn, reconnect, showConnectFailure, signInNotice, syncSignIn } from './setup'
 import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, messageOf, orgs, tab, view } from './state'
 import { PipelinesTab } from './pipelines/pipelines-tab'
 import { acceptRuns, hidePipelines, syncPipelines } from './pipelines/state'
@@ -36,6 +36,9 @@ import { acceptChange, hideWork, syncWork } from './work/state'
 import { WorkTab } from './work/work-tab'
 
 type ProblemState = Exclude<OrgState, 'connected' | 'signing-in'>
+
+const ENTRA_SIGN_IN_GUIDE =
+  "Press Open sign-in page and pick the account you use for Azure DevOps. Orca asks before it opens login.microsoftonline.com. Tokens stay in Orca's encrypted secrets. Sign out deletes them. If Microsoft shows an error instead of the account picker, note its AADSTS code, press Cancel and see the README's troubleshooting."
 
 const STATE_TONE = {
   connected: 'success',
@@ -81,6 +84,7 @@ export function setup(ctx: PanelContext): () => void {
       set(orgs, payload.orgs)
       set(listing, { status: 'ready' })
       syncSettings(payload.orgs)
+      syncSignIn(payload.orgs)
     }),
     plugin.on('orgs.connectFailed', showConnectFailure),
     plugin.on('work.changed', acceptChange),
@@ -125,6 +129,8 @@ function Workspace(): OrcaNode {
 }
 
 function SigningIn({ org }: { org: OrgStatus }): OrcaNode {
+  const notice = read(signInNotice)
+  const { signInUrl } = org
   return (
     <Stack gap="sm">
       <Spinner label="Finish signing in in your browser…" />
@@ -133,7 +139,14 @@ function SigningIn({ org }: { org: OrgStatus }): OrcaNode {
           {`Pick the account you use for Azure DevOps. Tokens stay in a private Azure CLI folder: ${org.tokenStore.path}. Sign out deletes it.`}
         </Callout>
       ) : null}
+      {org.method === 'entra' ? <Callout tone="neutral">{ENTRA_SIGN_IN_GUIDE}</Callout> : null}
+      {org.method === 'entra' && notice ? <Callout tone="warning">{notice}</Callout> : null}
       <Row gap="sm">
+        {org.method === 'entra' && signInUrl ? (
+          <Button disabled={read(busy) !== null} onPress={() => openSignIn(signInUrl)}>
+            Open sign-in page
+          </Button>
+        ) : null}
         <Button variant="outline" disabled={read(busy) !== null} onPress={() => cancelSignIn(org.org)}>
           Cancel
         </Button>

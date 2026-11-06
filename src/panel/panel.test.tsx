@@ -1,4 +1,5 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
+import { OPEN_LINK_UNAVAILABLE } from '../shared/messages'
 import type { OrgStatus } from '../shared/types'
 import { closeCleanly, mountPanel, optionValuesOf, org, PROJECTS, requestsTo, SETTINGS } from './test-support'
 
@@ -678,4 +679,188 @@ test('settings opened while signing in load the projects once the org connects',
 
   await panel.post('orgs.changed', { orgs: [org('contoso')] })
   assert.equal(requestsTo(host, 'ado.projects').length, 1)
+})
+
+const SIGN_IN_URL =
+  'https://login.microsoftonline.com/0f0e0d0c-0b0a-4908-8706-050403020100/oauth2/v2.0/authorize?client_id=6a1d3b5c-7e9f-4b2d-8c4a-1f3e5d7b9a20&code_challenge=Zm9vYmFy&code_challenge_method=S256&state=st-1'
+const CLIENT_ID = '6a1d3b5c-7e9f-4b2d-8c4a-1f3e5d7b9a20'
+const APP_ID_HINT = 'Uses the app (client) ID in Settings → Azure DevOps. An admin registers the app once; the README explains how.'
+const SIGN_IN_GUIDE =
+  "Press Open sign-in page and pick the account you use for Azure DevOps. Orca asks before it opens login.microsoftonline.com. Tokens stay in Orca's encrypted secrets. Sign out deletes them. If Microsoft shows an error instead of the account picker, note its AADSTS code, press Cancel and see the README's troubleshooting."
+const NOT_OPENED = "The sign-in page wasn't opened. Press Open sign-in page to try again."
+const OPEN_SIGN_IN = { type: 'Button', text: 'Open sign-in page' }
+
+const microsoft = (over: Partial<OrgStatus> = {}) => org('contoso', { method: 'entra', tokenStore: { kind: 'orca-secrets' }, ...over })
+const startingSignIn = () => microsoft({ state: 'signing-in', account: null })
+const waitingOnBrowser = () => ({ ...startingSignIn(), signInUrl: SIGN_IN_URL })
+
+const warnings = () => panel.findAll({ type: 'Callout' }).filter(callout => callout.props?.tone === 'warning')
+
+function assertNoSignInAddress(): void {
+  for (const shown of [JSON.stringify(panel.tree()), JSON.stringify(panel.persisted), summaryText()]) {
+    assert.equal(shown.includes('login.microsoftonline.com/'), false)
+    assert.equal(shown.includes(CLIENT_ID), false)
+    assert.equal(shown.includes('code_challenge'), false)
+  }
+}
+
+test('the Microsoft option sends method entra and shows where the app ID comes from', async () => {
+  const sent: unknown[] = []
+  await open([], {
+    'orgs.connect': input => {
+      sent.push(input)
+      return startingSignIn()
+    }
+  })
+  assert.deepEqual(optionValues('Sign in with'), ['azure-cli', 'entra', 'pat'])
+  assert.equal(panel.find({ text: APP_ID_HINT }), null)
+
+  await panel.select({ label: 'Sign in with' }, 'entra')
+  assert.equal(panel.valueOf({ label: 'Sign in with' }), 'entra')
+  const hint = panel.find({ type: 'Text', text: APP_ID_HINT })
+  assert.equal(hint?.props?.muted, true)
+  assert.equal(hint?.props?.size, 'sm')
+  assert.equal(panel.find({ label: 'Personal access token' }), null)
+
+  await panel.type({ label: 'Organization' }, 'https://dev.azure.com/contoso')
+  await panel.press({ text: 'Connect' })
+  assert.deepEqual(sent, [{ orgInput: 'https://dev.azure.com/contoso', method: 'entra' }])
+
+  await panel.select({ label: 'Sign in with' }, 'pat')
+  assert.equal(panel.find({ text: APP_ID_HINT }), null)
+})
+
+test('signing in with Microsoft opens the sign-in page from a press and never shows its address', async () => {
+  const host = await open([waitingOnBrowser()])
+  host.respond('shell.openExternal', { opened: true })
+  assert.ok(summaryText().includes('Spinner "Finish signing in in your browser…"'))
+  const callout = panel.find({ type: 'Callout' })
+  assert.equal(callout?.props?.tone, 'neutral')
+  assert.equal(callout?.text, SIGN_IN_GUIDE)
+  assert.ok(callout?.text?.includes('note its AADSTS code'))
+  assert.ok(panel.find({ text: 'Cancel' }))
+  assert.equal(panel.find({ type: 'Tabs' }), null)
+  assertNoSignInAddress()
+  assert.deepEqual(host.callsOf('shell.openExternal'), [])
+
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: SIGN_IN_URL }])
+  assert.deepEqual(warnings(), [])
+  assertNoSignInAddress()
+})
+
+test('a Microsoft sign-in with no page to open yet offers only Cancel', async () => {
+  await open([startingSignIn()])
+  assert.equal(panel.find({ type: 'Callout' })?.text, SIGN_IN_GUIDE)
+  assert.equal(panel.find(OPEN_SIGN_IN), null)
+  assert.ok(panel.find({ text: 'Cancel' }))
+
+  await panel.post('orgs.changed', { orgs: [waitingOnBrowser()] })
+  assert.ok(panel.find(OPEN_SIGN_IN))
+  await panel.post('orgs.changed', { orgs: [startingSignIn()] })
+  assert.equal(panel.find(OPEN_SIGN_IN), null)
+})
+
+test('an Azure CLI sign-in keeps its own callout and offers no sign-in page', async () => {
+  await open([org('contoso', { state: 'signing-in', account: null })])
+  assert.equal(panel.find(OPEN_SIGN_IN), null)
+  assert.ok(panel.find({ type: 'Callout' })?.text?.startsWith('Pick the account you use for Azure DevOps.'))
+})
+
+test("a sign-in page Orca didn't open says so and the button stays", async () => {
+  const host = await open([waitingOnBrowser()])
+  host.respond('shell.openExternal', { opened: false, reason: 'cancelled' })
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(warnings().map(callout => callout.text), [NOT_OPENED])
+  assert.equal(panel.find(OPEN_SIGN_IN)?.disabled, false)
+
+  host.respond('shell.openExternal', { opened: false, reason: 'consent-unavailable' })
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(warnings().map(callout => callout.text), [OPEN_LINK_UNAVAILABLE])
+  assert.equal(panel.find(OPEN_SIGN_IN)?.disabled, false)
+
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(warnings(), [])
+  assert.equal(host.callsOf('shell.openExternal').length, 3)
+
+  host.respond('shell.openExternal', { opened: false, reason: 'cancelled' })
+  await panel.press(OPEN_SIGN_IN)
+  assert.equal(warnings().length, 1)
+  await panel.post('orgs.changed', { orgs: [microsoft()] })
+  assert.equal(warnings().length, 0)
+  await panel.post('orgs.changed', { orgs: [waitingOnBrowser()] })
+  assert.deepEqual(warnings(), [], 'the next attempt starts without the old notice')
+})
+
+test('a sign-in page Orca refuses to open shows the error message', async () => {
+  const host = await open([waitingOnBrowser()])
+  host.respond('shell.openExternal', () => {
+    throw hostError('action_failed', 'Orca could not open the link.')
+  })
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(warnings().map(callout => callout.text), ['Orca could not open the link.'])
+  assert.equal(panel.find(OPEN_SIGN_IN)?.disabled, false)
+  assertNoSignInAddress()
+})
+
+test('an answer about the sign-in page that arrives after the attempt ended shows nothing', async () => {
+  const host = await open([waitingOnBrowser()])
+  let answer: (result: { opened: false; reason: 'cancelled' }) => void = () => {}
+  let asked = false
+  host.respond(
+    'shell.openExternal',
+    () =>
+      new Promise(resolve => {
+        asked = true
+        answer = resolve
+      })
+  )
+  const pressing = panel.press(OPEN_SIGN_IN)
+  for (let turn = 0; turn < 20 && !asked; turn++) await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(asked, true)
+  const ending = panel.post('orgs.changed', { orgs: [microsoft({ state: 'disconnected', account: null, message: 'Sign-in was cancelled.' })] })
+  answer({ opened: false, reason: 'cancelled' })
+  await Promise.all([pressing, ending])
+  await panel.post('orgs.changed', { orgs: [waitingOnBrowser()] })
+  assert.deepEqual(warnings(), [])
+})
+
+test('Open sign-in page is disabled while Cancel is working', async () => {
+  let release: (status: OrgStatus) => void = () => {}
+  await open([waitingOnBrowser()], { 'orgs.cancel': () => new Promise<OrgStatus>(resolve => (release = resolve)) })
+  const cancelling = panel.press({ text: 'Cancel' })
+  for (let turn = 0; turn < 20 && panel.find(OPEN_SIGN_IN)?.disabled !== true; turn++) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  assert.equal(panel.find(OPEN_SIGN_IN)?.disabled, true)
+  release(microsoft({ state: 'disconnected', message: 'Sign-in was cancelled.' }))
+  await cancelling
+})
+
+test("a connected Microsoft org shows signed in as its account and its tokens in Orca's secrets", async () => {
+  await open([microsoft()], settingsRequests)
+  assert.ok(panel.find({ text: 'signed in as ada@contoso.com' }))
+  assert.equal(panel.find({ type: 'Badge' })?.text, 'Connected')
+  assert.equal(panel.find(OPEN_SIGN_IN), null)
+  await panel.press(SETTINGS)
+  assert.ok(panel.find({ text: "Tokens: Orca's encrypted secrets" }))
+})
+
+test('Reconnect on an expired Microsoft org connects again without the setup form', async () => {
+  const host = await open([microsoft({ state: 'expired', message: 'Your sign-in expired. Reconnect to continue.' })], {
+    'orgs.connect': () => startingSignIn()
+  })
+  assert.equal(panel.find({ type: 'Callout' })?.props?.tone, 'warning')
+  await panel.press({ text: 'Reconnect' })
+  assert.deepEqual(
+    requestsTo(host, 'orgs.connect').map(call => call.input),
+    [{ orgInput: 'https://dev.azure.com/contoso', method: 'entra' }]
+  )
+  assert.equal(panel.find({ label: 'Organization' }), null)
+
+  host.respond('shell.openExternal', { opened: true })
+  await panel.post('orgs.changed', { orgs: [waitingOnBrowser()] })
+  await panel.press(OPEN_SIGN_IN)
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: SIGN_IN_URL }])
 })
