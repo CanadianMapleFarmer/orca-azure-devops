@@ -94,6 +94,12 @@ export const DIFF_BINARY = "Binary file; it isn't shown here."
 export const DIFF_TOO_LARGE = 'This file is too large to show here. Check out the branch in Orca to see it.'
 export const DIFF_TOO_MANY = 'Too many changes to show here. Check out the branch in Orca to see this diff.'
 export const DIFF_NO_TEXT_CHANGES = 'No text changes in this file.'
+export const REVIEW_PR_GONE = "That pull request no longer exists, or you can't see it."
+export const REVIEW_TRIMMED = 'Some comments were left out to keep this view small. Open the pull request in Azure DevOps to see them all.'
+export const DIFF_NO_BASE =
+  "Azure DevOps hasn't worked out this pull request's base yet, so the diff can't be shown. Refresh in a moment, or check the branch out in Orca."
+export const REVIEW_FILES_CAPPED = 'More than 1,000 files changed. Open the pull request in Azure DevOps, or check it out in Orca, to see them all.'
+export const FILE_NOT_IN_PR = "That file isn't changed in this pull request any more."
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -106,11 +112,16 @@ export const MALFORMED = {
   build: 'Azure DevOps returned an unexpected pipeline run response.',
   timeline: 'Azure DevOps returned an unexpected run timeline.',
   log: 'Azure DevOps returned an unexpected log response.',
-  approval: 'Azure DevOps returned an unexpected approval response.'
+  approval: 'Azure DevOps returned an unexpected approval response.',
+  review: 'Azure DevOps returned an unexpected pull request review response.'
 } as const
 
 export function diffCut(lines: number): string {
   return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
+}
+
+export function renamedFrom(path: string): string {
+  return `Renamed from ${path}.`
 }
 
 export function noBoardNamed(name: string): string {

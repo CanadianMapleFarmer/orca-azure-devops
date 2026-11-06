@@ -32,6 +32,8 @@ export interface RawPullRequest {
   reviewers?: RawReviewer[]
   autoCompleteSetBy?: { id: string }
   completionOptions?: { deleteSourceBranch?: boolean }
+  description?: string
+  forkSource?: unknown
 }
 
 export interface PrCriteria {

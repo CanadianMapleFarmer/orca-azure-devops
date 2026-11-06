@@ -26,6 +26,8 @@ import { registerPrHandlers } from './prs/handlers'
 import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
 import { prShareSource } from './prs/share-source'
+import { registerReviewHandlers } from './reviews/handlers'
+import { createReviews } from './reviews/service'
 import { createChannelStore } from './share/channels'
 import { channelDestination, copyDestination, reviewersDestination } from './share/destinations'
 import { registerShareHandlers } from './share/handlers'
@@ -77,6 +79,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       prs.onOrgs(orgs)
       pipelines.onOrgs(orgs)
       runViews.onOrgs(orgs)
+      reviews.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
     now: Date.now
@@ -127,6 +130,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     changed: change => orca.panels.post('runs.viewChanged', change),
     now: Date.now
   })
+  const reviews = createReviews({ http, orgs: () => connections.list(), now: Date.now })
   const prActions = createPrActions({ http, prs, settings: prSettings })
   const runActions = createRunActions({
     http,
@@ -180,6 +184,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   registerOrgHandlers(orca, connections)
   registerWorkHandlers(orca, { boards, http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
+  registerReviewHandlers(orca, { reviews })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,
@@ -195,5 +200,6 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   prs.onOrgs(orgs)
   pipelines.onOrgs(orgs)
   runViews.onOrgs(orgs)
+  reviews.onOrgs(orgs)
   bar.setOrgs(orgs)
 }

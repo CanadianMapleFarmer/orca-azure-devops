@@ -25,6 +25,7 @@ import {
   type FakePipelines
 } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
+import { fakeReviews, isThreads } from './reviews/fake-reviews'
 import { drain, withWorker } from './test-support'
 
 function running(pattern: string): boolean {
@@ -718,6 +719,34 @@ test('deactivate aborts a pull request load in flight, and nothing is posted or 
       assert.deepEqual(prsChanged(w.posts), [])
       const shown = host.callsOf('statusBar.update').map(call => (call as { text?: string }).text)
       assert.ok(shown.every(text => text === 'ADO'), JSON.stringify(shown))
+    })
+  })
+})
+
+test('reviews.open and reviews.diff answer through the handlers', async () => {
+  const ado = fakeReviews()
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host: prsHost() }, async w => {
+      const key = { org: 'contoso', projectId: PROJECT, repoId: REPO, prId: 4110 }
+      const review = await w.request('reviews.open', key)
+      assert.deepEqual([review.pr.prId, review.myVote, review.threadCount, review.files.length], [4110, 0, 3, 5])
+      assert.deepEqual(review.threads.map(thread => thread.id), [101, 103, 102])
+      const diff = await w.request('reviews.diff', { ...key, path: '/src/auth/redirect.ts' })
+      assert.deepEqual(diff.lines, { old: 60, new: 64 })
+      assert.match(diff.text ?? '', /^@@ -37,10 \+37,14 @@\n/)
+      await assert.rejects(
+        w.request('reviews.diff', { ...key, path: '/src/auth/missing.ts' }),
+        adoErrorWith('bad_request', 400, "That file isn't changed in this pull request any more.")
+      )
+      await assert.rejects(w.request('reviews.open', { ...key, org: 'fabrikam' }), adoErrorWith('unauthorized', 401, 'Connect this organization first.'))
+
+      const hung = ado.hang(isThreads)
+      const answer = w.request('reviews.open', key).then(() => null, (error: unknown) => error)
+      assert.ok(await until(() => hung.length > 0), 'the threads read is in flight')
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.ok(adoErrorWith('unauthorized', 401, 'Connect this organization first.')(await answer))
+      assert.equal(hung[0].signal?.aborted, true)
+      assert.equal(w.refusals.length, 0)
     })
   })
 })
