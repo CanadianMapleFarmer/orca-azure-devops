@@ -222,6 +222,7 @@ const ERROR_CASES: ErrorCase[] = [
   { error: 'invalid_request', codes: [90095], kind: 'refused', message: ENTRA.consent },
   { error: 'consent_required', kind: 'refused', message: ENTRA.consent },
   { error: 'access_denied', kind: 'refused', message: ENTRA.browserCancelled },
+  { error: 'access_denied', codes: [65004], kind: 'refused', message: ENTRA.browserCancelled },
   { error: 'invalid_request', codes: [65004], kind: 'refused', message: ENTRA.browserCancelled },
   { error: 'unauthorized_client', codes: [700016], kind: 'config', message: ENTRA.appNotFound },
   { error: 'invalid_request', codes: [50011], kind: 'config', message: ENTRA.redirect },
@@ -238,8 +239,10 @@ const ERROR_CASES: ErrorCase[] = [
   { error: 'invalid_grant', codes: [70008], kind: 'needs_sign_in', message: entraFailed('AADSTS70008') },
   { error: 'invalid_grant', codes: [700082], kind: 'needs_sign_in', message: entraFailed('AADSTS700082') },
   { error: 'invalid_grant', codes: [700084], kind: 'needs_sign_in', message: entraFailed('AADSTS700084') },
-  { error: 'server_error', kind: 'refused', message: entraFailed('server_error') },
-  { error: 'temporarily_unavailable', codes: [50196], kind: 'refused', message: entraFailed('AADSTS50196') },
+  { error: 'server_error', kind: 'unreachable', message: ENTRA.unreachable },
+  { error: 'temporarily_unavailable', kind: 'unreachable', message: ENTRA.unreachable },
+  { error: 'temporarily_unavailable', codes: [50196], kind: 'unreachable', message: ENTRA.unreachable },
+  { error: 'invalid_request', codes: [50105], kind: 'refused', message: entraFailed('AADSTS50105') },
   { error: 'access_denied', codes: [65001], kind: 'refused', message: ENTRA.consent },
   { error: 'access_denied', codes: [50105], kind: 'refused', message: entraFailed('AADSTS50105') }
 ]
@@ -317,7 +320,8 @@ test('an answer without tokens or an id token is malformed, a redirect is malfor
     tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com' }),
     tokenAnswer({ oid: OID_ADA, upn: 'ada@contoso.com', refresh: 'rt-ada-1', idToken: false }),
     json([complete]),
-    json({ ...complete }, 500),
+    json({ ...complete }, 400),
+    json({ ...complete, expires_in: '9'.repeat(309) }),
     new Response('<html>Sign in</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
     new Response(null, { status: 302, headers: { location: 'https://example.invalid/' } }),
     new Response(JSON.stringify(complete), { status: 307, headers: { location: 'https://example.invalid/' } })
@@ -353,6 +357,39 @@ test('an answer without tokens or an id token is malformed, a redirect is malfor
   refreshDeadline.abort(timeoutReason())
   assert.equal((await entraFailure(pendingRefresh)).kind, 'unreachable')
   assert.equal(entra.calls.length, before + 2)
+})
+
+test('an overloaded Microsoft answer is unreachable unless a specific row applies', async () => {
+  const unknown = { error: 'invalid_request', error_description: `AADSTS50105: ${DESCRIPTION_NOISE}` }
+  const overloaded: [string, Response][] = [
+    ['503 with an unknown error', json(unknown, 503)],
+    ['429 with an unknown error', json(unknown, 429)],
+    ['500 with an unknown error', json(unknown, 500)],
+    ['502 with an HTML body', new Response('<html>Bad gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } })],
+    ['503 with no body', new Response(null, { status: 503 })],
+    ['429 with a token-shaped body', json({ access_token: ADA_TOKEN, refresh_token: 'rt-ada-1', expires_in: 3600 }, 429)]
+  ]
+  const entra = fakeEntra()
+  entra.answer('authorization_code', ...overloaded.map(([, reply]) => reply.clone()))
+  entra.answer('refresh_token', ...overloaded.map(([, reply]) => reply.clone()))
+  for (const [label] of overloaded) {
+    for (const failed of [await entraFailure(redeem(entra.fetch)), await entraFailure(refresh(entra.fetch))])
+      assert.equal(failed.kind, 'unreachable', label)
+  }
+
+  const specific = fakeEntra()
+  specific.answer(
+    'refresh_token',
+    json({ error: 'invalid_grant', error_codes: [70008] }, 503),
+    json({ error: 'invalid_request', error_codes: [65001] }, 500),
+    json(unknown, 400),
+    new Response('<html>Bad request</html>', { status: 400, headers: { 'content-type': 'text/html' } })
+  )
+  assert.equal((await entraFailure(refresh(specific.fetch))).kind, 'needs_sign_in')
+  assert.equal((await entraFailure(refresh(specific.fetch))).message, ENTRA.consent)
+  const refused = await entraFailure(refresh(specific.fetch))
+  assert.deepEqual({ kind: refused.kind, message: refused.message, code: refused.code }, { kind: 'refused', message: entraFailed('AADSTS50105'), code: 'AADSTS50105' })
+  assert.equal((await entraFailure(refresh(specific.fetch))).kind, 'malformed')
 })
 
 test('a token request follows the caller\'s signal as well as its own timeout, and a caller abort is not reported', async () => {

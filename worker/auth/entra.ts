@@ -34,6 +34,7 @@ export type Timeout = (ms: number) => AbortSignal
 
 type Body = Record<string, unknown>
 type Match = (error: string, aadsts: string | null) => boolean
+type Rule = { match: Match; kind: EntraErrorKind; message: string | null }
 
 const VERIFIER_BYTES = 32
 const STATE_BYTES = 16
@@ -48,7 +49,9 @@ function anyOf(...values: string[]): Match {
 
 const declinedConsent = anyOf('AADSTS65004')
 
-const RULES: readonly { match: Match; kind: EntraErrorKind; message: string | null }[] = [
+const OVERLOADED: Rule = { match: anyOf('temporarily_unavailable', 'server_error'), kind: 'unreachable', message: ENTRA.unreachable }
+
+const RULES: readonly Rule[] = [
   { match: anyOf('AADSTS65001', 'AADSTS90094', 'AADSTS90095', 'consent_required'), kind: 'refused', message: ENTRA.consent },
   {
     match: (error, aadsts) => (error === 'access_denied' && aadsts === null) || declinedConsent(error, aadsts),
@@ -64,7 +67,8 @@ const RULES: readonly { match: Match; kind: EntraErrorKind; message: string | nu
     match: anyOf('invalid_grant', 'interaction_required', 'AADSTS50076', 'AADSTS50079', 'AADSTS50173', 'AADSTS70008', 'AADSTS700082', 'AADSTS700084'),
     kind: 'needs_sign_in',
     message: null
-  }
+  },
+  OVERLOADED
 ]
 
 export function base64Url(bytes: Uint8Array): string {
@@ -158,9 +162,10 @@ async function tokenRequest(
   )
   if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) throw malformed()
   const body = parseObject(await reach(signal, () => res.text()))
-  if (!body) throw malformed()
-  if (typeof body.error === 'string') throw classify(body.error, aadstsOf(body))
-  if (!res.ok) throw malformed()
+  const overloaded = res.status >= 500 || res.status === 429
+  if (typeof body?.error === 'string') throw classify(body.error, aadstsOf(body), overloaded)
+  if (overloaded) throw new EntraError('unreachable', ENTRA.unreachable)
+  if (!body || !res.ok) throw malformed()
   return body
 }
 
@@ -196,9 +201,9 @@ function idTokenClaims(idToken: unknown): TokenClaims | null {
   return claims
 }
 
-function classify(error: string, aadsts: string | null): EntraError {
+function classify(error: string, aadsts: string | null, overloaded = false): EntraError {
   const code = aadsts ?? (OAUTH_ERROR.test(error) ? error : null)
-  const rule = RULES.find(({ match }) => match(error, aadsts))
+  const rule = RULES.find(({ match }) => match(error, aadsts)) ?? (overloaded ? OVERLOADED : undefined)
   return new EntraError(rule?.kind ?? 'refused', rule?.message ?? entraFailed(code), code)
 }
 
@@ -222,8 +227,8 @@ function nonEmpty(value: unknown): string | null {
 }
 
 function seconds(value: unknown): number | null {
-  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null
-  return typeof value === 'string' && DIGITS.test(value) ? Number(value) : null
+  const n = typeof value === 'string' && DIGITS.test(value) ? Number(value) : value
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null
 }
 
 function malformed(): EntraError {
