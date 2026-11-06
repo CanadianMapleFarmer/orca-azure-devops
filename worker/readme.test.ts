@@ -298,3 +298,13 @@ test('the pending live checks name the Microsoft sign-in and network checks', as
     assert.match(pending, topic)
   }
 })
+
+test('the pending Microsoft checks name the sign-in details, Reconnect and the client organisation', async () => {
+  const text = await readme()
+  const start = text.indexOf('\nMicrosoft sign-in and network:\n')
+  assert.ok(start >= 0, 'the pending live checks have a Microsoft sign-in and network list')
+  const pending = text.slice(start, text.indexOf('\n## License'))
+  for (const topic of [/`signed in as <account>`/, /browser tab/, /Reconnect[^\n]*needs the browser again/, /client organisation[^\n]*Sign in with Microsoft/]) {
+    assert.match(pending, topic)
+  }
+})

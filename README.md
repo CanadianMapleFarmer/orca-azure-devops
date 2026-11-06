@@ -648,16 +648,17 @@ Microsoft sign-in and network:
 
 - The admin guide against the real portal labels: every label it quotes, and whether step 5 is needed.
 - Orca's consent dialog for `login.microsoftonline.com`, and how often it asks.
-- The account picker on every sign-in.
+- The account picker on every sign-in, `signed in as <account>` once it finishes, and the browser tab's page.
 - Safari, Chrome and Firefox reaching `http://localhost:<port>` while the plugin listens on `127.0.0.1`. A browser that tries only `::1` wouldn't reach it.
 - Whether Allow public client flows set to No gives `AADSTS7000218`, and which code a redirect under Web gives.
 - For each code in the troubleshooting, whether Microsoft sends it back to the plugin or shows it on its own page.
 - A renewal after the access token's lifetime, and after an Orca restart.
-- A wrong-account refusal.
+- A wrong-account refusal, naming both accounts.
 - Cancel and the 5-minute timeout, with `lsof` showing no listener afterwards.
-- Sign out.
+- Sign out, then Reconnect, which needs the browser again.
 - A proxy, only on a network that has one.
-- Screenshots of the panel in both themes.
+- On the client organisation, read-only: Sign in with Microsoft with the client tenant's app, when one exists.
+- Screenshots of the Work, PRs and Pipelines views in both themes, taken with Orca minimised.
 
 ## License
 
