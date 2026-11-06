@@ -127,7 +127,7 @@ All of these are verified in the research notes unless marked otherwise.
 
 ### 5.1 Overall shape
 - **One plugin** with a **sidebar panel** (native components) of four tabs: **Work · Pipelines · PRs · Wiki**. It is the hub for lists, status and quick actions.
-- **Full-width tabs** for the three rich views: the **team board**, the **live pipeline run** and **wiki editing**. They are custom editors (isolated frames) opened in one click with `editor.open`, backed by small plugin-managed files whose location is the Boards plan's first spike.
+- **Full-width tabs** for the two rich views: the **team board** and the **live pipeline run**. They are custom editors (isolated frames) opened in one click with `editor.open`, backed by small plugin-managed files whose location is the Boards plan's first spike. **Wiki editing** opens a Markdown draft in Orca's own editor instead (see §6).
 - **Status bar item** (always-on worker). It shows the connection state and the counts that need the user: failed runs, approvals waiting, PRs to review. Its tone follows the worst of those.
 - **Everything in v1 targets Orca 1.4.248.** There is no separate enrichment release.
 
@@ -261,7 +261,7 @@ All of these are verified in the research notes unless marked otherwise.
 - **Notification set:** failure, completion of a watched run, approval waiting, review requested, new comment on my PR.
 - **Default branch template** `feature/<id>-<slug>`.
 - **PR code review** uses Orca's native diff on a checked-out worktree for depth; the in-panel diff is read-only.
-- **Wiki editing** happens in the plugin's own full-tab editor (Markdown source and preview, Publish), not on a file in the user's repo. Publish and conflict handling run in the worker. The backing-file location follows the Boards plan's spike.
+- **Wiki editing** happens in Orca's own editor, on a Markdown draft in the git-ignored `.orca-ado/wiki/` folder of a workspace, never on a tracked file in the user's repo. Publish and conflict handling live in the sidebar's Wiki tab and run in the worker. Decided by the user on 2026-11-06, replacing the earlier full-tab editor.
 - **Horizontal swimlanes start collapsed** on the full board.
 - **The plugin id** must not start with `orca-`. Something like `azure-devops`, with display name "Azure DevOps", is the builder's choice.
 
