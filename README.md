@@ -485,7 +485,7 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `entraTenant` (Microsoft sign-in: tenant): a tenant ID or domain, used only when an organization's tenant can't be found. Leave it empty for any work or school account.
 - `httpsProxy` (HTTPS proxy): an `http://` or `https://` proxy address for the plugin's traffic, like `http://proxy.example.com:8080`. Proxies that need a password aren't supported. Empty by default.
 - `caCertificatesFile` (Extra CA certificates file): a PEM file of certificates to trust, for networks that inspect TLS. Empty by default. A change reaches new connections only; connections already open keep the certificates they started with.
-- `useSystemCertificates` (Trust the system's certificates): off by default. Like the certificates file, a change reaches new connections only.
+- `useSystemCertificates` (Trust the system's certificates): also trust the certificates your operating system trusts. Off by default. Like the certificates file, a change reaches new connections only.
 
 ## Development
 

@@ -267,6 +267,31 @@ test("an Orca without the proxy or certificate functions says it can't apply tho
   assert.equal(NETWORK.caUnsupported, "This version of Orca can't apply the certificate settings, so they're ignored.")
 })
 
+test('an apply that throws leaves notes saying so and no proxy in use', async () => {
+  const { ports } = fakePorts()
+  const state = { failing: false }
+  const { network } = mount({
+    ...ports,
+    setProxy: env => {
+      if (state.failing) throw new Error('setGlobalProxyFromEnv refused http://u:p@proxy.example.com:8080')
+      return ports.setProxy!(env)
+    }
+  })
+  await network.apply({ ...OFF, httpsProxy: PROXY })
+  assert.deepEqual(network.notes(), [NETWORK.proxyInUse])
+  assert.deepEqual(network.childEnv(), proxyEnv(PROXY))
+
+  state.failing = true
+  await assert.rejects(network.apply({ ...OFF, httpsProxy: OTHER_PROXY }))
+  assert.deepEqual(network.notes(), [NETWORK.applyFailed])
+  assert.deepEqual(network.childEnv(), {})
+
+  state.failing = false
+  await network.apply({ ...OFF, httpsProxy: OTHER_PROXY })
+  assert.deepEqual(network.notes(), [NETWORK.proxyInUse])
+  assert.deepEqual(network.childEnv(), proxyEnv(OTHER_PROXY))
+})
+
 function fakeSettings(values: Record<string, JsonValue>) {
   const listeners: ((change: { key: string }) => void)[] = []
   const state = { failing: false }

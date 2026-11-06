@@ -119,8 +119,13 @@ export function createNetwork(ports: NetworkPorts, log: (message: string) => voi
 
   async function applyNow(settings: NetworkSettings): Promise<void> {
     const problems: string[] = []
-    applyProxy(settings.httpsProxy, problems)
-    await applyCas(settings, problems)
+    try {
+      applyProxy(settings.httpsProxy, problems)
+      await applyCas(settings, problems)
+    } catch (error) {
+      notes = [NETWORK.applyFailed]
+      throw error
+    }
     for (const problem of problems) log(problem)
     notes = proxyUrl ? [...problems, NETWORK.proxyInUse] : problems
   }
