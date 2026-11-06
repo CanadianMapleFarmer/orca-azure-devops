@@ -145,6 +145,67 @@ test('activate shows the status bar item and the status command reports no orgs'
   })
 })
 
+const NOT_CONNECTED = 'Not connected. Open the Azure DevOps panel to connect.'
+const PROXY_INVALID = "The HTTPS proxy setting isn't an http:// or https:// address, so it's ignored."
+const CA_UNREADABLE = "Couldn't read the extra CA certificates file, so it's ignored."
+const CA_INVALID = "The extra CA certificates file isn't a PEM file of certificates, so it's ignored."
+
+function networkGlobals() {
+  return {
+    httpAgent: process.getBuiltinModule('node:http').globalAgent,
+    httpsAgent: process.getBuiltinModule('node:https').globalAgent,
+    dispatcher: (globalThis as Record<symbol, unknown>)[Symbol.for('undici.globalDispatcher.1')],
+    cas: process.getBuiltinModule('node:tls').getCACertificates('default')
+  }
+}
+
+async function withNetworkGlobalsUntouched(run: () => Promise<void>): Promise<void> {
+  const before = networkGlobals()
+  await run()
+  const after = networkGlobals()
+  assert.equal(after.httpAgent, before.httpAgent, 'the http agent was replaced')
+  assert.equal(after.httpsAgent, before.httpsAgent, 'the https agent was replaced')
+  assert.equal(after.dispatcher, before.dispatcher, 'the fetch dispatcher was replaced')
+  assert.deepEqual(after.cas, before.cas, 'the trusted certificates changed')
+}
+
+test('the status command reports an ignored proxy setting', async () => {
+  await withNetworkGlobalsUntouched(async () => {
+    await withWorker(worker, { host: mockHost({ capabilities: CAPABILITIES, settings: { httpsProxy: 'ftp://proxy.example.com' } }) }, async w => {
+      assert.equal(await w.command('status'), `${NOT_CONNECTED}\n${PROXY_INVALID}`)
+      assert.deepEqual(w.logs, [PROXY_INVALID])
+      assert.equal(w.refusals.length, 0)
+    })
+  })
+})
+
+test('the status command reports a CA certificates file that is a folder, missing, too big or not certificates', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-ca-'))
+  try {
+    const huge = path.join(dir, 'huge.pem')
+    const notes = path.join(dir, 'notes.txt')
+    await fs.writeFile(huge, '#'.repeat(1024 * 1024 + 1))
+    await fs.writeFile(notes, 'not a certificate')
+    const cases = [
+      { file: dir, message: CA_UNREADABLE },
+      { file: path.join(dir, 'missing.pem'), message: CA_UNREADABLE },
+      { file: huge, message: CA_INVALID },
+      { file: notes, message: CA_INVALID }
+    ]
+    await withNetworkGlobalsUntouched(async () => {
+      for (const { file, message } of cases) {
+        await withWorker(worker, { host: mockHost({ capabilities: CAPABILITIES, settings: { caCertificatesFile: file } }) }, async w => {
+          assert.equal(await w.command('status'), `${NOT_CONNECTED}\n${message}`, file)
+          assert.deepEqual(w.logs, [message], file)
+          assert.ok(!JSON.stringify(w.logs).includes(dir), 'the path stays out of the log')
+        })
+      }
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('orgs handlers connect, sign out and remove an org', async () => {
   await withFakeFetch(async () => {
     await withWorker(worker, {}, async w => {

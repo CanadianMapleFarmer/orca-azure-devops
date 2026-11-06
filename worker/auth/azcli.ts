@@ -54,6 +54,7 @@ export function createAzCliProvider(deps: {
   run: RunCommand
   home: string
   fs: Pick<typeof import('node:fs/promises'), 'mkdir' | 'rm' | 'chmod' | 'stat'>
+  extraEnv?: () => Record<string, string>
 }): AzCliProvider {
   const { azPath, run, home, fs } = deps
   const { profileDir, hasProfile, signOut } = createAzProfiles({ home, fs })
@@ -67,7 +68,8 @@ export function createAzCliProvider(deps: {
       ...env,
       AZURE_CONFIG_DIR: dir,
       AZURE_CORE_COLLECT_TELEMETRY: 'false',
-      AZURE_CORE_ONLY_SHOW_ERRORS: 'true'
+      AZURE_CORE_ONLY_SHOW_ERRORS: 'true',
+      ...deps.extraEnv?.()
     }
   }
 

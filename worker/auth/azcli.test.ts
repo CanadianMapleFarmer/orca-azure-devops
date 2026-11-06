@@ -13,7 +13,7 @@ const TOKEN_JSON = '{"accessToken":"tok","expires_on":1793710000,"tokenType":"Be
 type RunOptions = Parameters<RunCommand>[2]
 type FsPort = Parameters<typeof createAzCliProvider>[0]['fs']
 
-function harness(reply: Partial<RunResult> | Error = {}, profile: 'directory' | 'file' | 'missing' = 'directory') {
+function harness(reply: Partial<RunResult> | Error = {}, profile: 'directory' | 'file' | 'missing' = 'directory', extraEnv?: () => Record<string, string>) {
   const events: string[] = []
   const runs: { file: string; args: string[]; opts: RunOptions }[] = []
   const run: RunCommand = async (file, args, opts) => {
@@ -43,7 +43,7 @@ function harness(reply: Partial<RunResult> | Error = {}, profile: 'directory' | 
       return { isDirectory: () => profile === 'directory' }
     }) as unknown as FsPort['stat']
   }
-  const provider = createAzCliProvider({ azPath: AZ, run, home: HOME, fs })
+  const provider = createAzCliProvider({ azPath: AZ, run, home: HOME, fs, extraEnv })
   return { provider, runs, events, mkdirs, chmods }
 }
 
@@ -108,6 +108,25 @@ test('login passes the abort signal to az', async () => {
   const controller = new AbortController()
   await provider.login('contoso', 't1', controller.signal)
   assert.equal(runs[0].opts.signal, controller.signal)
+})
+
+test('az runs with the proxy setting in its environment', async () => {
+  const proxy = { HTTPS_PROXY: 'http://proxy.example.com:8080', NO_PROXY: 'localhost,127.0.0.1,::1' }
+  let extra: Record<string, string> = proxy
+  const { provider, runs } = harness({ stdout: TOKEN_JSON }, 'directory', () => extra)
+  await provider.login('contoso', 't1')
+  await provider.getToken('contoso', 't1')
+  extra = {}
+  await provider.getToken('contoso', 't1')
+
+  const dir = path.join(HOME, '.orca-azure-devops', 'az', 'contoso')
+  for (const run of runs.slice(0, 2)) {
+    assert.equal(run.opts.env?.HTTPS_PROXY, proxy.HTTPS_PROXY)
+    assert.equal(run.opts.env?.NO_PROXY, proxy.NO_PROXY)
+    assert.equal(run.opts.env?.AZURE_CONFIG_DIR, dir)
+  }
+  assert.equal(runs[2].opts.env?.HTTPS_PROXY, process.env.HTTPS_PROXY)
+  assert.equal(runs[2].opts.env?.NO_PROXY, process.env.NO_PROXY)
 })
 
 test('login gives az five minutes', async () => {

@@ -200,6 +200,17 @@ export const REDIRECT_PAGE = {
   notHere: 'Nothing here.'
 } as const
 
+export const NETWORK = {
+  proxyInvalid: "The HTTPS proxy setting isn't an http:// or https:// address, so it's ignored.",
+  proxyPassword: "Proxy passwords aren't supported, so the HTTPS proxy setting is ignored.",
+  caUnreadable: "Couldn't read the extra CA certificates file, so it's ignored.",
+  caInvalid: "The extra CA certificates file isn't a PEM file of certificates, so it's ignored.",
+  proxyInUse: 'Using the HTTPS proxy from Settings.',
+  proxyUnsupported: "This version of Orca can't apply the HTTPS proxy setting, so it's ignored.",
+  caUnsupported: "This version of Orca can't apply the certificate settings, so they're ignored.",
+  applyFailed: "Couldn't apply the network settings."
+} as const
+
 export function diffCut(lines: number): string {
   return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
 }

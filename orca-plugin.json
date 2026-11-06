@@ -176,6 +176,29 @@
         "default": "",
         "placeholder": "your-tenant.onmicrosoft.com",
         "maxLength": 253
+      },
+      {
+        "key": "httpsProxy",
+        "title": "HTTPS proxy",
+        "description": "Send the plugin's Azure DevOps and Microsoft traffic through this proxy, like http://proxy.example.com:8080. Proxies that need a password aren't supported.",
+        "type": "string",
+        "default": "",
+        "placeholder": "http://proxy.example.com:8080"
+      },
+      {
+        "key": "caCertificatesFile",
+        "title": "Extra CA certificates file",
+        "description": "A PEM file of certificates to trust, for networks that inspect TLS.",
+        "type": "string",
+        "default": "",
+        "placeholder": "/path/to/ca-certificates.pem"
+      },
+      {
+        "key": "useSystemCertificates",
+        "title": "Trust the system's certificates",
+        "description": "Also trust the certificates your operating system trusts.",
+        "type": "boolean",
+        "default": false
       }
     ],
     "hooks": [

@@ -66,6 +66,25 @@ test('statusText tells the user how to connect when there are no orgs', () => {
   assert.equal(statusText([]), 'Not connected. Open the Azure DevOps panel to connect.')
 })
 
+test('status text lists network notes after the org lines, and after the not-connected line', () => {
+  const notes = ["Couldn't read the extra CA certificates file, so it's ignored.", 'Using the HTTPS proxy from Settings.']
+  assert.equal(
+    statusText([org('contoso', 'connected'), org('fabrikam', 'expired')], new Map([['contoso', { toReview: 2 }]]), notes),
+    [
+      'contoso — connected as ada@contoso.com',
+      'fabrikam — expired',
+      '2 pull requests to review: contoso 2',
+      "Couldn't read the extra CA certificates file, so it's ignored.",
+      'Using the HTTPS proxy from Settings.'
+    ].join('\n')
+  )
+  assert.equal(
+    statusText([], undefined, notes),
+    "Not connected. Open the Azure DevOps panel to connect.\nCouldn't read the extra CA certificates file, so it's ignored.\nUsing the HTTPS proxy from Settings."
+  )
+  assert.equal(statusText([], undefined, []), statusText([]))
+})
+
 function counts(entries: Record<string, number>): OrgCounts {
   return new Map(Object.entries(entries).map(([name, toReview]) => [name, { toReview }]))
 }

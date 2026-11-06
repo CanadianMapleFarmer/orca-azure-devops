@@ -1,6 +1,8 @@
 import { existsSync, readdirSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
+import * as nodeHttp from 'node:http'
 import * as os from 'node:os'
+import * as tls from 'node:tls'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
@@ -9,6 +11,8 @@ import { closeAllListeners, listenForRedirect } from './auth/loopback'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
+import { NETWORK } from './messages'
+import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
 import { registerOrgHandlers } from './org-handlers'
 import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
@@ -62,11 +66,40 @@ export function deactivate(): Promise<void> {
   return stopAllCommands(SHUTDOWN)
 }
 
+async function readUpTo(file: string, maxBytes: number): Promise<string> {
+  if (!(await fs.stat(file)).isFile()) throw new Error(NETWORK.caUnreadable)
+  const handle = await fs.open(file, 'r')
+  try {
+    const buffer = Buffer.alloc(maxBytes)
+    let filled = 0
+    while (filled < maxBytes) {
+      const { bytesRead } = await handle.read(buffer, filled, maxBytes - filled, null)
+      if (bytesRead === 0) break
+      filled += bytesRead
+    }
+    return buffer.toString('utf8', 0, filled)
+  } finally {
+    await handle.close()
+  }
+}
+
+function networkPorts(): NetworkPorts {
+  const ports: NetworkPorts = { readFile: readUpTo }
+  if (typeof nodeHttp.setGlobalProxyFromEnv === 'function') ports.setProxy = env => nodeHttp.setGlobalProxyFromEnv(env)
+  if (typeof tls.getCACertificates === 'function' && typeof tls.setDefaultCACertificates === 'function') {
+    ports.getCACertificates = type => tls.getCACertificates(type)
+    ports.setDefaultCACertificates = certs => tls.setDefaultCACertificates(certs)
+  }
+  return ports
+}
+
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const activatedAt = Date.now()
+  const log = (message: string) => orca.log(message)
+  const network = createNetwork(networkPorts(), log)
+  await watchNetwork(orca.settings, network, log)
   const home = os.homedir()
   const bar = createStatusBar(state => void orca.host.call('statusBar.update', { id: 'status', ...state }).catch(() => {}))
-  const log = (message: string) => orca.log(message)
   const prSettings = await watchPrSettings(orca.settings, log)
   const pipelineSettings = await watchPipelineSettings(orca.settings, log)
   const entraSettings = await watchSettings(orca.settings, log)
@@ -82,7 +115,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     az: async () => {
       const override = await orca.settings.get('azPath')
       const azPath = findExecutable('az', { override: typeof override === 'string' ? override : undefined, pathEnv: process.env.PATH })
-      return azPath ? createAzCliProvider({ azPath, run: runCommand, home, fs }) : null
+      return azPath ? createAzCliProvider({ azPath, run: runCommand, home, fs, extraEnv: () => network.childEnv() }) : null
     },
     azProfiles: createAzProfiles({ home, fs }),
     entra: createEntraProvider({
@@ -235,7 +268,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   registerShareHandlers(orca, share)
   registerVisibilityHandler(orca, { boards, prs, pipelines, runViews })
-  orca.commands.register('status', async () => statusText(await connections.list(), bar.counts()))
+  orca.commands.register('status', async () => statusText(await connections.list(), bar.counts(), network.notes()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
   prs.onOrgs(orgs)
