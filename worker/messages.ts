@@ -90,6 +90,10 @@ export const RUN_CUT = 'Some steps were left out to keep this run view small.'
 export const NOT_A_FILE_PATH = "That isn't a file path Orca can open."
 export const GIT_REMOTES_FAILED = "Couldn't read the git remotes of a local workspace."
 export const MARKDOWN_CUT_NOTE = 'The rest is in Azure DevOps.'
+export const DIFF_BINARY = "Binary file; it isn't shown here."
+export const DIFF_TOO_LARGE = 'This file is too large to show here. Check out the branch in Orca to see it.'
+export const DIFF_TOO_MANY = 'Too many changes to show here. Check out the branch in Orca to see this diff.'
+export const DIFF_NO_TEXT_CHANGES = 'No text changes in this file.'
 
 export const ALL_JOBS_STAGE = 'All jobs'
 
@@ -104,6 +108,10 @@ export const MALFORMED = {
   log: 'Azure DevOps returned an unexpected log response.',
   approval: 'Azure DevOps returned an unexpected approval response.'
 } as const
+
+export function diffCut(lines: number): string {
+  return `Showing the first ${lines.toLocaleString('en-US')} lines of this diff. Check out the branch in Orca for the rest.`
+}
 
 export function noBoardNamed(name: string): string {
   return `The team has no board named "${name}".`
