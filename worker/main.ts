@@ -188,7 +188,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
   const gitPath = findExecutable('git', { pathEnv: process.env.PATH })
   const remotes = gitRemotes(runCommand, gitPath, Date.now)
-  const arm = createArm(Date.now)
+  const arm = createArm(Date.now, { scheduler, changed: current => orca.panels.post('workspace.armChanged', current) })
   const openFileDeps: OpenFileDeps = {
     call,
     gitAvailable: gitPath !== null,

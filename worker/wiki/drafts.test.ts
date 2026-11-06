@@ -10,7 +10,7 @@ import { ME } from '../prs/fake-prs'
 import { memoryStore } from '../test-support'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
 import type { DraftFs } from './draft-files'
-import { listing, outside } from './draft-test-support'
+import { inUse, listing, outside } from './draft-test-support'
 import { createDrafts, type StoredDraft } from './drafts'
 import { fakeWiki, isPage } from './fake-wiki'
 import { createWikiService } from './service'
@@ -297,6 +297,26 @@ test('draft file names stay inside the wiki folder and are valid on every OS', a
       assert.deepEqual(h.logs, [NOT_REMOVED], `${plant.label}: the refused removal is logged once`)
       assert.equal(h.opened.length, 1)
       assert.deepEqual(await h.drafts.list(ORG), [])
+    })
+  }
+})
+
+test('a page whose draft name is already used by a draft folder, or the reverse, says the name is in use', async () => {
+  const taken = 'contoso/Fabrikam Web.wiki/Foo.md'
+  const orders = [
+    ['/Foo', '/Foo.md/Bar', 'a file where the folder goes'],
+    ['/Foo.md/Bar', '/Foo', 'a folder where the file goes']
+  ] as const
+  for (const [first, second, label] of orders) {
+    await withDirs(1, async ([web]) => {
+      const h = harness([workspace('ws-web', web)])
+      for (const page of [first, second]) h.ado.pages.set(page, { content: `# ${page}\n`, etag: '"1"' })
+      assert.equal((await h.drafts.edit(ref(first))).opened, true)
+      const before = await listing(web)
+      await assert.rejects(h.drafts.edit(ref(second)), inUse(label, taken))
+      assert.deepEqual(await listing(web), before, `${label}: nothing is written`)
+      assert.deepEqual((await h.drafts.list(ORG)).map(draft => draft.path), [first], `${label}: no draft is recorded`)
+      assert.equal(h.opened.length, 1)
     })
   }
 })

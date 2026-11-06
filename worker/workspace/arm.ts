@@ -1,8 +1,12 @@
+import { sameArm, type ArmIdentity } from '../../src/shared/work'
+import type { Job, Scheduler } from '../poll/scheduler'
+
 export const DEFAULT_BRANCH_TEMPLATE = 'feature/{id}-{slug}'
 
 const ARMED_MS = 600_000
 const CLAIM_MS = 30_000
 const SLUG_MAX = 40
+const EXPIRY_JOB = 'workspace.arm'
 
 export type ArmedBranch = { org: string; branch: string; itemId: number } | { org: string; branch: string; base: string; prId: number }
 export type ItemArm = Extract<ArmedBranch, { itemId: number }>
@@ -11,7 +15,12 @@ export interface Arm {
   arm(armed: ArmedBranch): number
   take(): ArmedBranch | null
   claim(branch: string): ItemArm | null
-  disarm(): void
+  disarm(only?: ArmIdentity): void
+}
+
+export interface ArmWatch {
+  scheduler: Pick<Scheduler, 'upsert' | 'remove'>
+  changed(current: ArmIdentity | null): void
 }
 
 function slugOf(title: string): string {
@@ -46,18 +55,41 @@ export function branchFor(template: string, item: { id: number; title: string })
   return expand(template, item) || expand(DEFAULT_BRANCH_TEMPLATE, item)
 }
 
-export function createArm(now: () => number): Arm {
+function identityOf(armed: ArmedBranch): ArmIdentity {
+  return 'itemId' in armed ? { org: armed.org, itemId: armed.itemId } : { org: armed.org, prId: armed.prId }
+}
+
+export function createArm(now: () => number, watch?: ArmWatch): Arm {
   let armed: { value: ArmedBranch; until: number } | null = null
   let taken: { value: ArmedBranch; at: number } | null = null
+
+  const expiry: Job = {
+    key: EXPIRY_JOB,
+    visibleMs: ARMED_MS,
+    backgroundMs: ARMED_MS,
+    run: async () => {
+      if (armed && now() >= armed.until) change(null)
+    }
+  }
+
+  function change(next: { value: ArmedBranch; until: number } | null): void {
+    armed = next
+    watch?.scheduler.remove(EXPIRY_JOB)
+    if (next) watch?.scheduler.upsert(expiry)
+    watch?.changed(next && identityOf(next.value))
+  }
+
   return {
     arm(value) {
-      armed = { value, until: now() + ARMED_MS }
-      return armed.until
+      const next = { value, until: now() + ARMED_MS }
+      change(next)
+      return next.until
     },
     take() {
       const current = armed
-      armed = null
-      if (!current || now() >= current.until) return null
+      if (!current) return null
+      change(null)
+      if (now() >= current.until) return null
       taken = { value: current.value, at: now() }
       return current.value
     },
@@ -69,8 +101,8 @@ export function createArm(now: () => number): Arm {
       taken = null
       return current.value
     },
-    disarm() {
-      armed = null
+    disarm(only) {
+      if (armed && (only === undefined || sameArm(identityOf(armed.value), only))) change(null)
     }
   }
 }

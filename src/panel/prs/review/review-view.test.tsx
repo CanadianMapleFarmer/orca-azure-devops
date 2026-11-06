@@ -295,7 +295,7 @@ test('Check out in Orca shows the armed instructions and Cancel disarms', async 
   assert.equal(button('Cancel')?.props.variant, 'ghost')
 
   await panel.press({ type: 'Button', text: 'Cancel' })
-  assert.deepEqual(inputsTo(host, 'work.cancelWorkspace'), [{}])
+  assert.deepEqual(inputsTo(host, 'work.cancelWorkspace'), [{ org: 'contoso', prId: 4110 }])
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.equal(button('Cancel'), null)
 })
@@ -331,6 +331,44 @@ test('the armed instructions belong to their review', async () => {
   await panel.press({ type: 'ListItem', label: 'Add the health endpoint' })
   assert.equal(heading(), 'Add the health endpoint')
   assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
+test('the armed instructions show only while the posted arm is this pull request, through Back and reopening', async () => {
+  const other = prOf(4111, { title: 'Add the health endpoint' })
+  await open({
+    'prs.snapshot': snapshotOf({ toReview: [prOf(4110, { title: REVIEW_TITLE }), other], toReviewCount: 2 }),
+    'reviews.checkout': { status: 'armed', message: 'Create a workspace.', armedUntil: Date.now() + 600_000 },
+    'reviews.open': input => reviewOf({ key: input, pr: input.prId === 4111 ? other : reviewOf().pr })
+  })
+  const shown = () => panel.findAll({ type: 'Callout' }).some(callout => callout.props.title === 'Create the workspace in Orca')
+  const reopen = async (title: string) => {
+    await panel.press({ type: 'IconButton', label: 'Back' })
+    if (panel.find({ type: 'Collapsible' })?.props.open !== true) await panel.toggle({ type: 'Collapsible' })
+    await panel.press({ type: 'ListItem', label: title })
+    assert.equal(heading(), title)
+  }
+
+  await panel.press({ type: 'Button', text: 'Check out in Orca' })
+  await panel.post('workspace.armChanged', { org: 'contoso', prId: 4110 })
+  assert.equal(shown(), true, 'the worker posted this pull request')
+  await reopen('Add the health endpoint')
+  assert.equal(shown(), false, 'another pull request')
+  await reopen(REVIEW_TITLE)
+  assert.equal(shown(), true, 'reopened while still armed')
+
+  await panel.post('workspace.armChanged', { org: 'contoso', itemId: 101 })
+  assert.equal(shown(), false, 'a work item replaced the arm')
+  await panel.post('workspace.armChanged', { org: 'contoso', prId: 4110 })
+  assert.equal(shown(), true)
+  await panel.post('workspace.armChanged', { org: 'fabrikam', prId: 4110 })
+  assert.equal(shown(), false, 'the same id in another organization')
+  await panel.post('workspace.armChanged', { org: 'contoso', prId: 4110 })
+  await panel.post('workspace.armChanged', null)
+  assert.equal(shown(), false, 'taken by a new workspace, or expired')
+  await reopen('Add the health endpoint')
+  await reopen(REVIEW_TITLE)
+  assert.equal(shown(), false, 'reopened after the arm ended')
+  assert.equal(button('Cancel'), null)
 })
 
 test('an opened or refused checkout shows its message', async () => {
@@ -759,6 +797,24 @@ test('a binary or too-large file shows the message instead of a diff', async () 
   await panel.selectRows(FILES, ['/docs/auth.md'])
   assert.equal(panel.find({ type: 'Text', text: 'Renamed from /docs/login.md.' })?.props.muted, true)
   assert.equal(panel.find({ type: 'CodeView' })?.props.code, REDIRECT_DIFF)
+})
+
+test('threads on a renamed file show under it, on its new path or its original one', async () => {
+  const renamedThreads = [
+    threadOf(201, { anchor: { path: '/docs/login.md', line: 4, side: 'old' } }),
+    threadOf(202, { anchor: { path: '/docs/auth.md', line: 6, side: 'new' } }),
+    threadOf(203, { anchor: { path: '/docs/login.md', line: null, side: 'new' } })
+  ]
+  const threads = [...REVIEW_THREADS, ...renamedThreads]
+  await openFiles({
+    'reviews.open': input => reviewOf({ key: input, threads, threadCount: threads.length }),
+    'reviews.diff': input => diffOf(input.path, { message: 'Renamed from /docs/login.md.' })
+  })
+  await panel.selectRows(FILES, ['/docs/auth.md'])
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, REDIRECT_DIFF, 'an edited rename')
+  assert.deepEqual(cardIds(), [201, 202, 203])
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.deepEqual(cardIds(), [102])
 })
 
 test('a quick second selection drops the first answer', async () => {

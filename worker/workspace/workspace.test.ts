@@ -1,3 +1,4 @@
+import { mock } from 'node:test'
 import { assert, hostError, mockHost, test, type TestWorker } from 'orca/testing'
 import type { OrgConfig } from '../../src/shared/types'
 import { basicAuth } from '../auth/pat'
@@ -132,6 +133,61 @@ test('a cancelled workspace start lets the next worktree creation pass through u
     await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
     assert.deepEqual(await w.request('work.cancelWorkspace', {}), { ok: true })
     assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
+  })
+})
+
+const armPosts = (w: TestWorker) => w.posts.filter(post => post.event === 'workspace.armChanged').map(post => post.payload)
+
+test('the arm is posted with its identity alone when it is armed and when a new workspace takes it', async () => {
+  await withDesk({}, async ({ w }) => {
+    await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+    assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }])
+    await w.hooks.fire('workspace.create.before', CREATE)
+    assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }, null])
+    assert.ok(!JSON.stringify(w.posts).includes(PAT))
+  })
+})
+
+test('an arm that runs out is posted as gone after ten minutes, and the next worktree passes through', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  const advance = async (ms: number) => {
+    for (let step = 0; step <= ms; step += 10_000) {
+      mock.timers.tick(step === 0 ? 0 : 10_000)
+      await drain()
+    }
+  }
+  try {
+    await withDesk({}, async ({ w }) => {
+      await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+      await advance(590_000)
+      assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }], 'still armed ten seconds before it runs out')
+      await advance(10_000)
+      assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }, null])
+      assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
+      assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }, null])
+    })
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('a cancel for another arm is a no-op that still answers ok', async () => {
+  await withDesk({}, async ({ w }) => {
+    await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+    for (const other of [{ org: 'contoso', prId: 4110 }, { org: 'contoso', itemId: 1205 }, { org: 'fabrikam', itemId: 1204 }]) {
+      assert.deepEqual(await w.request('work.cancelWorkspace', other), { ok: true }, JSON.stringify(other))
+    }
+    assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }])
+    assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
+
+    await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+    assert.deepEqual(await w.request('work.cancelWorkspace', { org: 'contoso', itemId: 1204 }), { ok: true })
+    assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
+    assert.deepEqual(armPosts(w), [{ org: 'contoso', itemId: 1204 }, null, { org: 'contoso', itemId: 1204 }, null])
+
+    await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+    assert.deepEqual(await w.request('work.cancelWorkspace'), { ok: true })
+    assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE }, 'no input disarms any arm, as before')
   })
 })
 

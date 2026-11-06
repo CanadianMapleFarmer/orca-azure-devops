@@ -25,7 +25,8 @@ import {
   type OrcaNode
 } from 'orca'
 import { chipOf } from '../../shared/chips'
-import type { WorkItemDetails } from '../../shared/work'
+import type { ArmIdentity, WorkItemDetails } from '../../shared/work'
+import { isArmed, requestArm, requestDisarm } from '../arm'
 import { foldedAfter } from '../folds'
 import { messageOf } from '../state'
 import { openItem } from './state'
@@ -33,7 +34,7 @@ import { openItem } from './state'
 type Loaded = { status: 'loading' } | { status: 'ready'; details: WorkItemDetails } | { status: 'failed'; message: string }
 type Section = 'comment' | 'link' | 'start'
 type Fold = 'acceptance' | 'comments'
-type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string; cancellable?: boolean }
+type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string; arm?: ArmIdentity }
 
 const LINK_KINDS = [
   { kind: 'parent', label: 'Parent' },
@@ -125,16 +126,18 @@ function linkPullRequest(org: string, id: number, rev: number): Promise<void> {
 }
 
 function startWorkspace(org: string, id: number): Promise<void> {
+  const arm = { org, itemId: id }
   return run(org, id, 'start', async () => {
-    const { branch } = await plugin.request('work.startWorkspace', { org, id })
+    const { branch } = await requestArm(plugin.request('work.startWorkspace', { org, id }), () => arm)
     if (!isOpen(org, id)) return
-    set(sectionNotice, { section: 'start', tone: 'accent', text: `Create a new workspace in Orca now. Its branch will be named ${branch}.`, cancellable: true })
+    set(sectionNotice, { section: 'start', tone: 'accent', text: `Create a new workspace in Orca now. Its branch will be named ${branch}.`, arm })
   })
 }
 
 function cancelWorkspace(org: string, id: number): Promise<void> {
+  const arm = { org, itemId: id }
   return run(org, id, 'start', async () => {
-    await plugin.request('work.cancelWorkspace', {})
+    await requestDisarm(plugin.request('work.cancelWorkspace', arm), arm)
   })
 }
 
@@ -148,7 +151,8 @@ function startAgent(org: string, id: number): Promise<void> {
 function NoticeFor({ section, onCancel }: { section: Section; onCancel?: () => void }): OrcaNode {
   const shown = read(sectionNotice)
   if (shown?.section !== section) return null
-  if (!shown.cancellable || !onCancel) return <Callout tone={shown.tone}>{shown.text}</Callout>
+  if (!shown.arm || !onCancel) return <Callout tone={shown.tone}>{shown.text}</Callout>
+  if (!isArmed(shown.arm)) return null
   return (
     <Callout tone={shown.tone}>
       <Stack gap="xs">

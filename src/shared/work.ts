@@ -77,3 +77,10 @@ export interface WorkSnapshot {
   stale: boolean
   message?: string
 }
+
+export type ArmIdentity = { org: string; itemId: number } | { org: string; prId: number }
+
+export function sameArm(a: ArmIdentity | null, b: ArmIdentity | null): boolean {
+  if (a === null || b === null || a.org !== b.org) return false
+  return 'itemId' in a ? 'itemId' in b && a.itemId === b.itemId : 'prId' in b && a.prId === b.prId
+}

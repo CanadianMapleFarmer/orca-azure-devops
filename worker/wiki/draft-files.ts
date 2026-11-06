@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import * as path from 'node:path'
-import { badRequest, DRAFT_OUTSIDE } from '../messages'
+import { badRequest, DRAFT_OUTSIDE, draftPathTaken } from '../messages'
 import { TAB_FOLDER, type TabFileFs } from '../tab-files'
 
 export const MAX_SEGMENT = 80
@@ -9,6 +9,7 @@ export const MAX_DRAFT_NAME = 200
 export type DraftFs = TabFileFs & Pick<typeof import('node:fs/promises'), 'rm' | 'realpath' | 'lstat'>
 
 const WIKI_FOLDER = 'wiki'
+const WIKI_DEPTH = 2
 const BASE_FOLDER = '.base'
 const THEIRS_FOLDER = '.theirs'
 const EXTENSION = '.md'
@@ -59,8 +60,13 @@ export async function assertInside(fs: DraftFs, workspacePath: string, relative:
       throw error
     })
     if (!stat) break
-    const fits = depth === parts.length ? stat.isFile() : stat.isDirectory() && sameFile(await fs.realpath(target), target)
-    if (!fits) throw badRequest(DRAFT_OUTSIDE)
+    const last = depth === parts.length
+    if (last ? stat.isFile() : stat.isDirectory() && sameFile(await fs.realpath(target), target)) continue
+    const wrongKind = last ? stat.isDirectory() : stat.isFile()
+    if (wrongKind && depth > WIKI_DEPTH && parts[WIKI_DEPTH - 1] === WIKI_FOLDER) {
+      throw badRequest(draftPathTaken(parts.slice(WIKI_DEPTH, depth).join('/')))
+    }
+    throw badRequest(DRAFT_OUTSIDE)
   }
   return path.join(root, TAB_FOLDER, relative)
 }

@@ -13,6 +13,15 @@ export function outside(label: string): (error: unknown) => boolean {
   }
 }
 
+export function inUse(label: string, taken: string): (error: unknown) => boolean {
+  return error => {
+    assert.ok(error instanceof AdoError, `${label}: expected an AdoError, got ${String(error)}`)
+    const message = `Can't create a draft for this page because ${taken} in .orca-ado/wiki is already in use. Publish or discard the drafts there first.`
+    assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, message], label)
+    return true
+  }
+}
+
 export async function listing(dir: string, prefix = ''): Promise<string[]> {
   const entries: string[] = []
   for (const name of (await fs.readdir(dir)).sort()) {

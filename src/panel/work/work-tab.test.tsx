@@ -529,9 +529,27 @@ test('Cancel in the start callout disarms the branch and closes the callout', as
   await panel.press({ type: 'Button', text: 'Details' })
   await panel.press({ type: 'Button', text: 'Start a workspace' })
   await panel.press({ type: 'Button', text: 'Cancel' })
-  assert.deepEqual(inputsTo(host, 'work.cancelWorkspace'), [{}])
+  assert.deepEqual(inputsTo(host, 'work.cancelWorkspace'), [{ org: 'contoso', itemId: 101 }])
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.equal(panel.find({ type: 'Button', text: 'Start a workspace' })?.disabled, false)
+})
+
+test('the start callout shows only while the posted arm is this item', async () => {
+  await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startWorkspace': { branch: 'feature/101-fix-login-redirect', armedUntil: NOW + 600_000 }
+  })
+  const shown = () => panel.find({ type: 'Text', text: 'Create a new workspace in Orca now. Its branch will be named feature/101-fix-login-redirect.' }) !== null
+  await panel.press({ type: 'Button', text: 'Details' })
+  for (const other of [null, { org: 'contoso', prId: 4110 }, { org: 'contoso', itemId: 102 }, { org: 'fabrikam', itemId: 101 }]) {
+    await panel.press({ type: 'Button', text: 'Start a workspace' })
+    await panel.post('workspace.armChanged', { org: 'contoso', itemId: 101 })
+    assert.equal(shown(), true, 'the worker posted this item')
+    await panel.post('workspace.armChanged', other)
+    assert.equal(shown(), false, JSON.stringify(other))
+    assert.equal(panel.find({ type: 'Button', text: 'Cancel' }), null)
+    assert.equal(panel.find({ type: 'Callout' }), null)
+  }
 })
 
 test('Start an agent shows the message only when nothing launched', async () => {

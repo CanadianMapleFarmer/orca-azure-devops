@@ -704,6 +704,55 @@ test('Publish sends the draft key and shows the result, and the list reloads', a
   assert.equal(requestsTo(host, 'wiki.publish')[0]?.timeoutMs, 90_000)
 })
 
+test('a successful Publish reloads its page when that page is open; a failed or conflicting one, or another page, does not', async () => {
+  let content = 'before'
+  let answer = held<WikiResult>()
+  const host = await open({
+    'wiki.drafts': [DEPLOY, HOME],
+    'wiki.publish': () => answer.promise,
+    'wiki.resolve': () => answer.promise,
+    'wiki.page': input => pageOf(input.path, { content })
+  })
+  const shownText = () => panel.find({ type: 'Markdown' })?.props.content
+  const pageReads = () => requestsTo(host, 'wiki.page').length
+  const whileHomeIsOpen = async (card: string, text: string, result: WikiResult) => {
+    if (panel.find(BACK)) await panel.press(BACK)
+    answer = held<WikiResult>()
+    const pressing = pressIn(card, text)
+    await until(() => button('Publish', cardOf(card))?.disabled)
+    const selecting = panel.selectItem(TREE, '/Home')
+    await until(() => heading() === 'Home' && shownText() !== undefined)
+    const opened = shownText()
+    content = `after ${text} ${result.status}`
+    answer.release(result)
+    await Promise.all([pressing, selecting])
+    return opened
+  }
+
+  await whileHomeIsOpen('Home', 'Publish', { status: 'published', message: 'Published.' })
+  assert.equal(shownText(), 'after Publish published')
+  assert.equal(pageReads(), 2, 'opened, then read again after the Publish')
+
+  const beforeConflict = await whileHomeIsOpen('Home', 'Publish', CONFLICT)
+  assert.equal(shownText(), beforeConflict)
+  assert.equal(pageReads(), 3)
+
+  await panel.press(BACK)
+  await pressIn('Home', 'Publish mine…')
+  await whileHomeIsOpen('Home', 'Publish mine', { status: 'published', message: 'Published. Their changes were replaced.' })
+  assert.equal(shownText(), 'after Publish mine published')
+  assert.equal(pageReads(), 5)
+
+  const beforeFailure = await whileHomeIsOpen('Home', 'Publish', { status: 'failed', message: 'This page was moved or deleted in Azure DevOps. Your draft is kept.' })
+  assert.equal(shownText(), beforeFailure)
+  assert.equal(pageReads(), 6)
+
+  const beforeOther = await whileHomeIsOpen('Deploy', 'Publish', { status: 'published', message: 'Published.' })
+  assert.equal(shownText(), beforeOther)
+  assert.equal(pageReads(), 7, 'another page was published')
+  assert.deepEqual(inputsTo(host, 'wiki.page'), Array.from({ length: 7 }, () => refOf('/Home')))
+})
+
 test('a Publish that throws shows its message in the card', async () => {
   await open({
     'wiki.drafts': [DEPLOY],

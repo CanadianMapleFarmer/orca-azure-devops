@@ -104,7 +104,7 @@ export const REVIEW_FILES_CAPPED = 'More than 1,000 files changed. Open the pull
 export const FILE_NOT_IN_PR = "That file isn't changed in this pull request any more."
 export const REVIEW_PR_CLOSED = 'This pull request is no longer active.'
 export const REVIEW_DRAFT_NO_VOTES = 'Votes are off while a pull request is a draft.'
-export const REVIEW_COMMENT_TOO_LONG = 'Keep the comment under 10,000 characters.'
+export const REVIEW_COMMENT_TOO_LONG = 'Keep the comment to 10,000 characters or fewer.'
 export const THREAD_GONE = 'That comment thread no longer exists.'
 export const REPLIED = 'Reply posted.'
 export const ALREADY_RESOLVED = 'This thread is already resolved.'
@@ -206,6 +206,10 @@ export function armedCheckout({ repo, branch, base, prId, target }: { repo: stri
 
 export function openedDraft(title: string): string {
   return `Opened ${title} in Orca. Save your changes there, then press Publish here.`
+}
+
+export function draftPathTaken(path: string): string {
+  return `Can't create a draft for this page because ${path} in .orca-ado/wiki is already in use. Publish or discard the drafts there first.`
 }
 
 export function draftNotUpdated(reason: string): string {

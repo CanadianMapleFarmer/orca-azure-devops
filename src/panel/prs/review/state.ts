@@ -2,6 +2,8 @@ import { atom, plugin, read, set, update } from 'orca'
 import { BAD_LINE, messageOf } from '../../../shared/messages'
 import type { PrSummary } from '../../../shared/prs'
 import type { FileDiff, PrReview, ReviewKey, ReviewResult, VoteChoice } from '../../../shared/reviews'
+import type { ArmIdentity } from '../../../shared/work'
+import { isArmed, requestArm, requestDisarm } from '../../arm'
 import { LONG_WAIT } from '../../state'
 import { reviewNotice } from '../state'
 import { parseLine } from './fit'
@@ -30,6 +32,8 @@ const keyText = ({ org, projectId, repoId, prId }: ReviewKey): string => JSON.st
 
 const slotId = (key: ReviewKey, slot: string): string => `${keyText(key)}|${slot}`
 
+const armOf = ({ org, prId }: ReviewKey): ArmIdentity => ({ org, prId })
+
 function keyOf(open: OpenReview | null): ReviewKey | null {
   return open ? { org: open.org, projectId: open.projectId, repoId: open.repoId, prId: open.prId } : null
 }
@@ -52,7 +56,7 @@ export function resultOf(slot: string): ReviewResult | null {
 export function armedMessage(): string | null {
   const key = keyOf(read(openReview))
   const instructions = read(armed)
-  return key !== null && instructions !== null && keyText(instructions.key) === keyText(key) ? instructions.message : null
+  return key !== null && instructions !== null && keyText(instructions.key) === keyText(key) && isArmed(armOf(key)) ? instructions.message : null
 }
 
 function setResult(key: ReviewKey, slot: string, result: ReviewResult | null): void {
@@ -171,7 +175,7 @@ export function checkout(): Promise<void> {
   return exclusively('checkout', async key => {
     setResult(key, 'checkout', null)
     try {
-      const result = await plugin.request('reviews.checkout', key, LONG_WAIT)
+      const result = await requestArm(plugin.request('reviews.checkout', key, LONG_WAIT), answer => (answer.status === 'armed' ? armOf(key) : null))
       if (result.status === 'armed') set(armed, { key, message: result.message })
       else setResult(key, 'checkout', { ok: result.status === 'opened', message: result.message })
     } catch (error) {
@@ -184,7 +188,7 @@ export function cancelCheckout(): Promise<void> {
   return exclusively('checkout', async key => {
     setResult(key, 'checkout', null)
     try {
-      await plugin.request('work.cancelWorkspace', {}, LONG_WAIT)
+      await requestDisarm(plugin.request('work.cancelWorkspace', armOf(key), LONG_WAIT), armOf(key))
       set(armed, null)
     } catch (error) {
       setResult(key, 'checkout', { ok: false, message: messageOf(error) })

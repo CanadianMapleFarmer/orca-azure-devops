@@ -30,8 +30,8 @@ export async function registerWorkspaceHandlers(orca: OrcaWorkerApi, { boards, s
     const branch = branchFor(settings.branchTemplate(), item)
     return { branch, armedUntil: arm.arm({ org, itemId: id, branch }) }
   })
-  orca.panels.handle('work.cancelWorkspace', () => {
-    arm.disarm()
+  orca.panels.handle('work.cancelWorkspace', input => {
+    arm.disarm(input?.org === undefined ? undefined : input)
     return { ok: true as const }
   })
   orca.panels.handle('work.startAgent', input =>

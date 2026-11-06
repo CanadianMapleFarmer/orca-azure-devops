@@ -88,7 +88,7 @@ The board opens in its own tab as a custom editor for `.adoboard` files.
 
 These use the workspace and agent permissions Orca asks you to approve.
 
-- **Start a workspace** names the branch from your branch template and arms it. The next worktree you create in Orca within 10 minutes gets that branch and name, once. The new workspace is linked to the item. **Cancel** in the message disarms it, so the next worktree is created as you set it up.
+- **Start a workspace** names the branch from your branch template and arms it. The next worktree you create in Orca within 10 minutes gets that branch and name, once. The new workspace is linked to the item. **Cancel** in the message disarms it, so the next worktree is created as you set it up. The message goes away by itself when a new workspace takes the branch, another arm replaces it or the 10 minutes are up.
 - **Start an agent** launches your default agent in the item's workspace, or in the focused workspace when the item has none. The prompt is the item's link, description and acceptance criteria.
 - With **Add work item context to agent prompts** on, the first prompt Orca sends to an agent in a linked workspace (a launch prompt, a task or an orchestration dispatch) starts with a link to the item. Prompts you type are never changed, and later prompts in the same terminal are left alone.
 
@@ -236,7 +236,7 @@ For all of these except binary files, the view suggests **Check out in Orca**, w
 
 ### Comments and replies
 
-**Comments** lists the threads, unresolved first and the newest first. A thread shows where it is (`General`, a file, or a file and line, with `old line` for the old side), its status (Active, Pending, Resolved, Won't fix, Closed or By design) and its comments with author and time. Threads on a file also show under it in **Files**. Vote changes and other system messages, and deleted comments, aren't listed.
+**Comments** lists the threads, unresolved first and the newest first. A thread shows where it is (`General`, a file, or a file and line, with `old line` for the old side), its status (Active, Pending, Resolved, Won't fix, Closed or By design) and its comments with author and time. Threads on a file also show under it in **Files**, and a renamed file also shows the threads on its old path. Vote changes and other system messages, and deleted comments, aren't listed.
 
 - **Reply** posts under the thread's first comment.
 - **Resolve** sets the thread to Resolved. **Reactivate**, shown on a resolved thread, sets it to Active.
@@ -262,7 +262,7 @@ The arm works like this:
 - The next new workspace you create in Orca gets it, in any project. The plugin can't tie the arm to a project. A workspace made with the `orca` command or by an automation gets it too, so create the one you want first. A new folder workspace doesn't use it.
 - Arming replaces an earlier arm, including one from **Start a workspace** on a work item.
 - The workspace takes the branch name as its name.
-- **Cancel** disarms it. The box stays on screen until you press Cancel or the panel reloads, even after the workspace exists or the 10 minutes are up. A reload removes only the box: the arm still serves the next new workspace until it expires.
+- **Cancel** disarms it, and never a later arm that replaced it. The box goes away by itself when a new workspace takes the arm, another arm replaces it or the 10 minutes are up. A panel reload removes only the box: the arm still serves the next new workspace until it expires.
 - When a local branch of the source's name exists and Orca has never fetched the remote's copy, Orca bases the workspace on that local branch as it is, without fetching. It may be behind, or hold commits you haven't pushed.
 
 ## The Pipelines tab
@@ -460,7 +460,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
-- Reviews and the Wiki tab: never in the background. A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it and again on Refresh, and search when you press Enter. It reads the drafts when it opens.
+- Reviews and the Wiki tab: never in the background. A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
 - Slow-down: when Azure DevOps answers any request for an organisation with `Retry-After` or `X-RateLimit-Delay`, whether for work items, pull requests or pipelines, that organisation's pipeline polling drops to the background pace for 5 minutes. The Pipelines tab then polls every 5 minutes, watched runs every 2 minutes and an open run tab every 30 seconds.
 - Pipelines limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read builds, runs for that organisation pause for 10 minutes and the tab says why. When it refuses approvals only, approvals turn off for 10 minutes while runs keep loading, and the tab says Needs me may be incomplete.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.

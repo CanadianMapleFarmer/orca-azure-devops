@@ -1434,6 +1434,50 @@ test('reviews.checkout and work.cancelWorkspace share one arm', async () => {
   }
 })
 
+test('each Cancel disarms only its own arm, and every arm change is posted', async () => {
+  const ado = fakeReviews()
+  const web = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await repositoryAt(web, 'https://ada@dev.azure.com/contoso/Fabrikam%20Web/_git/web-app')
+    await withFetch(signedIn(ado), async () => {
+      const host = checkoutHost([{ id: 'ws-web', kind: 'worktree', name: 'web-app', path: web, branch: 'main', hostId: null }])
+      await withWorker(worker, { host }, async w => {
+        const key = { org: 'contoso', projectId: PROJECT, repoId: REPO, prId: 4110 }
+        const source = 'hotfix/1211-login-redirect'
+        const create = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2' } as const
+        const pr = { org: 'contoso', prId: 4110 }
+        const item = { org: 'contoso', itemId: 1204 }
+
+        await w.request('reviews.checkout', key)
+        const started = await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+        assert.deepEqual(await w.request('work.cancelWorkspace', pr), { ok: true })
+        assert.deepEqual(
+          await w.hooks.fire('workspace.create.before', create),
+          { kind: 'continue', event: { ...create, branch: started.branch, name: started.branch } },
+          "the pull request's Cancel left the later work item armed"
+        )
+
+        await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
+        await w.request('reviews.checkout', key)
+        assert.deepEqual(await w.request('work.cancelWorkspace', item), { ok: true })
+        assert.deepEqual(
+          await w.hooks.fire('workspace.create.before', create),
+          { kind: 'continue', event: { ...create, branch: source, name: source, base: `origin/${source}` } },
+          "the work item's Cancel left the later pull request armed"
+        )
+
+        assert.deepEqual(
+          w.posts.filter(post => post.event === 'workspace.armChanged').map(post => post.payload),
+          [pr, item, null, item, pr, null]
+        )
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(web, { recursive: true, force: true })
+  }
+})
+
 test('ui.visibility routes run to the run views', async () => {
   const ado = pipelinesAt(Date.now() - 60_000)
   await withFetch(signedIn(ado), async () => {

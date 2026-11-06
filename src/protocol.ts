@@ -4,7 +4,7 @@ import type { CheckoutResult, FileDiff, PrReview, ReviewKey, ReviewResult, VoteC
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
 import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from './shared/wiki'
-import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
+import type { ArmIdentity, BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
   interface PluginRequests {
     'plugin.ping': { input: {}; output: { version: string } }
@@ -41,7 +41,7 @@ declare module 'orca' {
       output: { rules: { branch: string; column: string }[] }
     }
     'work.startWorkspace': { input: { org: string; id: number }; output: { branch: string; armedUntil: number } }
-    'work.cancelWorkspace': { input: {}; output: { ok: true } }
+    'work.cancelWorkspace': { input: ArmIdentity | { org?: undefined }; output: { ok: true } }
     'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
       input: {
@@ -106,5 +106,6 @@ declare module 'orca' {
     'prs.changed': PrSnapshot
     'runs.changed': RunsSnapshot
     'runs.viewChanged': { org: string; buildId: number }
+    'workspace.armChanged': ArmIdentity | null
   }
 }

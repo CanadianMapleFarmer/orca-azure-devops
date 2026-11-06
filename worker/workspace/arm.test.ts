@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { assert, test } from 'orca/testing'
+import { createScheduler } from '../poll/scheduler'
+import { fakeClock } from '../test-support'
 import { branchFor, createArm } from './arm'
 
 const ITEM = { id: 1204, title: 'Add vehicle search filters' }
@@ -132,4 +134,80 @@ test('an arm that was never taken cannot be claimed', () => {
   const arm = createArm(time.now)
   arm.arm(ARMED)
   assert.equal(arm.claim(ARMED.branch), null)
+})
+
+const PR_ARMED = { org: 'contoso', branch: 'hotfix/1211-login-redirect', base: 'origin/hotfix/1211-login-redirect', prId: 4110 }
+const ITEM_ARM = { org: 'contoso', itemId: 1204 }
+const PR_ARM = { org: 'contoso', prId: 4110 }
+
+function watched() {
+  const time = fakeClock(T0)
+  const changes: unknown[] = []
+  const arm = createArm(time.now, { scheduler: createScheduler(time), changed: current => changes.push(current) })
+  return { time, changes, arm }
+}
+
+test('every change of the arm is reported with its identity only: armed, replaced, taken and disarmed', () => {
+  const { changes, arm } = watched()
+  arm.arm(ARMED)
+  arm.arm(PR_ARMED)
+  assert.deepEqual(arm.take(), PR_ARMED)
+  arm.take()
+  arm.disarm()
+  arm.arm(ARMED)
+  arm.disarm()
+  arm.disarm()
+  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null, ITEM_ARM, null])
+})
+
+test('an arm that expires is reported once by the scheduler, which keeps no timer afterwards', async () => {
+  const { time, changes, arm } = watched()
+  arm.arm(ARMED)
+  await time.tick(0)
+  await time.tick(10 * MINUTE - 1)
+  assert.deepEqual(changes, [ITEM_ARM], 'still armed a millisecond before it expires')
+  await time.tick(1)
+  assert.deepEqual(changes, [ITEM_ARM, null])
+  assert.equal(time.pending(), 0)
+  assert.equal(arm.take(), null)
+  await time.tick(60 * MINUTE)
+  assert.deepEqual(changes, [ITEM_ARM, null])
+})
+
+test('arming again restarts the ten minutes, and a taken or disarmed arm leaves no timer', async () => {
+  const { time, changes, arm } = watched()
+  arm.arm(ARMED)
+  await time.tick(5 * MINUTE)
+  arm.arm(PR_ARMED)
+  await time.tick(10 * MINUTE - 1)
+  assert.deepEqual(changes, [ITEM_ARM, PR_ARM])
+  await time.tick(1)
+  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null])
+
+  arm.arm(ARMED)
+  arm.take()
+  assert.equal(time.pending(), 0, 'taken')
+  arm.arm(ARMED)
+  arm.disarm()
+  assert.equal(time.pending(), 0, 'disarmed')
+  await time.tick(60 * MINUTE)
+  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null, ITEM_ARM, null, ITEM_ARM, null])
+})
+
+test('disarming with an identity disarms only that arm', () => {
+  const { changes, arm } = watched()
+  arm.arm(ARMED)
+  arm.disarm(PR_ARM)
+  arm.disarm({ org: 'fabrikam', itemId: 1204 })
+  arm.disarm({ org: 'contoso', itemId: 1205 })
+  assert.deepEqual(changes, [ITEM_ARM], 'another arm is left alone')
+  arm.disarm(ITEM_ARM)
+  assert.deepEqual(changes, [ITEM_ARM, null])
+  assert.equal(arm.take(), null)
+
+  arm.arm(PR_ARMED)
+  arm.disarm(ITEM_ARM)
+  arm.disarm({ org: 'contoso', prId: 4111 })
+  arm.disarm(PR_ARM)
+  assert.deepEqual(changes, [ITEM_ARM, null, PR_ARM, null])
 })

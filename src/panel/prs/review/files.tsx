@@ -37,7 +37,7 @@ function Diff({ file }: { file: ChangedFile }): OrcaNode {
 }
 
 function SelectedFile({ review, file }: { review: PrReview; file: ChangedFile }): OrcaNode {
-  const threads = review.threads.filter(thread => thread.anchor?.path === file.path)
+  const threads = review.threads.filter(thread => thread.anchor !== null && (thread.anchor.path === file.path || thread.anchor.path === file.originalPath))
   const { shown } = fitThreads(threads, FILE_THREADS_BYTES)
   const slot = `file:${file.path}`
   const lineSlot = `line:${file.path}`

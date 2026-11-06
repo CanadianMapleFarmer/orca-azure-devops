@@ -3,7 +3,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
 import { assertInside, baseName, draftName, fileSegment, MAX_DRAFT_NAME, MAX_SEGMENT, theirsName } from './draft-files'
-import { listing, outside } from './draft-test-support'
+import { inUse, listing, outside } from './draft-test-support'
 
 const WIKI_NAME = 'Fabrikam Web.wiki'
 const PREFIX = 'wiki/contoso/Fabrikam Web.wiki'
@@ -164,10 +164,6 @@ test('assertInside refuses a symlink or a non-folder at any level, and names tha
         await fs.symlink(path.join(outside, 'secret.md'), file)
       }
     ],
-    [
-      'the file is a folder',
-      workspace => fs.mkdir(path.join(workspace, '.orca-ado', ...CHECKLIST.split('/')), { recursive: true }).then(() => {})
-    ],
     ['.orca-ado is a file', workspace => fs.writeFile(path.join(workspace, '.orca-ado'), 'not a folder\n')]
   ]
   for (const [label, plant] of plants) {
@@ -182,6 +178,38 @@ test('assertInside refuses a symlink or a non-folder at any level, and names tha
     for (const bad of ['../outside.md', 'wiki/../../outside.md', '/etc/passwd', 'wiki//x.md', 'wiki/./x.md', '', 'wiki\\..\\..\\x.md']) {
       await assert.rejects(assertInside(fs, workspace, bad), outside(bad))
     }
+  })
+})
+
+test('assertInside says a draft path is in use when a folder stands where the file goes, or a file where a folder goes', async () => {
+  const plants: [string, string, (workspace: string) => Promise<void>][] = [
+    [
+      'the file is a folder',
+      'contoso/Fabrikam Web.wiki/Release process/Checklist.md',
+      workspace => fs.mkdir(path.join(workspace, '.orca-ado', ...CHECKLIST.split('/')), { recursive: true }).then(() => {})
+    ],
+    [
+      'a folder on the way is a file',
+      'contoso/Fabrikam Web.wiki/Release process',
+      async workspace => {
+        const wiki = path.join(workspace, '.orca-ado', ...PREFIX.split('/'))
+        await fs.mkdir(wiki, { recursive: true })
+        await fs.writeFile(path.join(wiki, 'Release process'), 'a draft\n')
+      }
+    ]
+  ]
+  for (const [label, taken, plant] of plants) {
+    await withDirs(async (workspace, outsideDir) => {
+      await plant(workspace)
+      const before = [await listing(workspace), await listing(outsideDir)]
+      await assert.rejects(assertInside(fs, workspace, CHECKLIST), inUse(label, taken))
+      assert.deepEqual([await listing(workspace), await listing(outsideDir)], before, label)
+    })
+  }
+  await withDirs(async workspace => {
+    await fs.mkdir(path.join(workspace, '.orca-ado'))
+    await fs.writeFile(path.join(workspace, '.orca-ado', 'wiki'), 'not a folder\n')
+    await assert.rejects(assertInside(fs, workspace, CHECKLIST), outside('.orca-ado/wiki is a file, so the draft folder itself is missing'))
   })
 })
 

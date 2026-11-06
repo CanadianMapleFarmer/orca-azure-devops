@@ -435,7 +435,9 @@ async function settle(key: string, org: string, send: () => Promise<WikiResult>)
   if (read(source) !== org) return
   cancelAsk(key)
   record(key, outcomeOfResult(result))
-  await loadDrafts(org)
+  const open = read(openPage)
+  const reload = result.status === 'published' && open !== null && draftKey(open) === key
+  await Promise.all([loadDrafts(org), reload ? reloadPage() : undefined])
 }
 
 export const publish = (key: string): Promise<void> =>
