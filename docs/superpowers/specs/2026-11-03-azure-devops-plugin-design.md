@@ -106,7 +106,7 @@ All of these are verified in the research notes unless marked otherwise.
 - **No push to a desktop client.** Poll within the rate limit (200 TSTU per sliding 5 min) and honour `Retry-After` and `X-RateLimit-*`.
 
 ### 4.3 Sign-in
-- **ADO's own OAuth apps are gone.** No new registrations since April 2025, and they are removed in 2026. Use Microsoft Entra ID (MSAL Node 7.x bundles to one ~230 KB minified ESM file and runs in the worker).
+- **ADO's own OAuth apps are gone.** No new registrations since April 2025, and they are removed in 2026. Use Microsoft Entra ID. The plugin implements the standard auth code + PKCE flow itself rather than bundling MSAL Node (decided by the user on 2026-11-06; Plan 6 P1).
 - **Per-tenant tokens.** Each org lives in an Entra tenant and needs a token from that tenant's authority. The tenant can be discovered anonymously from `vssps.dev.azure.com/{org}`.
 - **App registration.** "Sign in with Microsoft" needs one: public client, platform *Mobile and desktop*, redirect `http://localhost`. Tenant policies often allow user consent only for verified publishers, so in many companies an admin approves once.
 - **Graph is separate.** Microsoft Graph tokens, if ever used, are separate tokens from the same app.
@@ -203,10 +203,10 @@ All of these are verified in the research notes unless marked otherwise.
        - The panel states where the tokens live.
        - **Sign out deletes the folder.**
      - Don't turn on az's experimental `core.encrypt_token_cache`. On macOS it uses one fixed Keychain item that the user's own `az` would share.
-  2. **Sign in with Microsoft (Entra ID via MSAL Node).**
+  2. **Sign in with Microsoft (Entra ID).**
      - The app (client) ID and optional tenant are a plugin setting. The README includes a step-by-step admin guide for registering the app.
      - Flow: auth code + PKCE with a loopback redirect. The panel's button opens the URL via `shell.openExternal`.
-     - Tokens are cached in `orca.secrets` through a custom MSAL cache plugin.
+     - Tokens are cached in `orca.secrets`. The flow is hand-written, with no MSAL dependency.
   3. **Personal access token,** pasted into the panel and stored in `orca.secrets`.
 - **Account pinning:**
   - Every connection forces the account picker (`prompt=select_account` or the az equivalent) so the browser's default account can't slip in.
@@ -276,5 +276,5 @@ All of these are verified in the research notes unless marked otherwise.
   - A board move works with only the WEF column fields plus state.
   - Real rate-limit headroom with the polling plan.
   - The isolated `AZURE_CONFIG_DIR` login and token flow running from the worker.
-  - MSAL loopback inside the worker with Orca's external-link consent.
+  - The loopback redirect inside the worker with Orca's external-link consent.
 - Accessibility and keyboard support within what Orca's components allow.
