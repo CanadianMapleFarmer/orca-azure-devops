@@ -158,6 +158,24 @@
         "description": "One line per approval. [text]({url}) is the link. Also {stage}, {requestedBy}, {project}.",
         "type": "string",
         "default": "Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}"
+      },
+      {
+        "key": "entraClientId",
+        "title": "Microsoft sign-in: app (client) ID",
+        "description": "From the app registration your admin created. See the README's admin guide.",
+        "type": "string",
+        "default": "",
+        "placeholder": "00000000-0000-0000-0000-000000000000",
+        "maxLength": 36
+      },
+      {
+        "key": "entraTenant",
+        "title": "Microsoft sign-in: tenant",
+        "description": "Used only when an organization's tenant can't be found. A tenant ID or domain; leave empty for any work or school account.",
+        "type": "string",
+        "default": "",
+        "placeholder": "your-tenant.onmicrosoft.com",
+        "maxLength": 253
       }
     ],
     "hooks": [

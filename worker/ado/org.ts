@@ -11,6 +11,10 @@ export function isValidOrgName(name: string): boolean {
   return ORG_NAME.test(name)
 }
 
+export function isGuid(value: string): boolean {
+  return GUID.test(value)
+}
+
 export function parseOrgInput(input: string): { org: string; url: string } | null {
   const text = input.trim().toLowerCase()
   const org = isValidOrgName(text) ? text : orgFromUrl(text)
@@ -60,7 +64,7 @@ export async function discoverTenant(
   try {
     const res = await fetchFn(orgVsspsUrl(org), { method: 'HEAD', signal: deadline.signal })
     const tenant = res.headers.get('x-vss-resourcetenant')
-    return tenant && GUID.test(tenant) && tenant !== ALL_ZERO_TENANT ? tenant : null
+    return tenant && isGuid(tenant) && tenant !== ALL_ZERO_TENANT ? tenant : null
   } catch {
     return null
   } finally {

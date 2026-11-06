@@ -481,6 +481,8 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `notifyApprovals` (Notify when a run waits for approval): on by default. It covers approvals you can give and approvals on your own runs.
 - `notifyWatchedRuns` (Notify when a watched run finishes): on by default.
 - `approvalShareTemplate` (Approval share line): one line per approval in a share. Defaults to `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`. See The Pipelines tab for the placeholders.
+- `entraClientId` (Microsoft sign-in: app (client) ID): the app registration your admin created for Sign in with Microsoft. Empty by default.
+- `entraTenant` (Microsoft sign-in: tenant): a tenant ID or domain, used only when an organization's tenant can't be found. Leave it empty for any work or school account.
 
 ## Development
 

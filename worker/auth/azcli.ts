@@ -1,5 +1,6 @@
 import * as path from 'node:path'
 import { ADO_RESOURCE, isValidOrgName } from '../ado/org'
+import { INVALID_ORG_NAME } from '../messages'
 import type { RunCommand } from '../sys/run'
 
 export { ADO_RESOURCE }
@@ -27,7 +28,7 @@ export interface AzCliProvider extends AzProfiles {
 
 export function createAzProfiles(deps: { home: string; fs: Pick<typeof import('node:fs/promises'), 'rm' | 'stat'> }): AzProfiles {
   function profileDir(org: string): string {
-    if (!isValidOrgName(org)) throw new Error('Invalid organisation name')
+    if (!isValidOrgName(org)) throw new Error(INVALID_ORG_NAME)
     return path.join(deps.home, ...PROFILE_ROOT, org)
   }
 

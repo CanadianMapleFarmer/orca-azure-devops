@@ -5,6 +5,7 @@ import { AdoError } from './ado/http'
 export { CHANNEL_NAME_TOO_LONG, TOO_MANY_ITEMS, TOO_MANY_PEOPLE } from '../src/shared/share/limits'
 
 export const NOT_CONNECTED = 'Connect this organization first.'
+export const INVALID_ORG_NAME = 'Invalid organisation name'
 export const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 export const GONE = "That work item no longer exists, or you can't see it."
 export const LOAD_FAILED = "Couldn't load work items."
@@ -178,7 +179,13 @@ export const ENTRA = {
   apiPermission: "The app registration doesn't include the Azure DevOps permission. Ask an admin to add it (see the README's admin guide).",
   wrongDirectory: "That account isn't in this organization's directory. Sign in again and pick your work account.",
   unreachable: "Couldn't reach Microsoft sign-in.",
-  malformed: 'Microsoft sign-in returned an unexpected response.'
+  malformed: 'Microsoft sign-in returned an unexpected response.',
+  noClientId: 'Set the app (client) ID for Microsoft sign-in in Settings → Azure DevOps. The README explains how an admin creates it.',
+  badClientId: "The app (client) ID in Settings → Azure DevOps isn't a valid ID. Copy it again from the app registration.",
+  badTenant: "The Microsoft sign-in tenant in Settings → Azure DevOps isn't a tenant ID or domain.",
+  listenFailed: "Couldn't start the sign-in on this computer. Try again.",
+  notSaved: "Couldn't keep the sign-in in Orca's encrypted secrets.",
+  rotateNotSaved: "Couldn't save a renewed Microsoft sign-in; the previous one is kept."
 } as const
 
 export function entraFailed(code: string | null): string {

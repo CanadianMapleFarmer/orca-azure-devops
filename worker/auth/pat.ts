@@ -1,4 +1,5 @@
 import { isValidOrgName } from '../ado/org'
+import { INVALID_ORG_NAME } from '../messages'
 
 export interface SecretsPort {
   get(key: string): Promise<string | null>
@@ -7,7 +8,7 @@ export interface SecretsPort {
 }
 
 export function patKey(org: string): string {
-  if (!isValidOrgName(org)) throw new Error('Invalid organisation name')
+  if (!isValidOrgName(org)) throw new Error(INVALID_ORG_NAME)
   return `pat:${org}`
 }
 
