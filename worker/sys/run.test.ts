@@ -25,6 +25,11 @@ function running(pattern: string): boolean {
   return spawnSync('pgrep', ['-f', pattern]).status === 0
 }
 
+function leadsOwnGroup(pattern: string): boolean {
+  const pid = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).stdout.trim()
+  return /^\d+$/.test(pid) && spawnSync('ps', ['-o', 'pgid=', '-p', pid], { encoding: 'utf8' }).stdout.trim() === pid
+}
+
 async function until(condition: () => boolean, ms = 5_000): Promise<boolean> {
   const deadline = Date.now() + ms
   while (Date.now() < deadline) {
@@ -197,7 +202,7 @@ test('a stopped command settles even when a process outside its group holds its 
   await withWrapper([holdPipesInNewSession(holder), sleep], [holder, sleep], async az => {
     const controller = new AbortController()
     const pending = runCommand(az, [], { env: NO_ENV, signal: controller.signal })
-    assert.ok(await until(() => running(sleep) && running(holder)), 'the wrapper started the holder and its child')
+    assert.ok(await until(() => running(sleep) && leadsOwnGroup(holder)), 'the wrapper started its child and the holder left its group')
     controller.abort()
     await assert.rejects(within(pending, 5_000), isAbort)
     assert.equal(running(sleep), false, 'the group is gone')
@@ -211,7 +216,7 @@ test('stopAllCommands settles a command whose pipes are held outside its group',
   await withWrapper([holdPipesInNewSession(holder), sleep], [holder, sleep], async az => {
     const pending = runCommand(az, [], { env: NO_ENV })
     pending.catch(() => {})
-    assert.ok(await until(() => running(sleep) && running(holder)), 'the wrapper started the holder and its child')
+    assert.ok(await until(() => running(sleep) && leadsOwnGroup(holder)), 'the wrapper started its child and the holder left its group')
     await stopAllCommands(SHUTDOWN)
     await assert.rejects(within(pending, 5_000), /was terminated by SIGTERM/)
     assert.equal(running(holder), true, 'the holder is in its own session, still holding the pipes')
