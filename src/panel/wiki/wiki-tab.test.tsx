@@ -5,7 +5,7 @@ import type { OrgStatus } from '../../shared/types'
 import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from '../../shared/wiki'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type MountOptions, type TestHost } from '../test-support'
 import { CODE_WIKI, draftOf, LEVELS, levelOf, MINE_DIFF, NOW, nodeOf, OPEN_PAGE, pageOf, PAGE_CONTENT, PROJECT_WIKI, refOf, ROOT_PAGES, THEIRS_DIFF, WIKIS } from './fixtures'
-import { MAX_TREE_ITEMS, search, treeItems } from './state'
+import { MAX_TREE_ITEMS, search, TREE_BYTES, treeItems } from './state'
 
 let panel: TestPanel
 
@@ -222,6 +222,18 @@ test('an empty wiki says it has no pages yet', async () => {
   await open({ 'wiki.pages': levelOf([]) })
   assert.ok(panel.find({ type: 'EmptyState', label: 'No pages yet' }))
   assert.equal(panel.find(TREE), null)
+})
+
+test('an empty wiki can be refreshed once its first page exists', async () => {
+  let pages = levelOf([])
+  const host = await open({ 'wiki.pages': () => pages })
+  assert.ok(panel.find({ type: 'EmptyState', label: 'No pages yet' }))
+  assert.ok(panel.find({ type: 'IconButton', label: 'Refresh pages' }))
+  pages = levelOf(['/Home'])
+  await panel.press({ type: 'IconButton', label: 'Refresh pages' })
+  assert.equal(requestsTo(host, 'wiki.pages').length, 2)
+  assert.equal(panel.find({ type: 'EmptyState', label: 'No pages yet' }), null)
+  assert.deepEqual(keysOf(treeOf()), ['/Home'])
 })
 
 test('expanding a folder loads its children once', async () => {
@@ -943,6 +955,38 @@ test('switching org resets the tab but keeps the chosen wiki per org', async () 
   assert.deepEqual(inputsTo(host, 'wiki.pages').at(-1), { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/' })
 })
 
+test('an org that expires and reconnects keeps the tree, the search and the results', async () => {
+  const host = await open({
+    'wiki.list': WIKIS,
+    'wiki.drafts': [DEPLOY],
+    'wiki.search': { hits: HITS, total: 2 },
+    'wiki.edit': { opened: true, message: OPENED }
+  })
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-project')
+  await panel.expand(TREE, '/Runbooks')
+  await pressIn('Deploy', 'Open')
+  await panel.type(SEARCH_BOX, 'release', { submit: true })
+  const before = ['wiki.list', 'wiki.pages', 'wiki.drafts', 'wiki.search', 'wiki.edit'].map(name => requestsTo(host, name).length)
+  const results = panel.findAll({ type: 'ListItem' }).map(item => item.label)
+  const callouts = calloutsIn('Deploy')
+  assert.deepEqual(callouts, [['accent', null, OPENED]])
+
+  await panel.post('orgs.changed', { orgs: [org('contoso', { state: 'expired' })] })
+  assert.equal(panel.find({ type: 'Tabs' }), null)
+  await panel.post('orgs.changed', { orgs: [org('contoso')] })
+  assert.equal(panel.valueOf({ type: 'Tabs' }), 'wiki')
+
+  assert.deepEqual(['wiki.list', 'wiki.pages', 'wiki.drafts', 'wiki.search', 'wiki.edit'].map(name => requestsTo(host, name).length), before)
+  assert.equal(panel.valueOf(SEARCH_BOX), 'release')
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), results)
+  assert.deepEqual(calloutsIn('Deploy'), callouts)
+  assert.equal(panel.valueOf({ type: 'Select', label: 'Wiki' }), 'wiki-project')
+  await panel.press({ type: 'Button', text: 'Clear search' })
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  assert.deepEqual(childrenOf('/Runbooks'), ['/Runbooks/Deploy', '/Runbooks/Rollback'])
+  assert.equal(requestsTo(host, 'wiki.pages').length, before[1])
+})
+
 test('a drafts answer and an action result for an org that is no longer shown are dropped', async () => {
   const late = held<DraftSummary[]>()
   let calls = 0
@@ -1120,6 +1164,24 @@ test('the pure tree builder counts items across folders and nests at most 16 lev
   assert.equal(treeItems(two, ['/A'], 5).capped, false)
 })
 
+test('the pure tree builder stops at the byte budget and stays stopped', () => {
+  const filler = Array.from({ length: 353 }, (_, index) => `/A/${String(index).padStart(3, '0')}${'p'.repeat(94)}`)
+  const giant = `/A/${'g'.repeat(996)}`
+  const levels = new Map([
+    ['/', levelOf(['/A', '/b'], {}, ['/A'])],
+    ['/A', levelOf([...filler, giant, '/A/short'])]
+  ])
+  const shown = treeItems(levels, ['/A'])
+  assert.deepEqual(keysOf(shown.items), ['/A'])
+  assert.deepEqual(keysOf(shown.items[0].children ?? []), filler)
+  assert.equal(shown.capped, true)
+
+  const bytes = (item: TreeItem): number =>
+    2 * (new TextEncoder().encode(item.key).length + new TextEncoder().encode(item.label).length) + 40 + (item.children ?? []).reduce((total, child) => total + bytes(child), 0)
+  assert.ok(shown.items.reduce((total, item) => total + bytes(item), 0) <= TREE_BYTES)
+  assert.equal(treeItems(new Map([['/', levelOf(['/a', '/b'])]]), []).capped, false)
+})
+
 test('a page path too long to be a tree key is left out and counts as hidden', () => {
   const long = `/${'x'.repeat(1100)}`
   const shown = treeItems(new Map([['/', { pages: [nodeOf('/Home'), nodeOf(long)], total: 2 }]]), [])
@@ -1155,9 +1217,9 @@ test('long titles, paths and snippets are cut so Orca keeps every label', async 
 
 const BIG = 'word '.repeat(12_000)
 
-function bigRoot(): Record<string, WikiLevel> {
-  const folders = Array.from({ length: 8 }, (_, index) => `/Folder ${index}`)
-  const level = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}/Page ${index}`)
+function bigRoot(folderPad = '', pagePad = ''): Record<string, WikiLevel> {
+  const folders = Array.from({ length: 8 }, (_, index) => `/Folder ${index}${folderPad}`)
+  const level = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}/Page ${index}${pagePad}`)
   return {
     '/': levelOf(folders, { total: 8 }, folders),
     ...Object.fromEntries(folders.map(folder => [folder, levelOf(level(folder, 200), { total: 260 })]))
@@ -1198,4 +1260,25 @@ test('the tree stops at 1,000 items, and the tab stays under 4,000 nodes and 450
     [0, 0, 2]
   )
   measure('drafts in conflict with the tree open')
+})
+
+test('about 150-character page paths still leave room for a conflict under 450 KiB', async () => {
+  const folderPad = 'f'.repeat(90)
+  const levels = bigRoot(folderPad, 'p'.repeat(40))
+  const drafts = Array.from({ length: 50 }, (_, index) => draftOf(`/Section ${index}/Page ${index}`, { changed: index % 2 === 0 }))
+  const diff = ['@@ -1 +1 @@', ...Array.from({ length: 1_900 }, (_, index) => `+ line ${index} of a very long generated change`)].join('\n').slice(0, 60 * 1024)
+  await open({
+    'wiki.pages': input => levels[input.path] ?? levelOf([]),
+    'wiki.drafts': drafts,
+    'wiki.publish': { status: 'conflict', message: CONFLICT.status === 'conflict' ? CONFLICT.message : '', theirs: { text: diff }, mine: { text: diff } }
+  })
+  for (let index = 7; index >= 3; index -= 1) await panel.expand(TREE, `/Folder ${index}${folderPad}`)
+  const shown = countItems(treeOf())
+  assert.ok(shown > 100 && shown < MAX_TREE_ITEMS, `${shown} items`)
+  assert.ok(panel.find({ type: 'Text', text: 'Some pages are hidden. Collapse a folder to see others.' }))
+  measure('long paths with the tree open')
+
+  await pressIn('Page 0', 'Publish')
+  assert.equal(diffsIn('Page 0').length, 2)
+  measure('long paths with a conflict open')
 })

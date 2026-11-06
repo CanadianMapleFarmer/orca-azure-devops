@@ -1,5 +1,5 @@
 import { Button, Callout, EmptyState, IconButton, Input, List, ListItem, read, Row, Select, set, Skeleton, Stack, Text, Tree, type OrcaNode } from 'orca'
-import type { WikiLevel, WikiNode, WikiPageRef, WikiRef } from '../../shared/wiki'
+import type { WikiLevel, WikiNode, WikiRef } from '../../shared/wiki'
 import type { OrgStatus } from '../../shared/types'
 import { cutLabel } from '../label'
 import { LoadFailure } from '../snapshot-parts'
@@ -11,6 +11,7 @@ import {
   clearSearch,
   expanded,
   found,
+  levelRef,
   levels,
   loadWikiWhenIdle,
   openPage,
@@ -32,8 +33,6 @@ import {
   wikisLoad,
   type Found
 } from './state'
-
-const refOf = (org: string, wiki: WikiRef, path: string): WikiPageRef => ({ org, projectId: wiki.projectId, wikiId: wiki.id, path })
 
 const countText = (total: number): string => (total === 0 ? 'No pages match.' : total === 1 ? '1 page matches' : `${total} pages match`)
 
@@ -99,7 +98,7 @@ function Results({ org, wiki, result }: { org: string; wiki: WikiRef; result: Fo
               key={hit.path}
               title={cutLabel(hit.title)}
               description={cutLabel(`${hit.path} · ${hit.snippet}`)}
-              onPress={() => showPage({ ...refOf(org, wiki, hit.path), title: hit.title })}
+              onPress={() => showPage({ ...levelRef({ org, wiki }, hit.path), title: hit.title })}
             />
           ))}
         </List>
@@ -129,7 +128,6 @@ function Pages({ org, wiki }: { org: string; wiki: WikiRef }): OrcaNode {
   }
   const open = read(expanded)
   const { items, capped } = treeItems(loaded, open)
-  if (items.length === 0) return <EmptyState title="No pages yet" description="Pages in this wiki show up here." />
   const notice = read(treeNotice)
   return (
     <Stack gap="xs">
@@ -137,19 +135,23 @@ function Pages({ org, wiki }: { org: string; wiki: WikiRef }): OrcaNode {
         <IconButton icon="refresh" label="Refresh pages" variant="ghost" size="sm" disabled={read(refreshingTree)} onPress={() => refreshTree()} />
       </Row>
       {notice ? <Callout tone="danger">{notice}</Callout> : null}
-      <Tree
-        key={`pages-${read(treeKey)}`}
-        label="Pages"
-        maxHeight="lg"
-        items={items}
-        expanded={open}
-        onToggle={({ key, expanded: next }) => toggleFolder(refOf(org, wiki, key), next)}
-        onSelect={({ key }) => {
-          const node = nodeAt(loaded, key)
-          if (node) showPage({ ...refOf(org, wiki, node.path), title: node.title })
-        }}
-      />
-      {capped ? (
+      {items.length === 0 ? (
+        <EmptyState title="No pages yet" description="Pages in this wiki show up here." />
+      ) : (
+        <Tree
+          key={`pages-${read(treeKey)}`}
+          label="Pages"
+          maxHeight="lg"
+          items={items}
+          expanded={open}
+          onToggle={({ key, expanded: next }) => toggleFolder(levelRef({ org, wiki }, key), next)}
+          onSelect={({ key }) => {
+            const node = nodeAt(loaded, key)
+            if (node) showPage({ ...levelRef({ org, wiki }, node.path), title: node.title })
+          }}
+        />
+      )}
+      {capped && items.length > 0 ? (
         <Text size="sm" muted>
           Some pages are hidden. Collapse a folder to see others.
         </Text>

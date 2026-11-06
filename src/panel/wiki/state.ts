@@ -31,6 +31,8 @@ export interface Found {
 }
 
 export const MAX_TREE_ITEMS = 1000
+export const TREE_BYTES = 150 * 1024
+const TREE_ITEM_OVERHEAD_BYTES = 40
 const MAX_TREE_DEPTH = 16
 const ROOT = '/'
 
@@ -77,14 +79,19 @@ export function treeItems(
 ): { items: TreeItem[]; capped: boolean } {
   const isOpen = new Set(open)
   let count = 0
+  let used = 0
   let capped = false
+  let full = false
 
-  const take = (): boolean => {
-    if (count >= max) {
+  const take = (key: string, label: string): boolean => {
+    const cost = 2 * (utf8Length(key) + utf8Length(label)) + TREE_ITEM_OVERHEAD_BYTES
+    if (full || count >= max || used + cost > TREE_BYTES) {
+      full = true
       capped = true
       return false
     }
     count += 1
+    used += cost
     return true
   }
 
@@ -97,15 +104,18 @@ export function treeItems(
         capped = true
         continue
       }
-      if (!take()) return items
+      const label = cutLabel(node.title)
+      if (!take(node.path, label)) return items
       const nests = depth < MAX_TREE_DEPTH
       if (node.hasChildren && !nests) capped = true
-      const item: TreeItem = { key: node.path, label: cutLabel(node.title), icon: 'file-text', hasChildren: node.hasChildren && nests }
+      const item: TreeItem = { key: node.path, label, icon: 'file-text', hasChildren: node.hasChildren && nests }
       if (item.hasChildren && isOpen.has(node.path) && levelsByPath.has(node.path)) item.children = build(node.path, depth + 1)
       items.push(item)
     }
-    if (level.total > level.pages.length && take()) {
-      items.push({ key: `more:${path}`, label: `Showing ${level.pages.length} of ${level.total} pages`, disabled: true })
+    if (level.total > level.pages.length) {
+      const key = `more:${path}`
+      const label = `Showing ${level.pages.length} of ${level.total} pages`
+      if (take(key, label)) items.push({ key, label, disabled: true })
     }
     return items
   }
@@ -124,7 +134,7 @@ function scopeOf(): { org: string; wiki: WikiRef } | null {
   return org !== null && wiki !== undefined ? { org, wiki } : null
 }
 
-const levelRef = (scope: { org: string; wiki: WikiRef }, path: string): WikiPageRef => ({
+export const levelRef = (scope: { org: string; wiki: WikiRef }, path: string): WikiPageRef => ({
   org: scope.org,
   projectId: scope.wiki.projectId,
   wikiId: scope.wiki.id,
