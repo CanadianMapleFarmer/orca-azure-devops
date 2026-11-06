@@ -100,6 +100,18 @@ test('the review and wiki sections, the Reviewed by you list and the Wiki scope 
   assert.match(wiki, /\.orca-ado\/wiki\//)
 })
 
+test('the README says where Publish is, how a draft status ages, where an image link leads and what a -2 branch means', async () => {
+  const text = await readme()
+  const wiki = section(text, 'The Wiki tab')
+  assert.match(wiki, /Publish, \*\*Open\*\* and \*\*Discard\*\* are on the draft's card under \*\*Drafts \(N\)\*\*, above the page tree/)
+  assert.match(wiki, /On a page, press \*\*Back\*\* to reach them/)
+  assert.match(wiki, /status is as of the last time the list loaded; Publish always reads the saved file/)
+  assert.match(wiki, /an attachment image links to the page in Azure DevOps, where it shows/)
+  assert.match(section(text, 'Reviewing a pull request'), /Pushing from `<source>-2` creates a new branch on the remote; it does not update the pull request/)
+  assert.match(text, /lists the active pull requests you have voted on: active, not a draft, not created by you, you voted and haven't declined/)
+  assert.ok(!text.includes('under the same rules'), 'the Reviewed by you rule is spelled out')
+})
+
 test('the review and wiki limits are documented with the values the code enforces', async () => {
   const text = await readme()
   const number = (value: number) => value.toLocaleString('en-US')

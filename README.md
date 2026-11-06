@@ -134,7 +134,7 @@ Pull requests in a set often share one source branch. With "delete the source br
 
 Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. The count shows on the status bar (see The status bar).
 
-**Reviewed by you**, inside the same fold, lists the active pull requests you have voted on, under the same rules. Each row shows your vote. It holds up to 50, and it isn't part of the count. The lists refresh after you vote.
+**Reviewed by you**, inside the same fold, lists the active pull requests you have voted on: active, not a draft, not created by you, you voted and haven't declined. Each row shows your vote. It holds up to 50, and it isn't part of the count. The lists refresh after you vote.
 
 Click a row in either list to open the review in the tab (see Reviewing a pull request).
 
@@ -252,7 +252,7 @@ Each write reads the pull request or thread again first, sends one request, neve
 1. Press **Check out in Orca**. The plugin reads the pull request again and looks in your local workspaces for one whose git remote is the pull request's repository. It prefers one already on the source branch, then a git worktree, then the one in focus. It refuses when the pull request is no longer active, comes from a fork (check it out from the fork's repository), or matches no local workspace. It also refuses when the repository is open in Orca only as a folder, which can't create worktrees: open it as a git project and press again.
 2. If that workspace is already on the source branch, Orca opens it. You are done.
 3. Otherwise the plugin shows the repository's workspace (unless it is in focus) and arms Orca's next new workspace for 10 minutes. The panel says what to do and has a **Cancel** button.
-4. In Orca, create a new workspace in that repository's project and leave its branch options alone. It gets the source branch, made from the remote's copy. When a local branch of that name is checked out in another workspace, or sits at another commit than the remote's, it gets `<source>-2` from the same remote branch.
+4. In Orca, create a new workspace in that repository's project and leave its branch options alone. It gets the source branch, made from the remote's copy. When a local branch of that name is checked out in another workspace, or sits at another commit than the remote's, it gets `<source>-2` from the same remote branch. Pushing from `<source>-2` creates a new branch on the remote; it does not update the pull request.
 5. In Source Control, set the compare base to the target branch. Orca starts the new worktree's compare at the source branch itself, so the compare shows nothing until you change it.
 
 The arm works like this:
@@ -385,7 +385,7 @@ Open the Azure DevOps panel and choose **Wiki**. It lists the project wikis and 
 
 - The page tree loads a level at a time: expanding a folder reads its pages. A level shows up to 200 pages, in Azure DevOps's order and then by title. The tree draws up to 1,000 rows and says when it hides some. **Refresh pages** reloads the tree. **Refresh** on an open page reloads only that page.
 - **Search the wiki** needs at least 2 characters. Press Enter to search. It shows up to 25 results, each with a snippet, and says how many pages match. **Clear search** returns to the tree. When the organisation has no wiki search, the tab says so.
-- A page is shown as Markdown. Images appear as links (`Image: <name>`), not as pictures. Links to other wiki pages open that page in Azure DevOps. Only `http`, `https` and `mailto` links are kept, `[[_TOC_]]` is dropped, and a page over 60,000 bytes is cut with a note.
+- A page is shown as Markdown. Images appear as links (`Image: <name>`), not as pictures. An image at a web address links to that image; an attachment image links to the page in Azure DevOps, where it shows. Links to other wiki pages open that page in Azure DevOps. Only `http`, `https` and `mailto` links are kept, `[[_TOC_]]` is dropped, and a page over 60,000 bytes is cut with a note.
 - **Open in Azure DevOps** opens the page on the website.
 
 A code wiki is a folder of a repository published as a wiki. Its pages are read-only here: the page says so and has no **Edit in Orca**. Edit its files in the repository. Search finds only pages inside the published folder.
@@ -395,8 +395,8 @@ A code wiki is a folder of a repository published as a wiki. Its pages are read-
 **Edit in Orca** on a project wiki page opens the page as a Markdown file in Orca's own editor. It needs a local workspace in focus.
 
 - The file is `<workspace>/.orca-ado/wiki/<organisation>/<wiki>/<page path>.md`. It is a draft. The `.orca-ado/` folder is the one the board and run tabs use, and its `.gitignore` containing `*` keeps git out. File names are cleaned so they are valid on every OS, and a very long one is cut and gets a short hash. A copy of the page as you started it is kept under `.orca-ado/wiki/.base/`.
-- Save your changes in the editor, then press **Publish** in the Wiki tab. Publish sends what is saved in the file, not edits you haven't saved.
-- **Drafts (N)** lists your drafts with their page, wiki, workspace and file, and whether they hold saved changes that aren't published. You can keep up to 50 drafts across all organisations. A draft stays after you publish it, so you can keep editing. **Discard…** asks first, then deletes the draft's files. It sends nothing to Azure DevOps.
+- Save your changes in the editor, then press **Publish** in the Wiki tab. Publish, **Open** and **Discard** are on the draft's card under **Drafts (N)**, above the page tree. On a page, press **Back** to reach them. Publish sends what is saved in the file, not edits you haven't saved.
+- **Drafts (N)** lists your drafts with their page, wiki, workspace and file, and whether they hold saved changes that aren't published. That status is as of the last time the list loaded; Publish always reads the saved file. You can keep up to 50 drafts across all organisations. A draft stays after you publish it, so you can keep editing. **Discard…** asks first, then deletes the draft's files. It sends nothing to Azure DevOps.
 - **Edit in Orca** on a page that has a draft opens that draft again. When you haven't changed it, it is first brought up to the page's current version.
 - A draft belongs to the workspace it was made in. When that workspace is gone, discard the draft to edit the page again. A page over 1 MiB can't be edited or published here.
 
