@@ -213,7 +213,8 @@ export function selectFile(path: string): Promise<void> {
 
 export async function refreshReview(): Promise<void> {
   const path = read(selectedFile)
-  await Promise.all([reloadReview(), path === null ? undefined : loadDiff(path, true)])
+  await reloadReview()
+  if (path !== null && read(selectedFile) === path) await loadDiff(path, true)
 }
 
 export function comment({ text, path, lineText = '' }: { text: string; path?: string; lineText?: string }): Promise<void> {

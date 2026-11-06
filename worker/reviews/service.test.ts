@@ -178,6 +178,22 @@ test('diff reads each side once and reuses it', async () => {
   assert.equal(fresh.ado.count(isOnePr), 0)
 })
 
+test('a diff after a refreshed open reads the latest iteration', async () => {
+  const { ado, reviews, diff, since } = harness()
+  const pushed = '4110a9900000000000000000000000000000a099'
+  await reviews.open(KEY)
+  const listed = fixture<{ value: Record<string, unknown>[] }>('pr-iterations-4110')
+  ado.on(isIterations, () => json(200, { value: [...listed.value, { ...listed.value[1], id: 99, sourceRefCommit: { commitId: pushed } }] }))
+  ado.review.files[`${pushed}:${REDIRECT}`] = { ...ado.review.files[`${SOURCE}:${REDIRECT}`], content: 'export const pushed = true\n' }
+
+  await reviews.open(KEY)
+  const count = ado.calls.length
+  const redirect = await diff(REDIRECT)
+  assert.deepEqual(itemsRead(since(count)).sort(), [`${COMMON}:${REDIRECT}`, `${pushed}:${REDIRECT}`].sort())
+  assert.equal(since(count).filter(call => isIterations(call) || isChanges(call)).length, 0, 'the open kept the new facts')
+  assert.match(redirect.text ?? '', /export const pushed = true/)
+})
+
 test('diff says what it can\'t show for renamed, binary and oversized files', async () => {
   const { ado, reviews, diff, content, since } = harness()
   await reviews.open(KEY)

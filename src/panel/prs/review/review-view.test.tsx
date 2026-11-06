@@ -818,6 +818,28 @@ test('Refresh reloads the open diff and keeps the old one on screen until the ne
   assert.equal(requestsTo(host, 'reviews.diff').length, 3)
 })
 
+test('a refreshed diff reads the latest iteration', async () => {
+  let pushed = 2
+  let kept = 2
+  const host = await openFiles({
+    'reviews.open': async input => {
+      const latest = pushed
+      await pause(5)
+      kept = latest
+      return reviewOf({ key: input })
+    },
+    'reviews.diff': input => diffOf(input.path, { text: `+   1 │ iteration ${kept}` })
+  })
+  await panel.selectRows(FILES, [REDIRECT])
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, '+   1 │ iteration 2')
+
+  pushed = 99
+  await panel.press({ type: 'IconButton', label: 'Refresh' })
+  assert.equal(panel.find({ type: 'CodeView' })?.props.code, '+   1 │ iteration 99')
+  const names = (host.callsOf('plugin.request') as { name: string }[]).map(call => call.name)
+  assert.deepEqual(names.slice(-2), ['reviews.open', 'reviews.diff'], 'the diff is asked for once the review has loaded')
+})
+
 test('a refreshed diff that fails shows the failure instead of the old diff', async () => {
   let reads = 0
   await openFiles({
