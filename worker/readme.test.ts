@@ -7,6 +7,10 @@ import { MAX_STAGE_CHIPS } from '../src/shared/pipelines'
 import { MAX_REVIEW_COMMENT } from '../src/shared/reviews'
 import { APPROVAL_TEMPLATE, APPROVAL_VARS } from '../src/shared/share/approval-items'
 import { MAX_DRAFTS, MIN_SEARCH_CHARS } from '../src/shared/wiki'
+import { ADO_RESOURCE } from './ado/org'
+import { ENTRA_SIGN_IN_TIMEOUT_MS } from './auth/entra-provider'
+import { ENTRA, entraFailed, NETWORK, REDIRECT_PAGE } from './messages'
+import { LOOPBACK_NO_PROXY, MAX_CA_FILE_BYTES } from './net/network'
 import { MAX_EDITS, MAX_SIDE_LINES } from './reviews/diff'
 import { MAX_COMMENT_BYTES, MAX_COMMENTS_PER_THREAD, MAX_THREADS } from './reviews/threads'
 import { MAX_PUBLISH_BYTES } from './wiki/publish'
@@ -143,6 +147,154 @@ test('the pending live checks name the review and wiki checks', async () => {
   assert.ok(start >= 0, 'the pending live checks have a Reviews and wiki list')
   const pending = text.slice(start, text.indexOf('\n## License'))
   for (const topic of [/unchanged rename/, /binary/, /Resolve/, /draft pull request/, /Check out in Orca/, /compare base/, /detached/, /ETag/, /git status/, /Résumé/, /typeKey/, /360 px/]) {
+    assert.match(pending, topic)
+  }
+})
+
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+const NIL_GUID = '00000000-0000-0000-0000-000000000000'
+const FIXER = /Your (network )?admin fixes it|You fix it/
+
+function subsection(text: string, title: string): string {
+  const start = text.indexOf(`\n### ${title}\n`)
+  assert.ok(start >= 0, `the section has a ${title} subsection`)
+  const end = text.slice(start + 1).search(/\n##+ /)
+  return text.slice(start, end < 0 ? undefined : start + 1 + end)
+}
+
+test('the Microsoft account method, its credentials and its app registration are named where a reader chooses a method', async () => {
+  const text = await readme()
+  const connecting = section(text, 'Connecting an organisation')
+  const azure = connecting.indexOf('- **Azure CLI (no setup).**')
+  const microsoft = connecting.indexOf('- **Microsoft account (needs an app ID).**')
+  const pat = connecting.indexOf('- **Personal access token.**')
+  assert.ok(azure >= 0 && azure < microsoft && microsoft < pat, 'the Microsoft account sits between the Azure CLI and the PAT')
+  assert.ok(
+    connecting.includes(
+      "Signs in with Microsoft Entra ID through an app your admin registers once (see below). It doesn't need the Azure CLI, so it also suits Windows (not yet checked live)."
+    )
+  )
+  const credentials = subsection(connecting, 'Where credentials live')
+  assert.match(credentials, /- \*\*Microsoft:\*\* the refresh token for each organisation is kept in Orca's encrypted secrets, which needs an OS keyring;/)
+  assert.match(credentials, /access tokens stay in memory and are renewed before they expire\. Sign out deletes it\. It doesn't sign you out of Microsoft in your browser\./)
+  assert.match(section(text, 'Requirements'), /Sign in with Microsoft[^\n]*app registration/)
+})
+
+test('Sign in with Microsoft walks through the five steps, the account rules and the listener', async () => {
+  const guide = section(await readme(), 'Sign in with Microsoft')
+  assert.match(guide, /\n1\. [^\n]*`entraClientId`/)
+  assert.match(guide, /\n2\. [^\n]*Microsoft account \(needs an app ID\)[^\n]*\*\*Connect\*\*/)
+  assert.match(guide, /\n3\. [^\n]*\*\*Open sign-in page\*\*[^\n]*`login\.microsoftonline\.com`[^\n]*"Always allow"/)
+  assert.ok(guide.includes(`\n4. `) && guide.includes(`"${REDIRECT_PAGE.done}"`), 'the tab text is quoted as the redirect page shows it')
+  assert.match(guide, /\n5\. [^\n]*`signed in as <account>`/)
+  assert.match(guide, /The account picker shows every time\. The organisation is pinned, and another account is refused\./)
+  assert.match(guide, new RegExp(`Cancel works at any time, and a sign-in stops after ${ENTRA_SIGN_IN_TIMEOUT_MS / 60_000} minutes\\.`))
+  assert.match(guide, /listens only on `127\.0\.0\.1`, and only for that one sign-in/)
+  assert.match(guide, /Reconnect/)
+})
+
+test('the Microsoft troubleshooting is keyed by AADSTS code and quotes every other message the plugin can show', async () => {
+  const troubleshooting = subsection(section(await readme(), 'Sign in with Microsoft'), 'Troubleshooting')
+  const codes = ['AADSTS50011', 'AADSTS700016', 'AADSTS50020', 'AADSTS90094', 'AADSTS65001', 'AADSTS650057', 'AADSTS7000218', 'AADSTS9002326']
+  assert.deepEqual(
+    codes.filter(code => !troubleshooting.includes(`\`${code}\``)),
+    []
+  )
+  for (const code of codes) {
+    const entry = troubleshooting.split('\n').find(line => line.startsWith('- ') && line.includes(`\`${code}\``))
+    assert.ok(entry && FIXER.test(entry), `${code} says who fixes it`)
+  }
+  const keyedByCode = new Set<string>([ENTRA.consent, ENTRA.appNotFound, ENTRA.redirect, ENTRA.publicClient, ENTRA.apiPermission, ENTRA.wrongDirectory])
+  const quoted = Object.values(ENTRA).filter(message => !keyedByCode.has(message))
+  assert.deepEqual(
+    quoted.filter(message => !troubleshooting.includes(`\`${message}\``)),
+    []
+  )
+  for (const message of quoted) {
+    const entry = troubleshooting.split('\n').find(line => line.startsWith('- ') && line.includes(`\`${message}\``))
+    assert.ok(entry && FIXER.test(entry), `${message} says who fixes it`)
+  }
+  assert.ok(troubleshooting.includes(`\`${entraFailed('<code>')}\``), 'the generic failure is explained')
+  assert.match(troubleshooting, /cancel[^\n]*in Orca[^\n]*rather than[^\n]*time out/i)
+})
+
+test('the admin guide is generic, marks its portal labels as unchecked and cites only the Azure DevOps application ID', async () => {
+  const text = await readme()
+  const guide = section(text, 'Registering the app (for admins)')
+  assert.match(guide, /haven't been checked against the live portal/)
+  for (const label of [
+    'App registrations → New registration',
+    'Accounts in this organizational directory only',
+    'Accounts in any organizational directory',
+    'Public client/native (mobile & desktop)',
+    'Authentication → Advanced settings → Allow public client flows',
+    'API permissions → Add a permission → APIs my organization uses',
+    'Delegated → `user_impersonation` → Add',
+    'Grant admin consent for',
+    'Application (client) ID'
+  ]) {
+    assert.ok(guide.includes(label), `${label} is quoted`)
+  }
+  assert.ok(guide.includes('`http://localhost`'))
+  assert.ok(guide.includes(`(\`${ADO_RESOURCE}\`)`), 'the Azure DevOps application ID is given')
+  assert.match(guide, /Don't create a client secret or certificate/)
+  assert.match(guide, /AADSTS7000218/)
+  for (const note of [/Microsoft Entra ID[^\n]*personal Microsoft accounts[^\n]*Azure CLI or a PAT/, /Conditional Access/, /Removing consent, or deleting the registration, stops every saved sign-in/]) {
+    assert.match(guide, note)
+  }
+  const ids = new Set(text.match(GUID) ?? [])
+  assert.deepEqual([...ids].sort(), [NIL_GUID, ADO_RESOURCE].sort(), 'no tenant, organisation or app values')
+})
+
+test('Proxies and certificates says why the settings exist and what each one, az and Connection status do', async () => {
+  const text = await readme()
+  const network = section(text, 'Proxies and certificates')
+  for (const variable of ['HTTPS_PROXY', 'NO_PROXY', 'NODE_EXTRA_CA_CERTS']) assert.ok(network.includes(`\`${variable}\``), `${variable} is named`)
+  for (const key of ['httpsProxy', 'caCertificatesFile', 'useSystemCertificates']) assert.ok(network.includes(`\`${key}\``), `${key} is described`)
+  for (const host of LOOPBACK_NO_PROXY.split(',')) assert.ok(network.includes(host), `${host} bypasses the proxy`)
+  assert.match(network, /Proxies that need a password aren't supported/)
+  assert.ok(network.includes(`up to ${MAX_CA_FILE_BYTES / 1024 / 1024} MiB`), 'the certificate file cap is stated')
+  assert.match(network, /`az` uses the proxy but not the certificate settings/)
+  assert.match(network, /Sign in with Microsoft or a PAT/)
+  assert.match(network, /new connections only/)
+  assert.match(network, /Orca[^\n]*too old[^\n]*says so/)
+  const status = manifest.contributes.commands.find(command => command.id === 'status')
+  assert.ok(status && network.includes(`**${status.title}**`), 'the Connection status command is named by its title')
+  assert.match(network, /lists any setting that was ignored, and why/)
+  assert.ok(network.includes(`\`${NETWORK.proxyInUse}\``), 'the proxy-in-use note is quoted')
+})
+
+test('every Microsoft and network setting is documented with the default the manifest declares', async () => {
+  const lines = section(await readme(), 'Settings').split('\n')
+  for (const key of ['entraClientId', 'entraTenant', 'httpsProxy', 'caCertificatesFile', 'useSystemCertificates']) {
+    const setting = manifest.contributes.settings.find(item => item.key === key)
+    assert.ok(setting, `${key} is in the manifest`)
+    const line = lines.find(item => item.startsWith(`- \`${key}\` `))
+    assert.ok(line, `${key} has a line in Settings`)
+    assert.ok(line.includes(`(${setting.title})`), `${key} names its title`)
+    assert.ok(line.includes(setting.default === true ? 'On by default.' : setting.default === false ? 'Off by default.' : 'Empty by default.'), `${key} says its default`)
+  }
+})
+
+test('the pending live checks name the Microsoft sign-in and network checks', async () => {
+  const text = await readme()
+  const start = text.indexOf('\nMicrosoft sign-in and network:\n')
+  assert.ok(start >= 0, 'the pending live checks have a Microsoft sign-in and network list')
+  const pending = text.slice(start, text.indexOf('\n## License'))
+  for (const topic of [
+    /admin guide[^\n]*portal labels/,
+    /consent dialog[^\n]*login\.microsoftonline\.com/,
+    /account picker/,
+    /Safari, Chrome and Firefox/,
+    /AADSTS7000218/,
+    /own page/,
+    /Orca restart/,
+    /wrong-account/,
+    /lsof/,
+    /Sign out/,
+    /proxy/,
+    /both themes/
+  ]) {
     assert.match(pending, topic)
   }
 })
