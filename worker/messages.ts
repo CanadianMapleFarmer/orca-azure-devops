@@ -134,6 +134,15 @@ export const TOO_MANY_DRAFTS = `You have ${MAX_DRAFTS} wiki drafts. Publish or d
 export const DRAFT_FILE_TAKEN = 'Another draft already uses that file name. Publish or discard it first.'
 export const DRAFT_DISCARDED = 'Draft discarded.'
 export const DRAFT_GONE = 'That draft no longer exists.'
+export const DRAFT_BUSY = 'This draft is already being published.'
+export const DRAFT_FILE_GONE = 'The draft file is gone. Press Edit to start again.'
+export const DRAFT_KEPT = 'Your draft is kept.'
+export const NOTHING_TO_PUBLISH = 'Nothing to publish yet. Save your changes in the editor first.'
+export const MERGE_NOT_SAVED = "Your draft hasn't changed since their version opened. Copy what you need into it and save, or choose Publish mine."
+export const WIKI_CONFLICT = 'Someone changed this page in Azure DevOps after you started editing.'
+export const PUBLISHED = 'Published.'
+export const PUBLISHED_OVER = `${PUBLISHED} Their changes were replaced.`
+export const TOOK_THEIRS = 'Your draft now holds their version.'
 
 export const VOTED: Record<VoteChoice, string> = {
   approve: PR_APPROVED,
@@ -195,6 +204,10 @@ export function armedCheckout({ repo, branch, base, prId, target }: { repo: stri
 
 export function openedDraft(title: string): string {
   return `Opened ${title} in Orca. Save your changes there, then press Publish here.`
+}
+
+export function openedTheirs(name: string): string {
+  return `Opened their version as ${name}. Copy what you need into your draft, save it, then press Publish.`
 }
 
 export function noBoardNamed(name: string): string {

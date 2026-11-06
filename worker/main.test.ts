@@ -868,6 +868,49 @@ test('wiki.edit and wiki.drafts answer through the handlers', async () => {
   }
 })
 
+test('wiki.publish answers through the handler', async () => {
+  const ado = fakeWiki()
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await withFetch(signedIn(ado), async () => {
+      const host = mockHost({
+        capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+        storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME } }] },
+        secrets: { 'pat:contoso': PAT },
+        results: { 'workspace.readContext': () => FOCUSED, 'workspace.list': () => workspaceAt(dir), 'editor.open': { opened: true } }
+      })
+      await withWorker(worker, { host }, async w => {
+        const wikiId = ado.wikis.find(wiki => wiki.name === 'Fabrikam Web.wiki')!.id
+        const ref = { org: 'contoso', projectId: PROJECT, wikiId, path: '/Release process/Checklist' }
+        const draft = path.join(dir, '.orca-ado', 'wiki', 'contoso', 'Fabrikam Web.wiki', 'Release process', 'Checklist.md')
+        const key = `contoso:${wikiId}:/Release process/Checklist`
+        const page = ado.pages.get(ref.path)!
+        const puts = () => ado.calls.filter(call => call.method === 'PUT').length
+        await w.request('wiki.edit', ref)
+        assert.deepEqual(await w.request('wiki.publish', { key }), {
+          status: 'unchanged',
+          message: 'Nothing to publish yet. Save your changes in the editor first.'
+        })
+
+        const mine = `${page.content}\nOne more step.\n`
+        await fs.writeFile(draft, mine)
+        assert.deepEqual(await w.request('wiki.publish', { key }), { status: 'published', message: 'Published.' })
+        assert.deepEqual([page.content, puts()], [mine, 1])
+
+        Object.assign(page, { content: 'Rewritten by someone else.\n', etag: '"c0ffee"' })
+        await fs.writeFile(draft, 'Mine again.\n')
+        const clash = await w.request('wiki.publish', { key })
+        assert.deepEqual([clash.status, clash.message], ['conflict', 'Someone changed this page in Azure DevOps after you started editing.'])
+        assert.deepEqual(await w.request('wiki.resolve', { key, choice: 'theirs' }), { status: 'updated', message: 'Your draft now holds their version.' })
+        assert.deepEqual([await fs.readFile(draft, 'utf8'), puts()], ['Rewritten by someone else.\n', 1])
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 const SIG = 'wQ3vN8sXkP2mR7tY1uZ4aB6cD9eF0gH5iJ'
 const WEBHOOK_HOST = 'default0f0e0d0c.environment.api.powerplatform.com'
 const WEBHOOK = `https://${WEBHOOK_HOST}/powerautomate/automations/direct/workflows/5d1c2b3a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=${SIG}`

@@ -41,6 +41,7 @@ import { runCommand, stopAllCommands } from './sys/run'
 import { registerVisibilityHandler } from './visibility-handler'
 import { createDrafts } from './wiki/drafts'
 import { registerWikiHandlers } from './wiki/handlers'
+import { createPublisher } from './wiki/publish'
 import { createWikiService } from './wiki/service'
 import { createArm } from './workspace/arm'
 import type { HostCall } from './workspace/focused'
@@ -205,7 +206,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     actions: reviewActions,
     checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
   })
-  registerWikiHandlers(orca, { wiki, drafts: createDrafts({ store, fs, call, wiki, now: Date.now }) })
+  const drafts = createDrafts({ store, fs, call, wiki, now: Date.now })
+  registerWikiHandlers(orca, { wiki, drafts, publisher: createPublisher({ http, drafts, wiki, now: Date.now }) })
   registerPipelineHandlers(orca, {
     pipelines,
     actions: runActions,
