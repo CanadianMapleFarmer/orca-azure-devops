@@ -296,7 +296,7 @@ Open in Orca looks for the file in your local workspaces. It picks the ones whos
 
 ## Notifications
 
-The plugin shows desktop notifications through Orca. They work whenever Orca is open, with the Pipelines tab hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
+The plugin shows desktop notifications through Orca whenever Orca is open, with the Pipelines tab hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
 
 It notifies when:
 
@@ -309,7 +309,7 @@ Each kind has a setting, on by default. See Settings.
 - One notification per finish and per approval. When you rerun a stage and the run fails again, it notifies again.
 - Nothing for your runs that failed, or approvals that started waiting, before the plugin started. A watched run that finished while Orca was closed does notify, once, when the plugin next runs.
 - At most 3 per poll, then one more, `N more pipeline updates`, for the rest.
-- A click opens nothing, because Orca gives the plugin no click event. The text says where to look: the Pipelines tab.
+- Orca gives the plugin no click event, so a click is expected to open nothing (not yet checked on macOS). The text says where to look: the Pipelines tab.
 
 The plugin needs the `notifications:show` permission to show them. Orca asks you to approve it once, when the plugin first loads with it. Until you do, nothing shows. The plugin logs "Couldn't show a desktop notification." and doesn't retry.
 
@@ -331,7 +331,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list only, for the status bar). Opening the tab shows data under a minute old without asking again.
 - PRs tab caches: completed pull requests for 5 minutes, linked work items for 10 minutes (an hour once completed), build and policy status for 2 minutes, the code project list for an hour.
 - PRs tab limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes.
-- Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 runs that just finished per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
+- Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 finished runs it hasn't read yet per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
 - Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
@@ -389,7 +389,6 @@ Pull requests and sharing:
 - The Teams chat link: desktop app or browser, prefilled line breaks, `tenantId` picking the right account, a two-person group chat, the real length limit, and how often Orca asks before opening it.
 - Adding reviewers (a person and a group, required and optional) notifies them and leaves an existing reviewer's vote untouched.
 - On the client organisation, read-only: `X-RateLimit-*` headroom after a refresh, whether `reviewerId` returns pull requests assigned to your groups, and whether the organisation-wide repository list works.
-- `ADO · N to review` on the status bar.
 - The PRs tab and composer at 360 px in both themes, Orca's To review fold and the first press of Share and Open Teams chat.
 - The Markdown preview of a title that holds a bare URL.
 
