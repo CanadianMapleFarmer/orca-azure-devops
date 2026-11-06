@@ -1,4 +1,4 @@
-import { MAX_DRAFTS, type DraftSummary, type WikiPageRef } from '../../src/shared/wiki'
+import { draftKey, MAX_DRAFTS, type DraftSummary, type WikiPageRef } from '../../src/shared/wiki'
 import { titleText } from '../ado/wiki'
 import type { StorePort } from '../connections'
 import {
@@ -67,10 +67,6 @@ export interface DraftsDeps {
 
 const DRAFTS_KEY = 'wiki:drafts'
 const TEXT_FIELDS = ['key', 'org', 'projectId', 'wikiId', 'wikiName', 'path', 'version', 'workspaceId', 'workspacePath', 'workspaceName', 'file'] as const
-
-export function draftKey(ref: WikiPageRef): string {
-  return `${ref.org}:${ref.wikiId}:${ref.path}`
-}
 
 export function createDrafts(deps: DraftsDeps): Drafts {
   let queue: Promise<unknown> = Promise.resolve()

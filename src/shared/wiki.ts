@@ -3,6 +3,10 @@ import type { DiffText } from './diff'
 export const MAX_DRAFTS = 50
 export const MIN_SEARCH_CHARS = 2
 
+export function draftKey(ref: WikiPageRef): string {
+  return `${ref.org}:${ref.wikiId}:${ref.path}`
+}
+
 export interface WikiRef {
   id: string
   name: string
