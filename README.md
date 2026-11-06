@@ -226,7 +226,8 @@ The view says why when it leaves something out:
 
 - **Binary files** show no diff and take comments on the whole file only.
 - **Files over 2 MiB** show no diff. The plugin doesn't read them, so it can't check a line number. When the side a comment lands on is that large, comment on the whole file.
-- **Too many changes:** a diff of more than 2,000 changed lines (roughly), or a file of more than 50,000 lines, shows no diff.
+- **Files of more than 50,000 lines** show no diff either. The view says the file is too large to show.
+- **Too many changes:** an edit of more than 2,000 changed lines (roughly) shows no diff. An added or deleted file, or a change that only adds or only removes one block of lines, has no such limit and shows the block up to its first 60 KiB.
 - **More than 1,000 files:** the list holds the first 1,000 and says so.
 - A diff stops at 60 KiB and says how many lines it shows. Lines over 1,000 characters are cut.
 - When Azure DevOps hasn't worked out the pull request's common ancestor yet, there is no diff. Refresh in a moment.
@@ -243,7 +244,7 @@ For all of these except binary files, the view suggests **Check out in Orca**, w
 
 Comments are shown as Markdown with images as links, and `@` mentions show names. The plugin keeps at most 100 threads and 20 comments in each (the first and the newest 19), and cuts a comment at 8,000 bytes. The panel shows up to 30 threads with 10 comments each (the first and the newest 9). The tab counts every thread, says how many it shows, and says how many replies it left out. Some comments may be dropped to keep a very large review within one answer, and it says so.
 
-Each write reads the pull request or thread again first, sends one request, never retries, and reports what Azure DevOps answered. Its button is off while it runs. A thread deleted meanwhile and a file a later push dropped are refused with a message, and so is a vote on a pull request that has completed.
+Votes, replies, status changes and file comments read the pull request or thread again first; a general comment is sent as is. Each write sends one request, never retries, and reports what Azure DevOps answered. Its button is off while it runs. A thread deleted meanwhile and a file a later push dropped are refused with a message, and so is a vote on a pull request that has completed.
 
 ### Check out in Orca
 
@@ -261,7 +262,7 @@ The arm works like this:
 - The next new workspace you create in Orca gets it, in any project. The plugin can't tie the arm to a project. A workspace made with the `orca` command or by an automation gets it too, so create the one you want first. A new folder workspace doesn't use it.
 - Arming replaces an earlier arm, including one from **Start a workspace** on a work item.
 - The workspace takes the branch name as its name.
-- **Cancel** disarms it. The box stays on screen until you press Cancel, even after the workspace exists or the 10 minutes are up.
+- **Cancel** disarms it. The box stays on screen until you press Cancel or the panel reloads, even after the workspace exists or the 10 minutes are up. A reload removes only the box: the arm still serves the next new workspace until it expires.
 - When a local branch of the source's name exists and Orca has never fetched the remote's copy, Orca bases the workspace on that local branch as it is, without fetching. It may be behind, or hold commits you haven't pushed.
 
 ## The Pipelines tab
