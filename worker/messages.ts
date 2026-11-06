@@ -195,6 +195,8 @@ export function fileNotFound(path: string, repo: string): string {
   return `Couldn't find ${path} in your local workspaces of ${repo}.`
 }
 
+export const IMAGE_ALT = 'image'
+
 export function imageLink(alt: string): string {
   return `Image: ${alt}`
 }

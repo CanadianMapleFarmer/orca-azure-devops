@@ -1,5 +1,5 @@
 import { decode, escapeText } from './ado/html-text'
-import { imageLink, MARKDOWN_CUT_NOTE, UNKNOWN_AUTHOR } from './messages'
+import { IMAGE_ALT, imageLink, MARKDOWN_CUT_NOTE, UNKNOWN_AUTHOR } from './messages'
 
 export interface MarkdownTarget {
   maxBytes: number
@@ -20,6 +20,12 @@ interface Opener {
   image: boolean
 }
 
+interface ConvertedImage {
+  at: number
+  label: string
+  end: number
+}
+
 interface Destination {
   start: number
   end: number
@@ -28,7 +34,6 @@ interface Destination {
 
 const CUT_SUFFIX = `\n\n*${MARKDOWN_CUT_NOTE}*`
 const CUT_SUFFIX_BYTES = Buffer.byteLength(CUT_SUFFIX)
-const IMAGE_ALT = 'image'
 const NO_JOIN = '​'
 const MAX_OPENERS = 32
 const MAX_LABEL = 999
@@ -36,7 +41,7 @@ const INPUT_PER_BYTE = 16
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 const FENCE_END = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
-const TOC = /^[ \t]*\[\[_(?:TOC|TOSP)_\]\][ \t]*$/
+const TOC = /^ {0,3}\[\[_(?:TOC|TOSP)_\]\][ \t]*$/
 const QUOTE_MARKS = /^(?: {0,3}>[ \t]?)*/
 const INTERRUPTS = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[-+*][ \t]|\d{1,9}[.)][ \t]|(?:[-*_][ \t]*){3,}$)/
 const ONE_LINE = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:[-*_][ \t]*){3,}$|=+[ \t]*$)/
@@ -70,6 +75,7 @@ const HREF_ESCAPE = /\\([!-\/:-@\[-`{-~])|&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z
 const HREF_UNSAFE = /[\s\x00-\x1f\x7f()<>[\]\\`]/g
 const KEEP_LINK = /^(?:https?|mailto):/i
 const KEEP_IMAGE = /^https?:/i
+const IMAGE_SIZE = /[ \t]+=\d*x\d*/y
 const SECURE = /^https:\/\//i
 const FILE_NAME = /^[^:\x00-\x1f]+\.[A-Za-z0-9]{1,8}$/
 const GLUES = /[\]<\\`&!]/
@@ -222,6 +228,7 @@ function renderInline(s: string, ctx: Context): string {
   let commentsLeft = true
   let plain = 0
   let i = 0
+  let image: ConvertedImage | null = null
 
   const flush = (to: number) => {
     if (to > plain) out.push(s.slice(plain, to))
@@ -284,16 +291,26 @@ function renderInline(s: string, ctx: Context): string {
     const end = i + tag[0].length
     const name = (tag[1] ?? tag[2]).toLowerCase()
     if (name === 'a') replace(i, end, removedTag(s, i, end))
-    else if (name === 'img' && tag[2] === undefined) replace(i, end, joinGuard(s, i) + tagImage(tag[0], ctx))
+    else if (name === 'img' && tag[2] === undefined) {
+      const { label, target } = tagImage(tag[0], ctx)
+      flush(i)
+      emitImage(joinGuard(s, i), label, target, end)
+    }
     i = end
   }
 
-  const open = (image: boolean) => {
+  const emitImage = (guard: string, label: string, target: string, end: number) => {
+    out.push(`${guard}[${label}](${target})`)
+    image = { at: out.length - 1, label, end }
+    plain = end
+  }
+
+  const open = (isImage: boolean) => {
     flush(i)
     if (openers.length === MAX_OPENERS) openers.shift()
-    openers.push({ at: out.length, source: i, image })
-    out.push(image ? '![' : '[')
-    i += image ? 2 : 1
+    openers.push({ at: out.length, source: i, image: isImage })
+    out.push(isImage ? '![' : '[')
+    i += isImage ? 2 : 1
     plain = i
   }
 
@@ -302,7 +319,7 @@ function renderInline(s: string, ctx: Context): string {
     const bracket = i
     i += 1
     if (s[i] !== '(') return
-    const tail = linkTail(s, i + 1)
+    const tail = linkTail(s, i + 1, opener?.image === true)
     if (!tail) return
     const { dest } = tail
     const href = unescapeHref(dest.raw)
@@ -310,9 +327,13 @@ function renderInline(s: string, ctx: Context): string {
       flush(bracket)
       const alt = out.splice(opener.at).slice(1).join('')
       const target = KEEP_IMAGE.test(dest.raw) ? s.slice(dest.start, dest.end) : resolved(href, ctx)
-      out.push(`${joinGuard(s, opener.source)}[${imageLabel(alt, href)}](${target})`)
-      i = plain = tail.end
+      emitImage(joinGuard(s, opener.source), imageLabel(alt, href), target, tail.end)
+      i = tail.end
       return
+    }
+    if (opener && tail.end >= 0 && image && image.at === opener.at + 1 && image.end === bracket && out.length === opener.at + 2) {
+      out.splice(opener.at)
+      out.push(`[${image.label}`)
     }
     if (!KEEP_LINK.test(dest.raw)) replace(dest.start, dest.end, resolved(href, ctx))
     if (!opener || tail.end < 0) {
@@ -409,11 +430,13 @@ function definitionAt(s: string, at: number): { open: number; close: number; des
   return { open, close, dest, end: end > k && (end === s.length || s[end] === '\n') ? end : dest.end }
 }
 
-function linkTail(s: string, from: number): { dest: Destination; end: number } | null {
+function linkTail(s: string, from: number, image: boolean): { dest: Destination; end: number } | null {
   const dest = destinationAt(s, skipSpace(s, from))
   if (!dest) return null
-  let k = skipSpace(s, dest.end)
-  if (k > dest.end) k = skipSpace(s, titleEnd(s, k))
+  IMAGE_SIZE.lastIndex = dest.end
+  const sized = image && IMAGE_SIZE.test(s) ? IMAGE_SIZE.lastIndex : dest.end
+  let k = skipSpace(s, sized)
+  if (k > sized) k = skipSpace(s, titleEnd(s, k))
   return { dest, end: s[k] === ')' ? k + 1 : -1 }
 }
 
@@ -479,7 +502,7 @@ function removedTag(s: string, start: number, end: number): string {
   return atLineStart && !LETTER.test(s[end] ?? '') ? NO_JOIN : ''
 }
 
-function tagImage(tag: string, ctx: Context): string {
+function tagImage(tag: string, ctx: Context): { label: string; target: string } {
   const attributes = new Map<string, string>()
   for (const found of tag.matchAll(ATTRIBUTE_VALUE)) {
     const name = found[1].toLowerCase()
@@ -488,7 +511,7 @@ function tagImage(tag: string, ctx: Context): string {
   const src = (attributes.get('src') ?? '').trim()
   const alt = escapeText((attributes.get('alt') ?? '').replace(/\s+/g, ' ').trim())
   const target = KEEP_IMAGE.test(src) ? encodeHref(src) : resolved(src, ctx)
-  return `[${imageLabel(alt, src)}](${target})`
+  return { label: imageLabel(alt, src), target }
 }
 
 function imageLabel(alt: string, src: string): string {

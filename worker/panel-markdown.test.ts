@@ -52,7 +52,17 @@ test('panelMarkdown turns images into links and resolves relative links', () => 
       'A [link](/a), ![img](b.png) and <a href="/c" title="x>y">text</a>.',
       `A [link](${resolve('/a')}), [Image: img](${resolve('b.png')}) and text.`
     ],
-    ['[![badge](/badge.png)](/pipelines)', `[[Image: badge](${resolve('/badge.png')})](${resolve('/pipelines')})`]
+    ['![shot](/.attachments/shot.png =500x)', `[Image: shot](${resolve('/.attachments/shot.png')})`],
+    ['![shot](/.attachments/shot.png =500x250)', `[Image: shot](${resolve('/.attachments/shot.png')})`],
+    ['![shot](/.attachments/shot.png =x250 "Shot")', `[Image: shot](${resolve('/.attachments/shot.png')})`],
+    ['![shot](<My shot.png> =500x)', `[Image: shot](${resolve('My shot.png')})`],
+    ['![shot](https://cdn.fabrikam.test/s.png =500x)', '[Image: shot](https://cdn.fabrikam.test/s.png)'],
+    ['[a](b.md =500x)', `[a](${resolve('b.md')} =500x)`],
+    ['[![badge](/badge.png)](/pipelines)', `[Image: badge](${resolve('/pipelines')})`],
+    ['[![badge](/badge.png "b")](/pipelines "Runs")', `[Image: badge](${resolve('/pipelines')} "Runs")`],
+    ['[![badge](/badge.png =80x)](https://dev.azure.com/contoso)', '[Image: badge](https://dev.azure.com/contoso)'],
+    ['[<img src="/badge.png" alt="badge">](/pipelines)', `[Image: badge](${resolve('/pipelines')})`],
+    ['[![badge](/badge.png) status](/pipelines)', `[[Image: badge](${resolve('/badge.png')}) status](${resolve('/pipelines')})`]
   ]
   for (const [input, expected] of cases) assert.equal(md(input), expected, input)
 })
@@ -70,6 +80,9 @@ test('panelMarkdown makes hostile and ADO-only markup safe to show', () => {
   assert.equal(md(`@<${ME}>`, { people: undefined }), '@Unknown')
 
   assert.equal(md('# Release process\n[[_TOC_]]\n[[_TOSP_]]  \nSteps'), '# Release process\nSteps')
+  assert.equal(md('Intro\n\n   [[_TOC_]]\nSteps'), 'Intro\n\nSteps')
+  for (const indented of ['para\n\n    [[_TOC_]]', 'para\n\n\t[[_TOSP_]]'])
+    assert.equal(md(indented), indented, JSON.stringify(indented))
 
   const code = [`@<${ME}>`, '[[_TOC_]]', '![a](b.png)']
   const fenced = [
@@ -179,7 +192,9 @@ test('panelMarkdown stays fast on adversarial input', () => {
     '\n> [a]:'.repeat(30_000),
     Array.from({ length: 600 }, (_, i) => `${'`'.repeat(i + 1)}x`).join(''),
     `${'['.repeat(40_000)}${'](x)'.repeat(40_000)}`,
-    `${'![a'.repeat(30_000)}${'](x)'.repeat(30_000)}`
+    `${'![a'.repeat(30_000)}${'](x)'.repeat(30_000)}`,
+    '![a](b =1x '.repeat(30_000),
+    `${'[![a](b)'.repeat(30_000)}${'](c)'.repeat(30_000)}`
   ]
   for (const input of inputs) {
     const started = Date.now()
