@@ -13,7 +13,7 @@ import {
   PRS_TRIMMED,
   PRS_WORK_ITEMS_NEED_ACCESS
 } from '../messages'
-import { isSignedIn, loadFailure, notConnected, type SignedInStatus } from '../org-status'
+import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource } from './load'
 import { newestCreatedAt, releaseSets, toReviewOf } from './release-sets'
@@ -69,13 +69,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   const visible = new Set<string>()
   let disposed = false
 
-  async function statusOf(org: string): Promise<SignedInStatus> {
-    const orgs = await deps.orgs().catch(error => {
-      throw loadFailure(error, PRS_LOAD_FAILED)
-    })
-    const status = orgs.find(item => item.org === org)
-    if (disposed || !status || !isSignedIn(status)) throw notConnected()
-    return status
+  function statusOf(org: string): Promise<SignedInStatus> {
+    return signedInStatus(deps.orgs, org, PRS_LOAD_FAILED, () => disposed)
   }
 
   function entryOf(org: string): OrgPrs {

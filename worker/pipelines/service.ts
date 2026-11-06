@@ -18,7 +18,7 @@ import {
   RUNS_NEED_BUILD_READ,
   RUNS_TRIMMED
 } from '../messages'
-import { isSignedIn, loadFailure, notConnected, type SignedInStatus } from '../org-status'
+import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { carriedChips, createRunSource, waitingIf, type RunSource, type RunsLoad } from './load'
 import type { Pressure } from './pressure'
@@ -82,13 +82,8 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   const visible = new Set<string>()
   let disposed = false
 
-  async function statusOf(org: string): Promise<SignedInStatus> {
-    const orgs = await deps.orgs().catch(error => {
-      throw loadFailure(error, RUNS_LOAD_FAILED)
-    })
-    const status = orgs.find(item => item.org === org)
-    if (disposed || !status || !isSignedIn(status)) throw notConnected()
-    return status
+  function statusOf(org: string): Promise<SignedInStatus> {
+    return signedInStatus(deps.orgs, org, RUNS_LOAD_FAILED, () => disposed)
   }
 
   function entryOf(org: string): OrgRuns {
