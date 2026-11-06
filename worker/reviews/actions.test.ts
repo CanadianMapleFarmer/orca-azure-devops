@@ -63,7 +63,10 @@ function harness(after: (org: string) => unknown = () => {}) {
   const actions = createReviewActions({
     http,
     reviews,
-    me: async org => (await connected(org), ME),
+    me: async org => {
+      await connected(org)
+      return ME
+    },
     after: org => {
       refreshed.push(org)
       return after(org) as void
