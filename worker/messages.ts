@@ -88,6 +88,7 @@ export const NO_LOCAL_WORKSPACE_FILE = 'Open a local workspace first.'
 export const RUN_TRIMMED = 'Some issue details were left out to keep this run view small.'
 export const RUN_CUT = 'Some steps were left out to keep this run view small.'
 export const NOT_A_FILE_PATH = "That isn't a file path Orca can open."
+export const GIT_REMOTES_FAILED = "Couldn't read the git remotes of a local workspace."
 
 export const ALL_JOBS_STAGE = 'All jobs'
 

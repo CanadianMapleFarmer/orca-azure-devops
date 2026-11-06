@@ -77,6 +77,7 @@ function depsOf(call: HostCall, remotesAt: Record<string, AdoRemote[]> = {}) {
     call,
     gitAvailable: true,
     remotes: async root => remotesAt[root] ?? [],
+    log: unlogged,
     isFileInside: async (root, relative) => {
       roots.push(root)
       return inside(root, relative)
@@ -86,6 +87,7 @@ function depsOf(call: HostCall, remotesAt: Record<string, AdoRemote[]> = {}) {
 }
 
 const neverRun: RunCommand = async () => assert.fail('git must not run')
+const unlogged = (message: string) => assert.fail(`unexpected log: ${message}`)
 
 test('openRunFile never opens a path outside the workspace', async () => {
   await withTempDir(async base => {
@@ -271,6 +273,38 @@ test('a missing file says so', async () => {
   })
 })
 
+test("a workspace whose git remotes can't be read is skipped with a fixed log line, and another still opens", async () => {
+  await withTempDir(async base => {
+    const dir = (name: string) => path.join(base, name)
+    for (const name of ['slow', 'broken', 'web']) await write(dir(name), 'src/Api/Program.cs')
+    const slow = workspace('ws-slow', dir('slow'), 'main')
+    const broken = workspace('ws-broken', dir('broken'), 'main')
+    const web = workspace('ws-web', dir('web'), 'develop')
+    const failures: Record<string, Error> = { [dir('slow')]: new Error('git timed out after 5000ms'), [dir('broken')]: new Error('spawn git EACCES') }
+    const logs: string[] = []
+    const depsFor = (call: HostCall): OpenFileDeps => ({
+      ...depsOf(call).deps,
+      remotes: async root => {
+        if (failures[root]) throw failures[root]
+        return root === dir('web') ? [WEB] : []
+      },
+      log: message => logs.push(message)
+    })
+    const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 3 }
+    const unread = "Couldn't read the git remotes of a local workspace."
+
+    const several = host([slow, broken, web], slow)
+    assert.deepEqual(await openRunFile(depsFor(several.call), request), { opened: true, path: 'src/Api/Program.cs', line: 3 })
+    assert.deepEqual(several.opened(), [{ workspaceId: 'ws-web', path: 'src/Api/Program.cs' }])
+    assert.deepEqual(logs, [unread, unread])
+
+    const alone = host([slow], slow)
+    assert.deepEqual(await openRunFile(depsFor(alone.call), request), { opened: false, message: 'Open a local workspace of web-app first.' })
+    assert.deepEqual(alone.opened(), [])
+    assert.ok(logs.every(line => line === unread), 'no git output or path reaches the log')
+  })
+})
+
 test('without git the focused workspace is used', async () => {
   await withTempDir(async base => {
     const dir = (name: string) => path.join(base, name)
@@ -285,6 +319,7 @@ test('without git the focused workspace is used', async () => {
       call,
       gitAvailable: false,
       remotes: gitRemotes(neverRun, null, Date.now),
+      log: unlogged,
       isFileInside: fileInside(fs)
     })
 
@@ -380,7 +415,7 @@ test('a run without an Azure Repos repository uses the focused local workspace o
     const bare = workspace('ws-bare', dir('bare'), 'main')
     const remote = workspace('ws-remote', dir('web'), 'main', 'ssh:build-box')
     const unread: OpenFileDeps['remotes'] = async () => assert.fail('remotes are not read')
-    const depsFor = (call: HostCall): OpenFileDeps => ({ call, gitAvailable: true, remotes: unread, isFileInside: fileInside(fs) })
+    const depsFor = (call: HostCall): OpenFileDeps => ({ call, gitAvailable: true, remotes: unread, log: unlogged, isFileInside: fileInside(fs) })
 
     const focused = host([github, web], web)
     assert.deepEqual(await openRunFile(depsFor(focused.call), request), { opened: true, path: 'src/app.ts', line: 2 })

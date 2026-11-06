@@ -2,7 +2,7 @@ import * as path from 'node:path'
 import { pathCandidates } from '../../src/shared/file-ref'
 import type { RunSummary } from '../../src/shared/pipelines'
 import { mapLimit } from '../ado/limit'
-import { fileNotFound, NO_LOCAL_WORKSPACE_FILE, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
+import { fileNotFound, GIT_REMOTES_FAILED, NO_LOCAL_WORKSPACE_FILE, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
 import type { RunCommand } from '../sys/run'
 import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import { remotesOf, type AdoRemote } from './remote'
@@ -11,6 +11,7 @@ export interface OpenFileDeps {
   call: HostCall
   gitAvailable: boolean
   remotes: (workspacePath: string) => Promise<AdoRemote[]>
+  log: (message: string) => void
   isFileInside: (root: string, relative: string) => Promise<boolean>
 }
 
@@ -91,11 +92,18 @@ async function repositoryWorkspaces(
   focusedLocal: WorkspaceEntry | null
 ): Promise<WorkspaceEntry[]> {
   if (!deps.gitAvailable) return focusedLocal ? [focusedLocal] : []
-  const known = await mapLimit(local, REMOTE_LOOKUPS, async workspace => ({ workspace, remotes: await deps.remotes(workspace.path) }))
+  const known = await mapLimit(local, REMOTE_LOOKUPS, async workspace => ({ workspace, remotes: await remotesOrNone(deps, workspace.path) }))
   return known
     .filter(({ remotes }) => remotes.some(remote => isRunsRepository(run, remote)))
     .map(({ workspace }) => workspace)
     .sort((a, b) => rank(a, run, focusedLocal) - rank(b, run, focusedLocal))
+}
+
+function remotesOrNone(deps: OpenFileDeps, workspacePath: string): Promise<AdoRemote[]> {
+  return deps.remotes(workspacePath).catch(() => {
+    deps.log(GIT_REMOTES_FAILED)
+    return []
+  })
 }
 
 function isRunsRepository(run: RunSummary, remote: AdoRemote): boolean {

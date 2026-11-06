@@ -171,6 +171,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     call,
     gitAvailable: gitPath !== null,
     remotes: gitRemotes(runCommand, gitPath, Date.now),
+    log,
     isFileInside: fileInside(fs)
   }
   await registerWorkspaceHandlers(orca, { boards, store, call })

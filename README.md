@@ -287,6 +287,7 @@ Open in Orca looks for the file in your local workspaces. It picks the ones whos
 - Nothing outside the workspace opens. A path with `..` is refused. An absolute path is tried only as a path inside the workspace, and a symlink that points out of it isn't followed. When nothing matches, the message says the file wasn't found.
 - Orca opens the file without a line number. The tab shows what it opened: `Opened src/Api/Program.cs, line 12.`
 - Workspaces on a remote host are skipped.
+- A workspace whose git remotes can't be read, because git failed or took over 5 seconds, is skipped and the others are still searched.
 
 ### Rerun and cancel
 
