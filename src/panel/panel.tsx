@@ -26,6 +26,7 @@ import { TABS, actionError, activeOrg, busy, currentOrg, isTab, listing, message
 import { PipelinesTab } from './pipelines/pipelines-tab'
 import { acceptRuns, hidePipelines, syncPipelines } from './pipelines/state'
 import { PrsTab } from './prs/prs-tab'
+import { syncReview } from './prs/review/state'
 import { acceptPrs, hidePrs, syncPrs } from './prs/state'
 import { syncShare } from './share/state'
 import { watchVisibility } from './visibility'
@@ -226,6 +227,7 @@ export default function Panel(): OrcaNode {
   syncPrs(org, onScreen)
   syncPipelines(org, onScreen)
   syncShare(org?.org ?? null)
+  syncReview(loaded.status === 'ready' && org?.state === 'connected' ? org.org : null)
   if (loaded.status === 'loading') return <Skeleton lines={3} label="Loading organizations" />
   if (loaded.status === 'failed') {
     return (

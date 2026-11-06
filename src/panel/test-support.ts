@@ -5,6 +5,7 @@ import type { OrgStatus } from '../shared/types'
 import * as panelModule from './panel'
 import { runsSnapshotOf } from './pipelines/fixtures'
 import { snapshotOf } from './prs/fixtures'
+import { reviewOf } from './prs/review/fixtures'
 
 export const SETTINGS = { label: 'Organization settings' }
 
@@ -41,6 +42,7 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
       'ui.visibility': { ok: true },
       'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
       'prs.snapshot': input => snapshotOf({ org: input.org, updatedAt: 0 }),
+      'reviews.open': input => reviewOf({ key: input }),
       'runs.snapshot': input => runsSnapshotOf({ org: input.org, updatedAt: 0 }),
       'share.prefs': input => ({
         template: input.kind === 'approval' ? APPROVAL_TEMPLATE : PR_TEMPLATE,

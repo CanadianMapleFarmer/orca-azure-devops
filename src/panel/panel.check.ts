@@ -3,6 +3,7 @@ import type { OrgStatus } from '../shared/types'
 import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
+import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -107,6 +108,14 @@ const prsSnapshot = snapshotOf({
   ],
   toReview: [summaryOf(80, { title: 'Cache the lookups', repoName: 'api', createdBy: { id: 'u-grace', name: 'Grace Hopper' } })],
   toReviewCount: 1,
+  reviewed: [
+    summaryOf(81, {
+      title: 'Add the health endpoint',
+      repoName: 'api',
+      createdBy: { id: 'u-grace', name: 'Grace Hopper' },
+      reviewers: [reviewerOf('Ada Lovelace', 5, { id: 'u-contoso' })]
+    })
+  ],
   updatedAt: NOW
 })
 
@@ -146,6 +155,15 @@ export default defineCheck({
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },
       'prs.snapshot': prsSnapshot
+    }
+  },
+  review: {
+    persisted: { workspace: { tab: 'prs', openReview: OPEN_REVIEW } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'prs.snapshot': prsSnapshot,
+      'reviews.open': reviewOf()
     }
   },
   pipelines: {

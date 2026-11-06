@@ -3,6 +3,7 @@ import type { PrSummary, RowResult } from '../../shared/prs'
 import type { OrgStatus } from '../../shared/types'
 import { closeCleanly, mountPanel, org, requestsTo, type TestHost } from '../test-support'
 import { NOW, OPTIONS, prOf, reviewerOf, setOf, snapshotOf } from './fixtures'
+import { REVIEW_KEY, reviewOf } from './review/fixtures'
 
 let panel: TestPanel
 
@@ -301,18 +302,96 @@ test('a failed first load shows the message and Try again loads again', async ()
   assert.deepEqual(titles(), ['Back'])
 })
 
-test('To review opens a PR in the browser on press', async () => {
-  const toReview = [prOf(80, { title: 'Cache the lookups', repoName: 'api', createdBy: { id: 'u-grace', name: 'Grace Hopper' } }), prOf(81, { title: 'Fix the footer' })]
-  const host = await open(snapshotOf({ toReview, toReviewCount: 2 }))
+test('To review opens the review in the panel on press', async () => {
+  const grace = { id: 'u-grace', name: 'Grace Hopper' }
+  const toReview = [
+    prOf(4110, { title: 'Harden the login redirect', source: 'hotfix/1211-login-redirect', target: 'main', createdBy: grace, createdAt: NOW - 3_600_000 }),
+    prOf(81, { title: 'Fix the footer' })
+  ]
+  const host = await open(snapshotOf({ toReview, toReviewCount: 2 }), { 'reviews.open': input => reviewOf({ key: input, pr: toReview[0] }) })
   assert.equal(panel.find({ type: 'ListItem' }), null)
   await panel.toggle({ type: 'Collapsible', label: 'To review (2)' })
   const items = panel.findAll({ type: 'ListItem' })
   assert.deepEqual(items.map(item => [item.label, item.props.description]), [
-    ['Cache the lookups', 'Pull Request 80 · api · Grace Hopper'],
+    ['Harden the login redirect', 'Pull Request 4110 · web-app · Grace Hopper'],
     ['Fix the footer', 'Pull Request 81 · web-app · Ada Lovelace']
   ])
-  await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
-  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: toReview[0].url }])
+  await panel.press({ type: 'ListItem', label: 'Harden the login redirect' })
+  assert.deepEqual(inputsTo(host, 'reviews.open'), [REVIEW_KEY])
+  assert.deepEqual(host.callsOf('shell.openExternal'), [])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Harden the login redirect')
+  assert.equal(panel.find({ type: 'Collapsible' }), null)
+  assert.equal(
+    panel.find({ type: 'Text', text: /^Pull Request 4110 ·/ })?.text,
+    'Pull Request 4110 · web-app · hotfix/1211-login-redirect → main'
+  )
+  assert.match(panel.find({ type: 'Text', text: /^Grace Hopper · opened / })?.text ?? '', /^Grace Hopper · opened .+ · loaded .+$/)
+  assert.deepEqual(
+    panel.findAll({ type: 'RelativeTime' }).map(time => time.props.at),
+    [NOW - 3_600_000, NOW]
+  )
+  assert.deepEqual(panel.persisted.workspace.openReview, { ...REVIEW_KEY, title: 'Harden the login redirect' })
+})
+
+test('Reviewed by you lists the PRs I voted on with my vote', async () => {
+  const grace = { id: 'u-grace', name: 'Grace Hopper' }
+  const me = (vote: number) => reviewerOf('Ada Lovelace', vote, { id: 'u-contoso' })
+  const reviewed = [
+    prOf(90, { title: 'Add the health endpoint', repoName: 'api', createdBy: grace, reviewers: [me(5)] }),
+    prOf(91, { title: 'Rework the cache', createdBy: grace, reviewers: [reviewerOf('Dennis Ritchie', 10), me(-5)] }),
+    prOf(92, { title: 'Drop the legacy route', createdBy: grace, reviewers: [me(-10)] }),
+    prOf(93, { title: 'Pin the base image', createdBy: grace, reviewers: [me(10)] })
+  ]
+  const host = await open(snapshotOf({ reviewed, toReview: [prOf(80, { title: 'Cache the lookups' })], toReviewCount: 1 }), {
+    'reviews.open': input => reviewOf({ key: input, pr: reviewed[0] })
+  })
+  await panel.toggle({ type: 'Collapsible', label: 'To review (1)' })
+  const heading = panel.find({ type: 'Text', text: 'Reviewed by you' })
+  assert.deepEqual([heading?.props.size, heading?.props.weight], ['sm', 'semibold'])
+  const rowsOf = (label: string) => {
+    const list = panel.find({ type: 'List', label })
+    assert.ok(list, `${label} is drawn`)
+    return panel.findAll({ type: 'ListItem' }).filter(item => item.path.startsWith(`${list.path}/`)).map(item => [item.label, item.props.description])
+  }
+  assert.deepEqual(rowsOf('To review'), [['Cache the lookups', 'Pull Request 80 · web-app · Ada Lovelace']])
+  assert.deepEqual(rowsOf('Reviewed by you'), [
+    ['Add the health endpoint', 'Pull Request 90 · api · Grace Hopper · you: Approved with suggestions'],
+    ['Rework the cache', 'Pull Request 91 · web-app · Grace Hopper · you: Waiting for author'],
+    ['Drop the legacy route', 'Pull Request 92 · web-app · Grace Hopper · you: Rejected'],
+    ['Pin the base image', 'Pull Request 93 · web-app · Grace Hopper · you: Approved']
+  ])
+  await panel.press({ type: 'ListItem', label: 'Add the health endpoint' })
+  assert.deepEqual(inputsTo(host, 'reviews.open'), [{ ...REVIEW_KEY, prId: 90 }])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Add the health endpoint')
+  assert.deepEqual(host.callsOf('shell.openExternal'), [])
+})
+
+test('the fold shows for reviewed PRs alone and keeps its To review count', async () => {
+  const reviewed = [prOf(90, { title: 'Add the health endpoint', reviewers: [reviewerOf('Ada Lovelace', 10, { id: 'u-contoso' })] })]
+  await open(snapshotOf({ reviewed }))
+  assert.ok(panel.find({ type: 'Collapsible', label: 'To review (0)' }))
+  await panel.toggle({ type: 'Collapsible' })
+  assert.equal(panel.find({ type: 'List', label: 'To review' }), null)
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Add the health endpoint'])
+})
+
+test('Reviewed by you shows at most 50 pull requests and is absent when empty', async () => {
+  const reviewed = Array.from({ length: 60 }, (_, index) => prOf(100 + index, { title: `Voted ${index}` }))
+  await open(snapshotOf({ reviewed, toReview: [prOf(80)], toReviewCount: 1 }))
+  await panel.toggle({ type: 'Collapsible' })
+  assert.equal(panel.findAll({ type: 'ListItem' }).length, 51)
+  await panel.post('prs.changed', snapshotOf({ toReview: [prOf(80)], toReviewCount: 1, updatedAt: NOW + 1 }))
+  assert.equal(panel.find({ type: 'Text', text: 'Reviewed by you' }), null)
+  assert.equal(panel.find({ type: 'List', label: 'Reviewed by you' }), null)
+})
+
+test('a long title and a long name are cut to the label limit', async () => {
+  const title = '界'.repeat(400)
+  await open(snapshotOf({ toReview: [prOf(80, { title, createdBy: { id: 'u-grace', name: 'G'.repeat(2_000) } })], toReviewCount: 1 }))
+  await panel.toggle({ type: 'Collapsible' })
+  const [item] = panel.findAll({ type: 'ListItem' })
+  assert.ok(item.label && item.label.endsWith('…') && new TextEncoder().encode(item.label).length <= 1024)
+  assert.ok(String(item.props.description).endsWith('…') && new TextEncoder().encode(String(item.props.description)).length <= 1024)
 })
 
 test('To review shows at most 50 pull requests and says how many there are', async () => {
@@ -397,17 +476,23 @@ test('a set that fits shows no pull request note', async () => {
   assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
 })
 
-function assertInToReview(callout: { path: string } | null): void {
-  const section = panel.find({ type: 'Collapsible', label: 'To review (1)' })
-  assert.ok(callout && section, 'the notice and the To review section are drawn')
-  assert.equal(callout.path, `${section.path}/#0/#0`, 'the notice is the first thing under the To review header')
+function assertInReviewHeader(callout: { path: string } | null): void {
+  const link = panel.find({ type: 'Link', text: 'Open in Azure DevOps' })
+  assert.ok(callout && link, 'the notice and the header link are drawn')
+  const slash = link.path.lastIndexOf('/')
+  const next = Number(link.path.slice(slash + 2)) + 1
+  assert.equal(callout.path, `${link.path.slice(0, slash)}/#${next}`, 'the notice is the first thing after the header link')
 }
 
 async function pressReview(answer: unknown) {
-  const host = await open(snapshotOf({ toReview: [prOf(80, { title: 'Cache the lookups' })], toReviewCount: 1 }))
+  const row = prOf(80, { title: 'Cache the lookups' })
+  const host = await open(snapshotOf({ toReview: [row], toReviewCount: 1 }), {
+    'reviews.open': input => reviewOf({ key: input, pr: row })
+  })
   host.respond('shell.openExternal', answer)
   await panel.toggle({ type: 'Collapsible' })
   await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
+  await panel.press({ type: 'Link', text: 'Open in Azure DevOps' })
   return host
 }
 
@@ -417,18 +502,19 @@ test('a link Orca refuses to open shows the error message and the next press cle
   })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, 'Orca could not open the link.')
-  assertInToReview(panel.find({ type: 'Callout' }))
+  assertInReviewHeader(panel.find({ type: 'Callout' }))
   host.respond('shell.openExternal', { opened: true })
-  await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
+  await panel.press({ type: 'Link', text: 'Open in Azure DevOps' })
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.equal(host.callsOf('shell.openExternal').length, 2)
+  assert.deepEqual(host.callsOf('shell.openExternal')[0], { url: prOf(80).url })
 })
 
 test('a link Orca could not ask about shows a fixed message', async () => {
   await pressReview({ opened: false, reason: 'consent-unavailable' })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, OPEN_UNAVAILABLE)
-  assertInToReview(panel.find({ type: 'Callout' }))
+  assertInReviewHeader(panel.find({ type: 'Callout' }))
 })
 
 test('a link the person declined to open stays silent', async () => {
