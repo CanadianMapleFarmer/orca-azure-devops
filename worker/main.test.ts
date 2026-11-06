@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { mock } from 'node:test'
 import { assert, mockHost, test, type TestWorker } from 'orca/testing'
 import type { RunsSnapshot } from '../src/shared/pipelines'
 import type { PrSnapshot } from '../src/shared/prs'
@@ -24,7 +25,7 @@ import {
   type FakePipelines
 } from './pipelines/fake-pipelines'
 import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
-import { withWorker } from './test-support'
+import { drain, withWorker } from './test-support'
 
 function running(pattern: string): boolean {
   return spawnSync('pgrep', ['-f', pattern]).status === 0
@@ -950,6 +951,36 @@ test('ui.visibility routes pipelines to the pipelines service and the rest as be
       assert.equal(w.refusals.length, 0)
     })
   })
+})
+
+test('a rate-limit header on a pull request answer slows the Pipelines tab of that org too', async () => {
+  const ado = pipelinesAt(Date.now() - 60_000)
+  ado.on(isReviewList, () => reply(200, { count: 0, value: [] }, { 'X-RateLimit-Delay': '2' }))
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  const advance = async (ms: number) => {
+    for (let step = 0; step <= ms; step += 10_000) {
+      mock.timers.tick(step === 0 ? 0 : 10_000)
+      await drain()
+    }
+  }
+  try {
+    await withFetch(signedIn(ado), async () => {
+      await withWorker(worker, { host: pipelinesHost() }, async w => {
+        await advance(0)
+        assert.ok(ado.count(isReviewList) > 0, 'the pull request load answered under pressure')
+        assert.deepEqual(await w.request('ui.visibility', { surface: 'pipelines', org: 'contoso', visible: true }), { ok: true })
+        await advance(0)
+        assert.ok(runsChanged(w.posts).length > 0, 'showing the Pipelines tab ran a full load')
+        await advance(40_000)
+        const loads = ado.count(isRunningRuns)
+        await advance(200_000)
+        assert.equal(ado.count(isRunningRuns), loads, 'no 30 s visible load while the org is slowed')
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    mock.timers.reset()
+  }
 })
 
 test('a failed run after activation shows a desktop notification with no refusals', async () => {

@@ -82,8 +82,10 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const scheduler = createScheduler(realClock)
+  const pressure = createPressure(Date.now)
+  const http = pressure.wrapByOrg(connections.http)
   const boards = createBoardsService({
-    http: connections.http,
+    http,
     orgs: () => connections.list(),
     store,
     scheduler,
@@ -92,7 +94,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now
   })
   const prs = createPrsService({
-    http: connections.http,
+    http,
     orgs: () => connections.list(),
     scheduler,
     autoComplete: () => prSettings.autoComplete(),
@@ -106,7 +108,6 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     since: activatedAt,
     log
   })
-  const pressure = createPressure(Date.now)
   const pipelines = createPipelinesService({
     http: connections.http,
     orgs: () => connections.list(),
@@ -126,9 +127,9 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     changed: change => orca.panels.post('runs.viewChanged', change),
     now: Date.now
   })
-  const prActions = createPrActions({ http: connections.http, prs, settings: prSettings })
+  const prActions = createPrActions({ http, prs, settings: prSettings })
   const runActions = createRunActions({
-    http: pressure.wrapByOrg(connections.http),
+    http,
     me: org => pipelines.me(org),
     after: (org, buildId) => {
       void pipelines.reloadFresh(org).catch(() => {})
@@ -148,13 +149,13 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   const channels = createChannelStore({ store, secrets: orca.secrets, newId: () => crypto.randomUUID(), now: Date.now, log })
   const share = createShareService({
-    http: connections.http,
+    http,
     store,
     channels,
     fetch: globalThis.fetch,
     orgs: () => connections.list(),
-    sources: { pr: prShareSource(connections.http, prs, prSettings), approval: approvalShareSource(pipelines, pipelineSettings) },
-    destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(connections.http)],
+    sources: { pr: prShareSource(http, prs, prSettings), approval: approvalShareSource(pipelines, pipelineSettings) },
+    destinations: [copyDestination(clipboard), channelDestination(channels, globalThis.fetch), reviewersDestination(http)],
     log
   })
   stopPolling = () => {
@@ -177,7 +178,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   await registerWorkspaceHandlers(orca, { boards, store, call })
   orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(orca, connections)
-  registerWorkHandlers(orca, { boards, http: connections.http, call })
+  registerWorkHandlers(orca, { boards, http, call })
   registerPrHandlers(orca, { prs, actions: prActions })
   registerPipelineHandlers(orca, {
     pipelines,
