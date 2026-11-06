@@ -24,6 +24,19 @@ export const RUN_STATE_TEXT: Record<RunState, string> = {
   canceled: 'canceled'
 }
 
+export type RunTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+
+export const RUN_STATE_TONE: Record<RunState, RunTone> = {
+  queued: 'neutral',
+  running: 'accent',
+  waiting: 'warning',
+  cancelling: 'neutral',
+  succeeded: 'success',
+  warning: 'warning',
+  failed: 'danger',
+  canceled: 'neutral'
+}
+
 const ACTIVE_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling'])
 const REPLACING_STATES: ReadonlySet<RunState> = new Set(['queued', 'running', 'waiting', 'cancelling', 'succeeded', 'warning'])
 const COMPLETED_STATUS = 'completed'
@@ -75,6 +88,10 @@ export function failedRuns(runs: readonly RunSummary[], now: number): RunSummary
       now - run.finishedAt <= FAILED_WINDOW_MS &&
       !isReplaced(run)
   )
+}
+
+export function approverNames(approval: ApprovalSummary): string {
+  return approval.approvers.map(approver => (approver.isGroup ? `${approver.name} (group)` : approver.name)).join(', ')
 }
 
 export function runsFor(filter: RunFilter, runs: readonly RunSummary[], now: number): RunSummary[] {

@@ -2,6 +2,7 @@ import { assert, test } from 'orca/testing'
 import type { ApprovalSummary, RunFilter, RunState, RunSummary, StepState } from './pipelines'
 import {
   approvalsNeedingMe,
+  approverNames,
   cancellableStatus,
   FAILED_WINDOW_MS,
   failedRuns,
@@ -11,6 +12,7 @@ import {
   orderRuns,
   runCounts,
   RUN_STATE_TEXT,
+  RUN_STATE_TONE,
   runsFor,
   STEP_GLYPH
 } from './runs'
@@ -265,4 +267,27 @@ test('RUN_STATE_TEXT labels every run state', () => {
     failed: '✗ failed',
     canceled: 'canceled'
   })
+})
+
+test('RUN_STATE_TONE gives every run state the tone the panel badge and the run tab share', () => {
+  assert.deepEqual(RUN_STATE_TONE, {
+    queued: 'neutral',
+    running: 'accent',
+    waiting: 'warning',
+    cancelling: 'neutral',
+    succeeded: 'success',
+    warning: 'warning',
+    failed: 'danger',
+    canceled: 'neutral'
+  })
+})
+
+test('approverNames lists people by name and groups with (group), in ADO order', () => {
+  const approvers = [
+    { id: GRACE, name: 'Grace Hopper', uniqueName: 'grace@contoso.example', isGroup: false },
+    { id: 'g-release', name: 'Release Approvers', uniqueName: '[Fabrikam Web]\\Release Approvers', isGroup: true },
+    { id: ALEX, name: 'Alex Contoso', uniqueName: 'alex@contoso.example', isGroup: false }
+  ]
+  assert.equal(approverNames(approval('ap', 4520, { approvers })), 'Grace Hopper, Release Approvers (group), Alex Contoso')
+  assert.equal(approverNames(approval('ap', 4520, { approvers: [] })), '')
 })

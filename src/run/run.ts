@@ -1,8 +1,8 @@
 import type { EditorDocument } from 'orca/frame'
 import { fileRefOf } from '../shared/file-ref'
 import { messageOf, OPEN_LINK_UNAVAILABLE } from '../shared/messages'
-import type { FileRef, Issue, JobView, RunActionResult, RunState, RunView, StepView } from '../shared/pipelines'
-import { isActive, RUN_STATE_TEXT } from '../shared/runs'
+import type { FileRef, Issue, JobView, RunActionResult, RunView, StepView } from '../shared/pipelines'
+import { isActive, RUN_STATE_TEXT, RUN_STATE_TONE } from '../shared/runs'
 import { plainText } from './ansi'
 import { appendChunk, earlierStart, errorLines, lastLine, nextHit, nextRead, searchHits, visibleIndexes, type LogBuffer } from './log-model'
 import { parseRunRef, type RunRef } from './ref'
@@ -68,16 +68,6 @@ const NOT_A_RUN = "This file doesn't name an Azure DevOps run."
 const EDITOR_ONLY = 'This view opens only as the Azure DevOps run editor.'
 const LOADING_RUN = 'Loading run…'
 const LOADING_LOG = 'Loading log…'
-const STATE_TONE: Record<RunState, string> = {
-  queued: 'neutral',
-  running: 'accent',
-  waiting: 'warning',
-  cancelling: 'neutral',
-  succeeded: 'success',
-  warning: 'warning',
-  failed: 'danger',
-  canceled: 'neutral'
-}
 
 const root = document.getElementById('app') as HTMLElement
 const toolbar = createToolbar({ watch: () => void watch(), rerun: () => void rerun(), cancel: () => void cancel(), disarm, open: openInAdo })
@@ -132,7 +122,7 @@ function paint(): void {
     title: `${run.pipeline.name} ${run.runNumber}`,
     subtitle: `${run.branch} · ${run.requestedFor.name}`,
     state: RUN_STATE_TEXT[run.state],
-    stateTone: STATE_TONE[run.state],
+    stateTone: RUN_STATE_TONE[run.state],
     loading: current.loading,
     watched,
     watchDisabled: !watched && !isActive(run),

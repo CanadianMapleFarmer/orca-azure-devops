@@ -1,21 +1,8 @@
-import { Badge, Box, Button, Callout, Card, IconButton, Link, RelativeTime, Row, Stack, Text, type OrcaNode, type Tone } from 'orca'
-import type { RunState, RunSummary, StageChip, StepState } from '../../shared/pipelines'
-import { isActive, RUN_STATE_TEXT, STEP_GLYPH } from '../../shared/runs'
+import { Badge, Box, Button, Callout, Card, IconButton, Link, RelativeTime, Row, Stack, Text, type OrcaNode } from 'orca'
+import { MAX_STAGE_CHIPS, type RunSummary, type StageChip, type StepState } from '../../shared/pipelines'
+import { isActive, RUN_STATE_TEXT, RUN_STATE_TONE, STEP_GLYPH } from '../../shared/runs'
 import { ApprovalBlock, OutcomeCallout } from './approval'
 import { isBusy, noteOf, openRun, orphanOutcomes, toggleWatch } from './state'
-
-const MAX_STAGES = 12
-
-const BADGE_TONE: Record<RunState, Tone> = {
-  queued: 'neutral',
-  running: 'accent',
-  waiting: 'warning',
-  cancelling: 'neutral',
-  succeeded: 'success',
-  warning: 'warning',
-  failed: 'danger',
-  canceled: 'neutral'
-}
 
 const SEGMENT: Record<StepState, 'success' | 'danger' | 'warning' | 'accent' | 'muted'> = {
   succeeded: 'success',
@@ -29,8 +16,8 @@ const SEGMENT: Record<StepState, 'success' | 'danger' | 'warning' | 'accent' | '
 }
 
 export function stageLine(stages: readonly StageChip[]): string {
-  const parts = stages.slice(0, MAX_STAGES).map(stage => `${stage.name} ${STEP_GLYPH[stage.state]}`)
-  if (stages.length > MAX_STAGES) parts.push(`+${stages.length - MAX_STAGES} more`)
+  const parts = stages.slice(0, MAX_STAGE_CHIPS).map(stage => `${stage.name} ${STEP_GLYPH[stage.state]}`)
+  if (stages.length > MAX_STAGE_CHIPS) parts.push(`+${stages.length - MAX_STAGE_CHIPS} more`)
   return parts.join(' · ')
 }
 
@@ -51,7 +38,7 @@ function StageBar({ stages }: { stages: readonly StageChip[] }): OrcaNode {
   return (
     <Stack gap="xs">
       <Row gap="xs">
-        {stages.slice(0, MAX_STAGES).map(stage => (
+        {stages.slice(0, MAX_STAGE_CHIPS).map(stage => (
           <Box key={stage.id} width={14} height={6} radius="full" background={SEGMENT[stage.state]} />
         ))}
       </Row>
@@ -68,7 +55,7 @@ export function RunCard({ org, me, run }: { org: string; me: string | null; run:
   return (
     <Card title={run.pipeline.name} description={describe(run)}>
       <Row gap="sm" align="center" wrap>
-        <Badge tone={BADGE_TONE[run.state]}>{RUN_STATE_TEXT[run.state]}</Badge>
+        <Badge tone={RUN_STATE_TONE[run.state]}>{RUN_STATE_TEXT[run.state]}</Badge>
         <When run={run} />
       </Row>
       {run.stages && run.stages.length > 0 ? <StageBar stages={run.stages} /> : null}

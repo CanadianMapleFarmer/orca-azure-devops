@@ -1,6 +1,7 @@
 import { fileRefOf } from '../shared/file-ref'
 import { messageOf } from '../shared/messages'
 import type { ApprovalSummary, FileRef, Issue, JobView, RunView, StageView, StepView } from '../shared/pipelines'
+import { approverNames } from '../shared/runs'
 
 export interface Selection {
   stageId: string | null
@@ -77,8 +78,7 @@ export function approvalText(approval: ApprovalSummary, stages: readonly StageVi
   const where = approval.environment ?? approval.stage ?? stages.find(stage => stage.approvalId?.toLowerCase() === wanted)?.name ?? null
   const waited = `Waiting for approval${where ? ` at ${where}` : ''} for ${durationText(approval.createdAt, null, now)}.`
   if (approval.approvers.length === 0) return waited
-  const names = approval.approvers.map(approver => (approver.isGroup ? `${approver.name} (group)` : approver.name))
-  return `${waited} Approvers: ${names.join(', ')}.`
+  return `${waited} Approvers: ${approverNames(approval)}.`
 }
 
 export function countsText(errors: number, warnings: number): string {

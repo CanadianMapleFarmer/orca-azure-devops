@@ -1,5 +1,6 @@
 import { Button, Callout, RelativeTime, Row, Stack, Text, Textarea, type OrcaNode } from 'orca'
 import { MAX_COMMENT, type ApprovalSummary, type RunSummary } from '../../shared/pipelines'
+import { approverNames } from '../../shared/runs'
 import { APPROVAL_TEMPLATE, APPROVAL_VARS, approvalShareItem } from '../../shared/share/approval-items'
 import type { Identity } from '../../shared/types'
 import { openComposer } from '../share/state'
@@ -37,8 +38,7 @@ function shareApproval(org: string, me: string | null, run: RunSummary, approval
 
 function approversLine(approval: ApprovalSummary): string | null {
   if (approval.approvers.length === 0) return null
-  const names = approval.approvers.map(approver => (approver.isGroup ? `${approver.name} (group)` : approver.name))
-  return `Approvers: ${names.join(', ')}${approval.minRequired > 1 ? ` · needs ${approval.minRequired}` : ''}`
+  return `Approvers: ${approverNames(approval)}${approval.minRequired > 1 ? ` · needs ${approval.minRequired}` : ''}`
 }
 
 export function OutcomeCallout({ outcome }: { outcome: Outcome }): OrcaNode {

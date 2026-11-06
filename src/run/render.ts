@@ -1,5 +1,5 @@
 import { button, el } from '../board/render'
-import type { ApprovalSummary, JobView, StageView, StepState, StepView } from '../shared/pipelines'
+import { MAX_COMMENT, type ApprovalSummary, type JobView, type StageView, type StepState, type StepView } from '../shared/pipelines'
 import { STEP_GLYPH } from '../shared/runs'
 import { ansiSpans } from './ansi'
 import type { LogLine } from './log-model'
@@ -70,7 +70,6 @@ export interface FocusMark {
   end: number | null
 }
 
-const COMMENT_MAX = 1000
 const COMMENT_LABEL = 'Comment (optional)'
 const SHARE_HINT = 'To ask someone, use Share for approval in the Pipelines tab.'
 const CONFIRM_TEXT: Record<Decision, string> = { approved: 'Approve', rejected: 'Reject' }
@@ -204,7 +203,7 @@ export function approvalBlock(
   }
   if (approval.canApprove && draft) {
     const comment = keyed(el('textarea', 'comment'), `comment:${key}`)
-    comment.maxLength = COMMENT_MAX
+    comment.maxLength = MAX_COMMENT
     comment.rows = 2
     comment.placeholder = COMMENT_LABEL
     comment.setAttribute('aria-label', COMMENT_LABEL)

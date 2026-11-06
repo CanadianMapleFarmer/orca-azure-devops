@@ -1,4 +1,4 @@
-import type { ApprovalSummary, RunKey, RunsSnapshot, RunSummary } from '../../src/shared/pipelines'
+import { MAX_STAGE_CHIPS, type ApprovalSummary, type RunKey, type RunsSnapshot, type RunSummary } from '../../src/shared/pipelines'
 import { isActive, orderRuns, runCounts } from '../../src/shared/runs'
 import type { OrgStatus } from '../../src/shared/types'
 import { linkedAbort, untilAborted } from '../abort'
@@ -74,7 +74,6 @@ const WATCH_SLOWED_MS = { visibleMs: 120_000, backgroundMs: 120_000 }
 const FRESH_MS = 30_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
 const MAX_RUNS = 100
-const MAX_CHIPS = 12
 
 export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesService {
   const { scheduler, now } = deps
@@ -452,7 +451,7 @@ function mergeWatched(current: RunSummary[], read: RunSummary[]): RunSummary[] {
 }
 
 function capRunsSnapshot(snapshot: RunsSnapshot): RunsSnapshot {
-  const runs = snapshot.runs.map(run => (run.stages && run.stages.length > MAX_CHIPS ? { ...run, stages: run.stages.slice(0, MAX_CHIPS) } : run))
+  const runs = snapshot.runs.map(run => (run.stages && run.stages.length > MAX_STAGE_CHIPS ? { ...run, stages: run.stages.slice(0, MAX_STAGE_CHIPS) } : run))
   const message = joinMessages(snapshot.message, RUNS_TRIMMED)
   const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, runs: [], message })
   const kept = newestThatFit(runs, budget, run => (isActive(run) ? Infinity : run.queuedAt), MAX_RUNS)

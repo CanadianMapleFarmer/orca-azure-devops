@@ -154,3 +154,4 @@ export const MAX_LOG_LINES = 1000
 export const MAX_LINE_CHARS = 2000
 export const MAX_BUFFER_LINES = 50_000
 export const MAX_COMMENT = 1000
+export const MAX_STAGE_CHIPS = 12
