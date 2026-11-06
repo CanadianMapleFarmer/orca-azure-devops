@@ -203,14 +203,17 @@ test('page links go to the page itself, or to the page they name', async () => {
   ado.pages.set('/Links', {
     content:
       '[attachment](/.attachments/spec%20v2.pdf) [relative](Release-process/Rollback) [anchor](#steps) ' +
-      '[page](/Q%26A-what%3F) [safe](https://learn.microsoft.com/azure) [evil](javascript:alert(1))',
+      '[page](/Q%26A-what%3F) [safe](https://learn.microsoft.com/azure) [evil](javascript:alert(1)) ' +
+      '[section](/Release-process/Rollback#steps) [query](/Release-process/Rollback?tab=history) [hash](/C%23-notes#top)',
     etag: '"l1"'
   })
   const self = `${ORG_URL}/${PROJECT}/_wiki/wikis/${WIKI}?pagePath=%2FLinks`
   assert.equal(
     (await wiki.page(ref('/Links'))).content,
     `[attachment](${self}) [relative](${self}) [anchor](${self}) ` +
-      `[page](${WIKI_URL}?pagePath=%2FQ%26A%20what%3F) [safe](https://learn.microsoft.com/azure) [evil](${self})`
+      `[page](${WIKI_URL}?pagePath=%2FQ%26A%20what%3F) [safe](https://learn.microsoft.com/azure) [evil](${self}) ` +
+      `[section](${WIKI_URL}?pagePath=%2FRelease%20process%2FRollback) [query](${WIKI_URL}?pagePath=%2FRelease%20process%2FRollback) ` +
+      `[hash](${WIKI_URL}?pagePath=%2FC%23%20notes)`
   )
 })
 
@@ -433,6 +436,23 @@ test('a wiki created since the list was cached is found by listing again once', 
   assert.equal(ado.count(isWikis), 4)
   await assert.rejects(wiki.search(find('smoke', MISSING_WIKI)), adoError('not_found', 404, UNKNOWN_WIKI))
   assert.equal(ado.count(isSearch), 0)
+})
+
+test('a wiki beyond the first 50 is answered from the cached list', async () => {
+  const { ado, wiki } = harness()
+  for (let i = 0; i < 60; i += 1) ado.wikis.push({ id: `w${i}`, name: `w${String(i).padStart(2, '0')}`, type: 'projectWiki', projectId: PROJECT, mappedPath: '/' })
+  const listed = await wiki.wikis(ORG)
+  assert.equal(listed.length, 50)
+  assert.ok(!listed.some(item => item.id === 'w55'), 'the 55th wiki is past the cap')
+  const lists = ado.count(isWikis)
+
+  const found = await wiki.wiki(ORG, 'w55')
+  assert.deepEqual([found.name, found.editable], ['w55', true])
+  assert.ok((await wiki.page(ref(CHECKLIST, 'w55'))).content.includes('/_wiki/wikis/w55?pagePath='))
+  assert.deepEqual(await wiki.search(find('smoke', 'w55')), { hits: [], total: 0 })
+  assert.equal(ado.count(isSearch), 1)
+  assert.deepEqual([ado.count(isWikis), ado.count(isProjects)], [lists, lists], 'no listing for a cached wiki')
+  assert.equal((await wiki.wikis(ORG)).length, 50, 'the list is still capped')
 })
 
 test('an expired wiki list is read again once, whether or not the wiki is in it', async () => {

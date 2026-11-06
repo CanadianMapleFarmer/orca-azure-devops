@@ -58,6 +58,7 @@ const CONTENT_FIELD = 'content'
 const ROOT = '/'
 const ATTACHMENTS = /^\/\.attachments(?:\/|$)/i
 const TAGS = /<\/?[A-Za-z][^<>]*>/g
+const ANCHOR_OR_QUERY = /[#?]/
 
 export function createWikiService(deps: WikiServiceDeps): WikiService {
   const scopes = new Map<string, AbortController>()
@@ -103,7 +104,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
     const [wikis, projects] = await Promise.all([listWikis(http, org), listProjects(http, org)])
     const names = new Map(projects.map(project => [project.id, project.name]))
     const refs = wikis.map(raw => toRef(raw, names.get(raw.projectId) ?? raw.projectId))
-    const listing = { at: deps.now(), wikis: refs.sort(byProjectThenName).slice(0, MAX_WIKIS) }
+    const listing = { at: deps.now(), wikis: refs.sort(byProjectThenName) }
     if (!signal.aborted) listings.set(org, listing)
     return listing
   }
@@ -122,7 +123,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
       for (const org of new Set([...scopes.keys(), ...listings.keys()])) if (!signedIn.has(org)) forget(org)
     },
 
-    wikis: org => load(org, async current => (cached(org) ?? (await readWikis(current, org))).wikis),
+    wikis: org => load(org, async current => (cached(org) ?? (await readWikis(current, org))).wikis.slice(0, MAX_WIKIS)),
 
     wiki: (org, wikiId) => load(org, current => wikiOf(current, org, wikiId)),
 
@@ -152,7 +153,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
           title: titleText(ref.path),
           content: panelMarkdown(page.content ?? '', {
             maxBytes: MAX_PAGE_MARKDOWN_BYTES,
-            resolve: href => (isPageLink(href) ? urlOf(pagePathOf(href)) : url)
+            resolve: href => (isPageLink(href) ? urlOf(pagePathOf(beforeAnchorOrQuery(href))) : url)
           }),
           url,
           editable: wiki.editable
@@ -204,6 +205,11 @@ function byProjectThenName(a: WikiRef, b: WikiRef): number {
 
 function isPageLink(href: string): boolean {
   return href.startsWith('/') && !ATTACHMENTS.test(href)
+}
+
+function beforeAnchorOrQuery(href: string): string {
+  const end = href.search(ANCHOR_OR_QUERY)
+  return end === -1 ? href : href.slice(0, end)
 }
 
 function titleText(path: string): string {
