@@ -90,9 +90,18 @@ function lineCount(text: string): number {
   return splitLines(text).length
 }
 
+async function until(reached: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 50 && !reached(); turn++) await new Promise(resolve => setImmediate(resolve))
+}
+
 test('open reads the PR, iteration, changes and threads in four calls', async () => {
   const { ado, reviews } = harness()
-  const review = await reviews.open(KEY)
+  const heldChanges = ado.hold(isChanges)
+  const opening = reviews.open(KEY)
+  await until(() => ado.count(isThreads) === 1)
+  assert.deepEqual([ado.count(isChanges), ado.count(isThreads)], [1, 1], 'threads were not read while changes was still pending')
+  heldChanges.release()
+  const review = await opening
   assert.equal(ado.calls.length, 4)
   assert.ok(isOnePr(ado.calls[0]), ado.calls[0].path)
   assert.ok(isIterations(ado.calls[1]), ado.calls[1].path)
@@ -336,7 +345,7 @@ test('nothing is answered after the org signs out', async () => {
     () => assert.fail('the review was answered after sign-out'),
     (error: unknown) => error
   )
-  for (let turn = 0; turn < 50 && hung.length === 0; turn++) await new Promise(resolve => setImmediate(resolve))
+  await until(() => hung.length > 0)
   assert.equal(hung.length, 1)
   setOrgs([])
   assert.ok(adoError('unauthorized', 401, NOT_CONNECTED)(await answer))
@@ -371,7 +380,7 @@ test('a read that lands after the org signs out keeps nothing', async () => {
       () => assert.fail('the diff was answered after sign-out'),
       (error: unknown) => error
     )
-    for (let turn = 0; turn < 50 && ado.count(match) === 0; turn++) await new Promise(resolve => setImmediate(resolve))
+    await until(() => ado.count(match) > 0)
     setOrgs([])
     held.release()
     assert.ok(adoError('unauthorized', 401, NOT_CONNECTED)(await answer), read)

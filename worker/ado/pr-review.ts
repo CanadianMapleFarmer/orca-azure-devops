@@ -2,7 +2,7 @@ import type { PrKey } from '../../src/shared/prs'
 import type { ChangedFile, ChangeKind } from '../../src/shared/reviews'
 import { MALFORMED } from '../messages'
 import { AdoError, type AdoHttp } from './http'
-import { expectList, expectText, malformed, shaped } from './shape'
+import { expectId, expectList, expectText, shaped } from './shape'
 import { textOr } from './workitems'
 
 export interface RawThread {
@@ -101,7 +101,11 @@ export async function listThreads(http: AdoHttp, org: string, key: PrKey, iterat
 export async function getThread(http: AdoHttp, org: string, key: PrKey, threadId: number): Promise<RawThread | null> {
   try {
     const { data } = await http.json<RawThread>({ org, project: key.projectId, path: `${prPath(key)}/threads/${threadId}` })
-    return data ?? malformed(MALFORMED.review)
+    return shape(() => {
+      expectId(data.id)
+      expectList(data.comments ?? [])
+      return data
+    })
   } catch (error) {
     if (error instanceof AdoError && error.code === 'not_found') return null
     throw error
@@ -180,11 +184,6 @@ function kindOf(flags: ReadonlySet<string>): ChangeKind {
   if (flags.has('delete')) return 'deleted'
   if (flags.has('add')) return 'added'
   return flags.has('rename') ? 'renamed' : 'edited'
-}
-
-function expectId(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError('expected an id')
-  return value
 }
 
 function shape<T>(build: () => T): T {

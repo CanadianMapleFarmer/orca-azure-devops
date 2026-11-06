@@ -8,7 +8,7 @@ import {
 } from '../../src/shared/reviews'
 import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
-import { expectList, shaped } from '../ado/shape'
+import { expectId, expectList, shaped } from '../ado/shape'
 import { textOr, timestamp } from '../ado/workitems'
 import { byteLength, itemBytes } from '../budget'
 import { joinMessages, MALFORMED, REVIEW_TRIMMED, UNKNOWN_AUTHOR } from '../messages'
@@ -119,9 +119,4 @@ function lineOf(position: { line: number } | null | undefined): number | null {
 
 function statusOf(status: string | undefined): ThreadStatus {
   return status !== undefined && STATUSES.has(status) ? (status as ThreadStatus) : 'unknown'
-}
-
-function expectId(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError('expected an id')
-  return value
 }

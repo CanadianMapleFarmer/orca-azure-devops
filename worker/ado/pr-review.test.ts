@@ -180,6 +180,16 @@ test('getThread reads one thread and answers null when it is gone', async () => 
   assert.equal((await failure(getThread(http, ORG, KEY, 102))).code, 'forbidden')
 })
 
+test('getThread refuses a body that is not a thread', async () => {
+  const { ado, http } = setup()
+  for (const body of [{}, { id: '102', comments: [] }, { id: 102, comments: 'none' }, null]) {
+    ado.on(isThreadGet, () => json(200, body))
+    assert.equal((await failure(getThread(http, ORG, KEY, 102))).message, MALFORMED.review, JSON.stringify(body))
+  }
+  ado.on(isThreadGet, () => json(200, { id: 102 }))
+  assert.equal((await getThread(http, ORG, KEY, 102))?.id, 102)
+})
+
 test('fileText reads JSON content and spots binaries', async () => {
   const { ado, http } = setup()
   const text = await fileText(http, ORG, KEY, '/src/auth/redirect.ts', SOURCE_2)

@@ -5,6 +5,11 @@ export function expectText(value: unknown): string {
   return value
 }
 
+export function expectId(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError('expected an id')
+  return value
+}
+
 export function expectList<T>(value: unknown): T[] {
   if (!Array.isArray(value)) throw new TypeError('expected a list')
   return value

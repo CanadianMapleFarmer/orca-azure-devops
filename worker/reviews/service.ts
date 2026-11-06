@@ -45,14 +45,14 @@ interface Facts {
   files: FileFacts[]
 }
 
-interface Blob {
+interface SideText {
   text: string | null
   binary: boolean
 }
 
 interface Sides {
-  old: Blob | null
-  new: Blob | null
+  old: SideText | null
+  new: SideText | null
   noBase: boolean
   unchanged: boolean
 }
@@ -69,12 +69,12 @@ const MAX_BLOB_BYTES = 2 * 1024 * 1024
 const MAX_KEPT_FACTS = 5
 const MAX_BLOBS = 100
 const MAX_BLOB_CACHE_BYTES = 32 * 1024 * 1024
-const UNREAD: Blob = { text: null, binary: false }
+const UNREAD: SideText = { text: null, binary: false }
 
 export function createReviews(deps: ReviewsDeps): Reviews {
   const scopes = new Map<string, AbortController>()
   const facts = new Map<string, { org: string; facts: Facts }>()
-  const blobs = new Map<string, { org: string; blob: Blob; bytes: number }>()
+  const blobs = new Map<string, { org: string; blob: SideText; bytes: number }>()
   let blobBytes = 0
 
   function scopeOf(org: string): AbortController {
@@ -134,7 +134,7 @@ export function createReviews(deps: ReviewsDeps): Reviews {
     }
   }
 
-  function keptBlob(org: string, objectId: string): Blob | undefined {
+  function keptBlob(org: string, objectId: string): SideText | undefined {
     const id = blobKey(org, objectId)
     const kept = blobs.get(id)
     if (!kept) return undefined
@@ -143,7 +143,7 @@ export function createReviews(deps: ReviewsDeps): Reviews {
     return kept.blob
   }
 
-  function keepBlob(org: string, objectId: string, blob: Blob, signal: AbortSignal): void {
+  function keepBlob(org: string, objectId: string, blob: SideText, signal: AbortSignal): void {
     if (signal.aborted) return
     const id = blobKey(org, objectId)
     const bytes = blob.text === null ? 0 : Buffer.byteLength(blob.text)
@@ -164,7 +164,7 @@ export function createReviews(deps: ReviewsDeps): Reviews {
     return { iteration, files, more }
   }
 
-  async function readBlob({ http, key, signal }: Load, objectId: string | null, path: string, commit: string): Promise<Blob> {
+  async function readBlob({ http, key, signal }: Load, objectId: string | null, path: string, commit: string): Promise<SideText> {
     const cached = objectId === null ? undefined : keptBlob(key.org, objectId)
     if (cached) return cached
     if (objectId !== null && (await blobSize(http, key.org, key, objectId)) > MAX_BLOB_BYTES) {
@@ -276,7 +276,7 @@ function changedFile({ path, originalPath, kind }: FileFacts): ChangedFile {
   return { path, originalPath, kind }
 }
 
-function lineCount(blob: Blob | null): LineCount {
+function lineCount(blob: SideText | null): LineCount {
   if (blob === null) return null
   return blob.text === null ? 'unknown' : splitLines(blob.text).length
 }

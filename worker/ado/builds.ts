@@ -3,7 +3,7 @@ import { MALFORMED, UNKNOWN_AUTHOR } from '../messages'
 import type { AdoHttp, AdoRequest } from './http'
 import { orgWebUrl } from './org'
 import { branchName, parsedHref } from './pr-links'
-import { expectList, expectText, malformed, shaped } from './shape'
+import { expectId, expectList, expectText, malformed, shaped } from './shape'
 import { textOr, timestamp } from './workitems'
 
 export interface RawBuild {
@@ -183,11 +183,6 @@ function positiveInteger(text: unknown): number | null {
   if (typeof text !== 'string' || !DIGITS.test(text)) return null
   const value = Number(text)
   return Number.isSafeInteger(value) && value > 0 ? value : null
-}
-
-function expectId(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) throw new TypeError('expected an id')
-  return value
 }
 
 export function optionalTimestamp(value: unknown): number | null {
