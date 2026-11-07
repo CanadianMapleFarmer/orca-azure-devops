@@ -317,7 +317,6 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   }
 
   async function acquireEntra(cfg: OrgConfig): Promise<Credential> {
-    if (!(await deps.entra.hasSession(cfg.org))) throw new NoCredentialError()
     let tokens: EntraTokens
     try {
       tokens = await serial(cfg.org, () => deps.entra.getToken(cfg.org))

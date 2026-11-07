@@ -1712,6 +1712,36 @@ test('an Entra org with an unreadable secret reports signed out', async () => {
   assert.equal(status.message, 'Signed out.')
 })
 
+test('an Entra renewal reads its secret once', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  h.entra.answer('refresh_token', adaTokens(REFRESH_ADA_2))
+  const reads = h.secretReads.length
+  await h.connections.http.json(PROJECTS)
+  assert.deepEqual(h.secretReads.slice(reads), ['entra:contoso'])
+})
+
+test('an Entra secret the keychain refuses to read is an error that waits a minute before asking again', async () => {
+  const locked = 'The keychain is locked.'
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  const read = h.secretStore.get.bind(h.secretStore)
+  h.secretStore.get = () => {
+    throw new Error(locked)
+  }
+  assert.equal((await h.failure(h.connections.http.json(PROJECTS))).message, locked)
+  assert.equal(h.last()?.state, 'error')
+
+  const reads = h.secretReads.length
+  h.clock.now += 60_000 - 1
+  await h.failure(h.connections.http.json(PROJECTS))
+  assert.equal(h.secretReads.length, reads, 'the cool-down holds')
+
+  h.secretStore.get = read
+  h.clock.now += 1
+  h.entra.answer('refresh_token', adaTokens(REFRESH_ADA_2))
+  await h.connections.http.json(PROJECTS)
+  assert.equal(h.last()?.state, 'connected')
+})
+
 test('switching an org from Azure CLI to Microsoft wipes the profile and keeps the pin', async () => {
   const h = harness({ orgs: [config({ pinned: ADA_OID, boards: BOARDS })] })
   assert.equal(h.az.profiles.has('contoso'), true)
