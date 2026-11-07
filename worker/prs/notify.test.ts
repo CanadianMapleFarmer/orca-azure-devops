@@ -290,8 +290,60 @@ test("a forbidden thread read pauses that org's thread reads for ten minutes", a
     refused.now = false
     await h.clock.tick(1)
     await h.service.refresh(ORG)
+    await drain()
     assert.equal(reads(), paused + 5, 'thread reads resume after ten minutes')
     assert.deepEqual(h.logs(), [], 'a refusal pauses; it is not logged')
+  })
+})
+
+test('a throttled thread read pauses the PRs job for the retry wait and logs nothing', async () => {
+  await withPrNotifications(async h => {
+    h.setOrgs([status()])
+    await h.poll(0)
+    const throttled = { now: true }
+    h.ado.on(call => throttled.now && isThreads(call), () => json(429, { message: 'TF400733: slow down.' }, { 'retry-after': '600' }))
+    const reads = () => h.ado.count(isThreads)
+    const lists = () => h.ado.count(isReviewList)
+
+    const before = reads()
+    await h.poll()
+    assert.ok(reads() > before, 'the throttled read happened at the 5 minute poll')
+    const [paused, listed] = [reads(), lists()]
+
+    throttled.now = false
+    await h.clock.tick(5 * MINUTE)
+    assert.deepEqual([reads(), lists()], [paused, listed], 'the job stays paused for the retry wait')
+    await h.clock.tick(5 * MINUTE)
+    assert.equal(reads(), paused + 5, 'polling resumes when the pause ends')
+    assert.deepEqual(h.logs(), [], 'a throttle pauses; it is not logged')
+  })
+})
+
+test('refresh resolves once the pull requests load, not when the comment reads finish', async () => {
+  await withPrNotifications(async h => {
+    h.setOrgs([status()])
+    await h.poll(0)
+    const hung = h.ado.hang(isThreads)
+    h.review.push(requested(4120, 'Tighten the redirect check'))
+
+    let answered = false
+    const refreshed = h.service.refresh(ORG).then(snapshot => {
+      answered = true
+      return snapshot
+    })
+    await drain()
+    assert.ok(hung.length > 0, 'thread reads are in flight')
+    assert.ok(answered, 'refresh answered while they were')
+    assert.ok((await refreshed).toReview.some(pr => pr.prId === 4120), 'with the new load')
+
+    h.service.visibility({ org: ORG, visible: true })
+    await drain()
+    h.review.push(requested(4121, 'Add a parser'))
+    assert.ok((await h.service.refresh(ORG)).toReview.some(pr => pr.prId === 4121), 'and the same while the tab is visible')
+
+    h.setOrgs([status({ state: 'disconnected', account: null })])
+    await drain()
+    assert.deepEqual(h.logs(), [])
   })
 })
 
@@ -364,13 +416,13 @@ test('notification text carries no token or Authorization value', async () => {
     await h.poll(0)
 
     h.review.push(requested(4120, 'Tighten the redirect check'))
-    const links = `![build log](${ORG_URL}/_apis/git/attachments/log.png) see [the run](${ORG_URL}/_build/results?buildId=4512) <${ORG_URL}/_git/web-app>`
+    const links = `![build log](${ORG_URL}/_apis/git/attachments/log.png) see [the run](${ORG_URL}/_build/results?buildId=4512) <${ORG_URL}/_git/web-app> pasted ${ORG_URL}/_apis/git/blobs/9f2c?sig=SECRET123 here`
     h.threads.set(4101, [thread(201, [comment(1, GRACE, T0 + MINUTE, links)])])
     const shown = await h.poll()
-    assert.deepEqual(shown.map(note => note.body), ['Tighten the redirect check\nGrace Hopper · web-app', 'Grace Hopper: build log see the run'])
+    assert.deepEqual(shown.map(note => note.body), ['Tighten the redirect check\nGrace Hopper · web-app', 'Grace Hopper: build log see the run pasted here'])
     assert.ok(h.ado.calls.every(call => call.headers.get('authorization') === AUTHORIZATION), 'every request carried the credential')
     const seen = JSON.stringify([h.shown(), h.logs()])
-    for (const secret of [AUTHORIZATION, AUTHORIZATION.split(' ')[1], 'Bearer', 'https://', ORG_URL]) assert.ok(!seen.includes(secret), secret)
+    for (const secret of [AUTHORIZATION, AUTHORIZATION.split(' ')[1], 'Bearer', 'https://', ORG_URL, 'SECRET123', 'sig=']) assert.ok(!seen.includes(secret), secret)
   })
 })
 

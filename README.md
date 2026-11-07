@@ -508,7 +508,7 @@ It notifies when:
 - a run waits for an approval that you can give, or one of your own runs waits for an approval: `<pipeline> is waiting for approval`, with where it waits and `You can approve it.` when you can (`notifyApprovals`);
 - a run you watch finishes, whether it succeeded, finished with warnings, was canceled or failed (`notifyWatchedRuns`);
 - someone asks for your review: `Review requested: Pull Request N`, with its title, author and repository, when a pull request newly appears in your To review list (`notifyReviewRequests`);
-- someone else comments on one of your 20 newest active pull requests in an organisation: `New comment on Pull Request N`, with who wrote it and its first line as plain text (`notifyPrComments`). Several new comments on one thread make one notification, `N new comments on Pull Request N`, naming the latest. Your own comments, Azure DevOps's system comments (votes, policy updates) and deleted comments never count.
+- someone else comments on one of your 20 newest active pull requests in an organisation: `New comment on Pull Request N`, with who wrote it and its first line as plain text (`notifyPrComments`). Several new comments on one thread make one notification, `<count> new comments on Pull Request N`, naming the latest. Your own comments, Azure DevOps's system comments (votes, policy updates) and deleted comments never count.
 
 Each kind has a setting, on by default. See Settings.
 
@@ -537,7 +537,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - An open board: every 30 seconds while visible.
 - PR chip status: cached for 2 minutes, or an hour once the pull request is merged or abandoned.
 - PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list, for the status bar and review notifications). Opening the tab shows data under a minute old without asking again.
-- Comment notifications: with `notifyPrComments` on, each PRs poll also reads the comment threads of your 20 newest active pull requests in the organisation. While the tab is hidden, it first lists your active pull requests, one request per code project. With it off, the plugin reads no threads and makes no such list.
+- Comment notifications: with `notifyPrComments` on, each PRs poll also reads the comment threads of your 20 newest active pull requests in the organisation. While the tab is hidden, it first lists your active pull requests, one request per code project. With it off, the plugin reads no threads for notifications and makes no such list.
 - PRs tab caches: completed pull requests for 5 minutes, linked work items for 10 minutes (an hour once completed), build and policy status for 2 minutes, the code project list for an hour.
 - PRs tab limits: a load makes at most 4 requests at a time for an organisation, and so do comment reads. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes. When it refuses comment threads, comment reads for that organisation pause for 10 minutes while PR loads and review notifications carry on.
 - Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 finished runs it hasn't read yet per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
@@ -565,7 +565,7 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `notifyApprovals` (Notify when a run waits for approval): on by default. It covers approvals you can give and approvals on your own runs.
 - `notifyWatchedRuns` (Notify when a watched run finishes): on by default.
 - `notifyReviewRequests` (Notify when someone asks for my review): on by default.
-- `notifyPrComments` (Notify about new comments on my pull requests): on by default. Off, the plugin reads no comment threads.
+- `notifyPrComments` (Notify about new comments on my pull requests): on by default. Off, the plugin reads no comment threads for notifications.
 - `approvalShareTemplate` (Approval share line): one line per approval in a share. Defaults to `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`. See The Pipelines tab for the placeholders.
 - `entraClientId` (Microsoft sign-in: app (client) ID): the app registration your admin created for Sign in with Microsoft. Empty by default. See Registering the app (for admins).
 - `entraTenant` (Microsoft sign-in: tenant): a tenant ID or domain, used only when an organisation's tenant can't be found. Empty by default. Leave it empty for any work or school account.
@@ -635,6 +635,7 @@ Pipelines and notifications:
 - An environment approval: Needs me, the approvers and waiting time, the environment name, Approve and Reject with a comment, and a two-approver check. Also what Azure DevOps answers when the requester approves their own run, the `permissions` value for a group-assigned approver, that `$expand=steps,permissions` is accepted, and that an approval's `pipeline.owner.id` is the run id and its Checkpoint records match.
 - Share for approval to a Teams chat, the test channel, email and Copy. For email: whether `mailto:` opens in the default mail app, how Orca's consent prompt treats it, and whether an `@` encoded as `%40` survives in the address.
 - Notifications for a failure, a watched run and an approval on macOS, with Orca in front and behind, and what a click does.
+- Notifications for a real review request and for a comment from another account on one of your pull requests: the two-line text on macOS, a thread read that Azure DevOps refuses, and whether a thread list without an iteration returns every thread and a group-assigned review request counts.
 - On the client organisation, read-only: `X-RateLimit-*` and `Retry-After` headroom with the Pipelines tab and a run tab open for 10 minutes, whether `requestedFor` carries an id, who it names on a run started by pull request auto-complete, and the `triggerInfo` of one real pull request validation run and one CI run.
 - Which scopes runs, approvals, environment names and the project list need with a partial PAT, and whether a refusal gives the right message.
 - The Pipelines tab at 360 px and the run tab in both themes, a run tab whose file was pruned, and `ADO · N failed · N approvals · N to review` on the status bar.

@@ -216,7 +216,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   async function loadInFull(org: string): Promise<void> {
     const entry = entryOf(org)
     const loads = entry.fullLoads
-    await scheduler.runNow(jobKey(org))
+    void scheduler.runNow(jobKey(org))
+    await entry.loading?.promise.catch(() => {})
     if (entry.fullLoads === loads && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
@@ -248,6 +249,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       return watched.map((pr, index) => ({ pr, threads: read[index] }))
     } catch (error) {
       if (signal.aborted) return null
+      if (error instanceof AdoError && error.code === 'rate_limited') throw error
       if (error instanceof AdoError && error.code === 'forbidden') entry.threadsPausedUntil = now() + FORBIDDEN_PAUSE_MS
       else deps.log(PR_COMMENTS_UNREAD)
       return null

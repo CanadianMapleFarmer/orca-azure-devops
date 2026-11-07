@@ -1,7 +1,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type MergeStrategy } from '../../src/shared/prs'
 import { PR_TEMPLATE } from '../../src/shared/share/template'
-import { watchSettings } from '../settings-watcher'
+import { settingOn, watchSettings } from '../settings-watcher'
 
 const MERGE_STRATEGIES = Object.keys(MERGE_STRATEGY_LABELS) as MergeStrategy[]
 
@@ -18,10 +18,6 @@ export interface PrSettings {
 
 export async function watchPrSettings(settings: OrcaWorkerApi['settings'], log: (message: string) => void): Promise<PrSettings> {
   const values = await watchSettings(settings, log)
-  const toggle = (key: string) => {
-    const value = values()[key]
-    return typeof value === 'boolean' ? value : true
-  }
   return {
     autoComplete: () => ({
       mergeStrategy: MERGE_STRATEGIES.find(strategy => strategy === values().autoCompleteMergeStrategy) ?? 'noFastForward',
@@ -32,6 +28,6 @@ export async function watchPrSettings(settings: OrcaWorkerApi['settings'], log: 
       const template = values().shareTemplate
       return typeof template === 'string' && template.trim() !== '' ? template : PR_TEMPLATE
     },
-    notify: () => ({ reviews: toggle('notifyReviewRequests'), comments: toggle('notifyPrComments') })
+    notify: () => ({ reviews: settingOn(values, 'notifyReviewRequests'), comments: settingOn(values, 'notifyPrComments') })
   }
 }

@@ -25,3 +25,26 @@ test('a comment preview is its first line as plain text', () => {
   ]
   for (const [content, expected] of cases) assert.equal(commentPreview(content, PEOPLE), expected, JSON.stringify(content))
 })
+
+test('a comment preview keeps code spans verbatim', () => {
+  const cases: [string, string][] = [
+    ['`__init__` runs first', '__init__ runs first'],
+    ['`*not em*` but *em*', '*not em* but em'],
+    ['`a_b_c` and `~~x~~` and _y_', 'a_b_c and ~~x~~ and y']
+  ]
+  for (const [content, expected] of cases) assert.equal(commentPreview(content, PEOPLE), expected, JSON.stringify(content))
+})
+
+test('a comment preview carries no URL, whatever form it takes', () => {
+  const cases: [string, string][] = [
+    ['see https://dev.azure.com/contoso/_apis/x?sig=SECRET123 now', 'see now'],
+    ['[ref]: https://example.com/x?token=abc\nafter', 'after'],
+    ['> [ref]: <https://example.com/x?token=abc> "Title"', ''],
+    ['[https://example.com/x?sig=abc](https://example.com/x?sig=abc) done', 'done'],
+    ['see &lt;https://example.com/x?sig=abc&gt; now', 'see now'],
+    ['`https://example.com/x?sig=abc` and **ftp://host/a_b?sig=1** gone', 'and gone'],
+    ['https://example.com/x?sig=a\\_b ok', 'ok'],
+    ['[WIP]: fix the thing', '[WIP]: fix the thing']
+  ]
+  for (const [content, expected] of cases) assert.equal(commentPreview(content, PEOPLE), expected, JSON.stringify(content))
+})

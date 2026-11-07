@@ -13,3 +13,8 @@ export async function watchSettings(settings: OrcaWorkerApi['settings'], log: (m
   settings.onDidChange(() => void refresh())
   return () => values
 }
+
+export function settingOn(values: () => Record<string, unknown>, key: string): boolean {
+  const value = values()[key]
+  return typeof value === 'boolean' ? value : true
+}
