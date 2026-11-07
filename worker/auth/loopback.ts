@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { REDIRECT_PAGE } from '../messages'
+import { AADSTS } from './entra'
 
 export type Redirect = { code: string } | { error: string; errorCode: string | null }
 
@@ -18,7 +19,6 @@ type Page = Exclude<keyof typeof REDIRECT_PAGE, 'title'>
 
 const LOOPBACK = '127.0.0.1'
 const FORM = 'application/x-www-form-urlencoded'
-const AADSTS = /AADSTS\d+/
 const PAGE_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
   'content-security-policy': "default-src 'none'",

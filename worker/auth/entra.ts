@@ -38,7 +38,7 @@ type Rule = { match: Match; kind: EntraErrorKind; message: string | null }
 
 const VERIFIER_BYTES = 32
 const STATE_BYTES = 16
-const AADSTS = /AADSTS\d+/
+export const AADSTS = /AADSTS\d+/
 const OAUTH_ERROR = /^[a-z_]{1,40}$/
 const DIGITS = /^\d+$/
 const FORM_HEADERS = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }
