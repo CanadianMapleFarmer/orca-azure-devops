@@ -515,7 +515,7 @@ Each kind has a setting, on by default. See Settings.
 - One notification per finish and per approval. When you rerun a stage and the run fails again, it notifies again.
 - One notification per review request and per comment. A pull request that leaves To review and comes back doesn't notify again until the plugin restarts.
 - Nothing for your runs that failed, or approvals that started waiting, before the plugin started. A watched run that finished while Orca was closed does notify, once, when the plugin next runs.
-- The first load of an organisation after the plugin starts never notifies about pull requests: it only notes what is already waiting for your review and the comments already written. The same goes for the first load after you sign in or reconnect, the first read of a pull request's comments, and the first read after you turn `notifyPrComments` back on.
+- The first load of an organisation after the plugin starts never notifies about pull requests: it only notes what is already waiting for your review and the comments already written. The same goes for the first load after you sign in or reconnect, the first read of a pull request's comments, and the first read after you turn `notifyPrComments` back on. A connection error that clears by itself, such as a sign-in renewal that runs before the network is back after sleep, keeps what was noted, so what arrived meanwhile still notifies.
 - At most 3 per poll, then one more, `N more pipeline updates` or `N more pull request updates`, for the rest.
 - Orca gives the plugin no click event, so a click is expected to open nothing (not yet checked on macOS). The text says where to look: the Pipelines tab or the PRs tab.
 

@@ -73,6 +73,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   const entries = new Map<string, OrgPrs>()
   const jobs = new Set<string>()
   const visible = new Set<string>()
+  const baselined = new Set<string>()
   let disposed = false
 
   function statusOf(org: string): Promise<SignedInStatus> {
@@ -102,6 +103,10 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   function forget(org: string): void {
     entries.get(org)?.controller.abort()
     entries.delete(org)
+  }
+
+  function resetBaseline(org: string): void {
+    baselined.delete(org)
     deps.notifier.forget(org)
   }
 
@@ -233,7 +238,9 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     try {
       const status = await statusOf(org)
       const threads = await threadsOf(entry, status, link.signal)
-      if (!link.signal.aborted) deps.notifier.observe(org, { me: status.account.adoId, review: entry.review, threads })
+      if (link.signal.aborted) return
+      baselined.add(org)
+      deps.notifier.observe(org, { me: status.account.adoId, review: entry.review, threads })
     } finally {
       link.release()
     }
@@ -260,12 +267,14 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     onOrgs(orgs) {
       if (disposed) return
       const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
+      const failing = new Set(orgs.filter(status => status.state === 'error').map(status => status.org))
       for (const org of new Set([...entries.keys(), ...jobs])) {
         if (signedIn.has(org)) continue
         forget(org)
         if (jobs.delete(org)) scheduler.remove(jobKey(org))
         deps.counts(org, null)
       }
+      for (const org of baselined) if (!signedIn.has(org) && !failing.has(org)) resetBaseline(org)
       for (const org of signedIn) {
         if (jobs.has(org)) continue
         jobs.add(org)
@@ -325,6 +334,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       for (const org of jobs) scheduler.remove(jobKey(org))
       jobs.clear()
       for (const org of [...entries.keys()]) forget(org)
+      for (const org of baselined) resetBaseline(org)
     }
   }
 }

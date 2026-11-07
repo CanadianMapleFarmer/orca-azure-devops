@@ -81,6 +81,7 @@ interface Harness {
   service: PrsService
   shown(): Shown[]
   logs(): readonly string[]
+  forgotten: string[]
   setOrgs(next: OrgStatus[]): void
   poll(ms?: number): Promise<Shown[]>
 }
@@ -98,9 +99,11 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
   ado.on(isMineActive, call => json(200, { value: projectOf(call) === PROJECT ? mine : [] }))
   ado.on(isThreads, call => json(200, { value: threads.get(threadsPrIdOf(call)) ?? [] }))
   const made: { service?: PrsService } = {}
+  const forgotten: string[] = []
   const module = {
     default: async (orca: OrcaWorkerApi) => {
       const log = (message: string) => orca.log(message)
+      const notifier = createPrNotifier({ show: n => orca.host.call('notifications.show', n), prefs: () => prefs, log })
       made.service = createPrsService({
         http: createAdoHttp({ fetch: ado.fetch, authHeader: async () => AUTHORIZATION, sleep: async () => {} }),
         orgs: async () => structuredClone(orgs),
@@ -109,7 +112,13 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
         post: () => {},
         counts: () => {},
         now: clock.now,
-        notifier: createPrNotifier({ show: n => orca.host.call('notifications.show', n), prefs: () => prefs, log }),
+        notifier: {
+          ...notifier,
+          forget: org => {
+            forgotten.push(org)
+            notifier.forget(org)
+          }
+        },
         log
       })
     }
@@ -127,6 +136,7 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
       service,
       shown,
       logs: () => w.logs,
+      forgotten,
       setOrgs(next) {
         orgs = next
         service.onOrgs(structuredClone(next))
@@ -196,6 +206,51 @@ test('a new review request notifies once', async () => {
     assert.deepEqual(await h.poll(0), [], 'a reconnect sets a new baseline')
     h.review.push(requested(4127, 'After reconnecting'))
     assert.deepEqual((await h.poll()).map(note => note.title), ['Review requested: Pull Request 4127'])
+  })
+})
+
+test('a connection error keeps the baseline, so what arrived meanwhile notifies once it recovers', async () => {
+  await withPrNotifications(async h => {
+    const open = thread(201, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])
+    h.threads.set(4101, [open])
+    h.setOrgs([status()])
+    await h.poll(0)
+
+    h.setOrgs([status({ state: 'error' })])
+    h.review.push(requested(4120, 'Tighten the redirect check'))
+    open.comments?.push(comment(2, GRACE, T0 + MINUTE, 'And a changelog line.'))
+    h.setOrgs([status()])
+    assert.deepEqual((await h.poll(0)).map(note => note.title), ['Review requested: Pull Request 4120', 'New comment on Pull Request 4101'])
+    assert.deepEqual(await h.poll(), [], 'once')
+    assert.deepEqual(h.forgotten, [])
+  })
+})
+
+test('signing out or removing an organisation after a connection error still sets a new baseline', async () => {
+  await withPrNotifications(async h => {
+    h.setOrgs([status()])
+    await h.poll(0)
+
+    const leaving: [OrgStatus[], number][] = [[[status({ state: 'expired' })], 4130], [[], 4131]]
+    for (const [orgs, prId] of leaving) {
+      h.setOrgs([status({ state: 'error' })])
+      h.setOrgs(orgs)
+      h.review.push(requested(prId, 'While away'))
+      h.setOrgs([status()])
+      assert.deepEqual(await h.poll(0), [], `${orgs.length ? 'a reconnect' : 'adding it again'} sets a new baseline`)
+    }
+    assert.deepEqual(h.forgotten, [ORG, ORG])
+  })
+})
+
+test('dispose clears the baselines, also one kept through a connection error', async () => {
+  await withPrNotifications(async h => {
+    h.setOrgs([status()])
+    await h.poll(0)
+    h.setOrgs([status({ state: 'error' })])
+    assert.deepEqual(h.forgotten, [])
+    h.service.dispose()
+    assert.deepEqual(h.forgotten, [ORG])
   })
 })
 
