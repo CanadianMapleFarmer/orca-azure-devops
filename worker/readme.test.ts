@@ -262,6 +262,7 @@ test('Proxies and certificates says why the settings exist and what each one, az
   assert.ok(status && network.includes(`**${status.title}**`), 'the Connection status command is named by its title')
   assert.match(network, /lists any setting that was ignored, and why/)
   assert.ok(network.includes(`\`${NETWORK.proxyInUse}\``), 'the proxy-in-use note is quoted')
+  assert.ok(network.includes(`\`${NETWORK.applyFailed}\``), 'the apply-failed note is quoted')
 })
 
 test('every Microsoft and network setting is documented with the default the manifest declares', async () => {

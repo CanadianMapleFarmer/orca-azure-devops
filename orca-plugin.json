@@ -206,7 +206,7 @@
       {
         "key": "caCertificatesFile",
         "title": "Extra CA certificates file",
-        "description": "A PEM file of certificates to trust, for networks that inspect TLS.",
+        "description": "The full path to a PEM file of certificates to trust, for networks that inspect TLS.",
         "type": "string",
         "default": "",
         "placeholder": "/path/to/ca-certificates.pem"

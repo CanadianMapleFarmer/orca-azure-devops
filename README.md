@@ -128,14 +128,14 @@ Three notes:
 Orca doesn't pass `HTTPS_PROXY`, `NO_PROXY` or `NODE_EXTRA_CA_CERTS` from your environment to plugins, and a worker can't pick them up once it is running. So the plugin has its own settings, in Settings → Azure DevOps, and applies them itself.
 
 - `httpsProxy`: an `http://` or `https://` proxy address, such as `http://proxy.example.com:8080`. All the plugin's HTTPS traffic goes through it. Traffic to this computer (`localhost`, `127.0.0.1` and `::1`) never does. Proxies that need a password aren't supported, because settings are stored in plain text, and an address that carries a user name or password is ignored.
-- `caCertificatesFile`: the path to a PEM file of extra certificates to trust, up to 1 MiB, for networks that inspect TLS. The plugin trusts them as well as the certificates it already trusts.
+- `caCertificatesFile`: the full path to a PEM file of extra certificates to trust (`~` isn't expanded), up to 1 MiB, for networks that inspect TLS. The plugin trusts them as well as the certificates it already trusts.
 - `useSystemCertificates`: also trust the certificates your operating system trusts. It may be enough where the certificate of the inspecting proxy is installed on the computer.
 
 A change to any of them is picked up when you save it. A change to the certificate settings reaches new connections only; connections already open keep the certificates they started with.
 
 `az` uses the proxy but not the certificate settings, so behind TLS inspection use Sign in with Microsoft or a PAT. The plugin gives `az` the proxy in its environment. It doesn't give it the certificates, because that would replace the trust store `az` already has.
 
-**Azure DevOps: Connection status** lists any setting that was ignored, and why. A setting is ignored when the proxy address isn't `http://` or `https://`, when it carries a password, when the certificates file can't be read or isn't a PEM file of certificates, or when this Orca can't apply it. An Orca too old to apply a proxy or certificate setting says so there. While the proxy is in use, it shows `Using the HTTPS proxy from Settings.`
+**Azure DevOps: Connection status** lists any setting that was ignored, and why. A setting is ignored when the proxy address isn't `http://` or `https://`, when it carries a password, when the certificates file can't be read or isn't a PEM file of certificates, or when this Orca can't apply it. An Orca too old to apply a proxy or certificate setting says so there. While the proxy is in use, it shows `Using the HTTPS proxy from Settings.` If it shows `Couldn't apply the network settings.`, Orca refused a setting the plugin had already checked: save the setting again, and report it if it happens again.
 
 ## The Work tab
 
@@ -570,7 +570,7 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `entraClientId` (Microsoft sign-in: app (client) ID): the app registration your admin created for Sign in with Microsoft. Empty by default. See Registering the app (for admins).
 - `entraTenant` (Microsoft sign-in: tenant): a tenant ID or domain, used only when an organisation's tenant can't be found. Empty by default. Leave it empty for any work or school account.
 - `httpsProxy` (HTTPS proxy): an `http://` or `https://` proxy address for the plugin's traffic, like `http://proxy.example.com:8080`. Proxies that need a password aren't supported. Empty by default. See Proxies and certificates.
-- `caCertificatesFile` (Extra CA certificates file): a PEM file of certificates to trust, for networks that inspect TLS. Empty by default. A change reaches new connections only; connections already open keep the certificates they started with.
+- `caCertificatesFile` (Extra CA certificates file): the full path to a PEM file of certificates to trust, for networks that inspect TLS. Empty by default. A change reaches new connections only; connections already open keep the certificates they started with.
 - `useSystemCertificates` (Trust the system's certificates): also trust the certificates your operating system trusts. Off by default. Like the certificates file, a change reaches new connections only.
 
 ## Permissions
