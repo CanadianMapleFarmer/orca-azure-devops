@@ -44,7 +44,41 @@ test('a comment preview carries no URL, whatever form it takes', () => {
     ['see &lt;https://example.com/x?sig=abc&gt; now', 'see now'],
     ['`https://example.com/x?sig=abc` and **ftp://host/a_b?sig=1** gone', 'and gone'],
     ['https://example.com/x?sig=a\\_b ok', 'ok'],
+    ['see ...https://dev.azure.com/x?sig=SECRET123 now', 'see now'],
+    ['step 2.https://example.com/x?sig=abc done', 'step done'],
+    ['see https:\\/\\/dev.azure.com/x?sig=SECRET123 now', 'see now'],
+    ['[doc](https://x.com/a_(b)?sig=SECRET123) now', 'doc now'],
+    ['see www.example.com/x?sig=abc now', 'see now'],
     ['[WIP]: fix the thing', '[WIP]: fix the thing']
   ]
   for (const [content, expected] of cases) assert.equal(commentPreview(content, PEOPLE), expected, JSON.stringify(content))
+})
+
+test('a pathological comment previews in well under a second', () => {
+  const cases: [string, string][] = [
+    ['one 100,000-char token', 'a'.repeat(100_000)],
+    ['a dotted run', 'a.'.repeat(75_000)],
+    ['a digit before a long run', '1' + 'a'.repeat(149_999)],
+    ['open brackets', '['.repeat(150_000)],
+    ['unclosed links', '[a]('.repeat(37_500)],
+    ['unclosed strong', '**a '.repeat(37_500)],
+    ['unclosed emphasis', '*a '.repeat(50_000)],
+    ['unclosed code spans', '`a'.repeat(75_000)],
+    ['unclosed HTML comments', '<!--'.repeat(37_500)]
+  ]
+  for (const [name, content] of cases) {
+    const started = performance.now()
+    commentPreview(content, PEOPLE)
+    const took = performance.now() - started
+    assert.ok(took < 250, `${name} took ${Math.round(took)} ms`)
+  }
+})
+
+test('a long comment cut anywhere near a URL still previews without it', () => {
+  for (let at = 3900; at <= 4100; at++) {
+    const words = 'word '.repeat(Math.ceil(at / 5)).slice(0, at)
+    const preview = commentPreview(`${words}https://dev.azure.com/x?sig=SECRET123 tail`, PEOPLE)
+    assert.ok(preview.startsWith('word word'), `cut at ${at}`)
+    assert.ok(!/sig|SECRET|:\/\//.test(preview), `cut at ${at}: ${preview.slice(-40)}`)
+  }
 })
