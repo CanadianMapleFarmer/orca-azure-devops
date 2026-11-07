@@ -93,12 +93,12 @@ export async function listChanges(
   })
 }
 
-export async function listThreads(http: AdoHttp, org: string, key: PrKey, iterationId: number, signal?: AbortSignal): Promise<RawThread[]> {
+export async function listThreads(http: AdoHttp, org: string, key: PrKey, iterationId: number | null, signal?: AbortSignal): Promise<RawThread[]> {
   const { data } = await http.json<{ value?: RawThread[] }>({
     org,
     project: key.projectId,
     path: `${prPath(key)}/threads`,
-    query: { $iteration: iterationId, $baseIteration: 0 },
+    query: iterationId === null ? undefined : { $iteration: iterationId, $baseIteration: 0 },
     signal
   })
   return shape(() => expectList<RawThread>(data.value))

@@ -171,6 +171,15 @@ test('listThreads asks for positions on the latest iteration', async () => {
   assert.equal((await failure(listThreads(http, ORG, KEY, 2))).message, MALFORMED.review)
 })
 
+test('listThreads without an iteration asks for every thread and no positions', async () => {
+  const { ado, http } = setup()
+  const threads = await listThreads(http, ORG, KEY, null)
+  assert.deepEqual(threads.map(thread => thread.id), [101, 102, 103, 104, 105])
+  const [call] = ado.calls
+  assert.deepEqual([call.method, call.path], ['GET', `${PR_PATH}/threads`])
+  assert.deepEqual([...call.query.keys()], ['api-version'])
+})
+
 test('getThread reads one thread and answers null when it is gone', async () => {
   const { ado, http } = setup()
   assert.equal((await getThread(http, ORG, KEY, 102))?.status, 'fixed')

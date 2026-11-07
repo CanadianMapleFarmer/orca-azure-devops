@@ -7,7 +7,7 @@ import { fixture, isPatch, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } fro
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import { createPrActions } from './actions'
-import { fakePrs, isMineActive, isPrWorkItems, ME } from './fake-prs'
+import { fakePrs, isMineActive, isPrWorkItems, ME, NO_PR_NOTIFICATIONS } from './fake-prs'
 import { createPrsService } from './service'
 
 const T0 = Date.parse('2026-11-05T09:00:00Z')
@@ -90,7 +90,8 @@ function harness(saved: AutoCompleteOptions = SAVED) {
     autoComplete: () => saved,
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: () => {},
-    now: clock.now
+    now: clock.now,
+    ...NO_PR_NOTIFICATIONS
   })
   const actions = createPrActions({ http, prs, settings: { autoComplete: () => saved } })
   return {

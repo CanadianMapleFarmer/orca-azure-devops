@@ -67,6 +67,8 @@ export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams cha
 export const UNKNOWN_SHARE_KIND = "That can't be shared."
 export const NOTIFY_FAILED = "Couldn't show a desktop notification."
 export const MORE_UPDATES_BODY = 'Open the Pipelines tab in the Azure DevOps panel to see them.'
+export const MORE_PR_UPDATES_BODY = 'Open the PRs tab in the Azure DevOps panel to see them.'
+export const PR_COMMENTS_UNREAD = "Couldn't read the comments on your pull requests for notifications."
 export const YOU_CAN_APPROVE = 'You can approve it.'
 export const RUNS_TRIMMED = 'Showing the newest runs only.'
 export const RUNS_NEED_BUILD_READ = 'Pipelines need Build (Read) access.'
@@ -334,6 +336,26 @@ export function waitingAt(place: string): string {
 
 export function moreRunUpdates(count: number): string {
   return `${count} more pipeline ${count === 1 ? 'update' : 'updates'}`
+}
+
+export function reviewRequestedTitle(prId: number): string {
+  return `Review requested: Pull Request ${prId}`
+}
+
+export function reviewRequestedBody(title: string, author: string, repo: string): string {
+  return `${title}\n${author} · ${repo}`
+}
+
+export function newCommentsTitle(prId: number, count: number): string {
+  return count === 1 ? `New comment on Pull Request ${prId}` : `${count} new comments on Pull Request ${prId}`
+}
+
+export function newCommentBody(commenter: string, text: string): string {
+  return text ? `${commenter}: ${text}` : commenter
+}
+
+export function morePrUpdates(count: number): string {
+  return `${count} more pull request ${count === 1 ? 'update' : 'updates'}`
 }
 
 export function approvedNeedsMore(count: number): string {

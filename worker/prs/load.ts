@@ -3,6 +3,7 @@ import type { NamedItem } from '../ado/core'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { buildStateOf, loadEvaluations, policyStateOf } from '../ado/policy'
+import { listThreads, type RawThread } from '../ado/pr-review'
 import { listPullRequests, pullRequestWorkItems, toPrSummary, type PrCriteria } from '../ado/pullrequests'
 import { COMPLETED_WINDOW_MS } from './release-sets'
 
@@ -28,6 +29,8 @@ export interface FullLoad {
 export interface PrSource {
   full(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<FullLoad>
   reviews(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
+  active(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
+  threads(prs: PrKey[], signal?: AbortSignal): Promise<RawThread[][]>
 }
 
 type Cache<T> = Map<string, { at: number; ttl: number; value: T }>
@@ -89,7 +92,7 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number): P
     async full(me, projects, signal) {
       const scoped = withSignal(http, signal)
       const lists = projects.flatMap(project => [
-        { kind: 'mine', load: () => list(scoped, project.id, { creatorId: me, status: 'active', top: MINE_TOP }) },
+        { kind: 'mine', load: () => list(scoped, project.id, activeOf(me)) },
         { kind: 'mine', load: () => myCompleted(scoped, me, project.id) },
         { kind: 'review', load: () => list(scoped, project.id, reviewerOf(me)) }
       ])
@@ -102,8 +105,22 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number): P
     async reviews(me, projects, signal) {
       const scoped = withSignal(http, signal)
       return (await mapLimit(projects, IN_FLIGHT, project => list(scoped, project.id, reviewerOf(me)))).flat()
+    },
+
+    async active(me, projects, signal) {
+      const scoped = withSignal(http, signal)
+      return (await mapLimit(projects, IN_FLIGHT, project => list(scoped, project.id, activeOf(me)))).flat()
+    },
+
+    threads(prs, signal) {
+      const scoped = withSignal(http, signal)
+      return mapLimit(prs, IN_FLIGHT, pr => listThreads(scoped, org, pr, null))
     }
   }
+}
+
+function activeOf(me: string): PrCriteria {
+  return { creatorId: me, status: 'active', top: MINE_TOP }
 }
 
 function reviewerOf(me: string): PrCriteria {

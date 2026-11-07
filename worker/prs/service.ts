@@ -8,6 +8,7 @@ import {
   failureMessage,
   joinMessages,
   PRS_CHECKS_NEED_ACCESS,
+  PR_COMMENTS_UNREAD,
   PRS_LOAD_FAILED,
   PRS_NEED_CODE_READ,
   PRS_TRIMMED,
@@ -16,6 +17,7 @@ import {
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource } from './load'
+import { watchedPrs, type PrNotifier, type PrThreads } from './notify'
 import { newestCreatedAt, releaseSets, reviewedOf, toReviewOf } from './release-sets'
 
 export interface PrsServiceDeps {
@@ -26,6 +28,8 @@ export interface PrsServiceDeps {
   post: (snapshot: PrSnapshot) => void
   counts: (org: string, toReview: number | null) => void
   now: () => number
+  notifier: PrNotifier
+  log: (message: string) => void
 }
 
 export interface PrsService {
@@ -54,6 +58,7 @@ interface OrgPrs {
   failure: AdoError | null
   loading: { kind: Kind; promise: Promise<PrSnapshot> } | null
   pausedUntil: number
+  threadsPausedUntil: number
 }
 
 const PRS_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
@@ -87,7 +92,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       review: [],
       failure: null,
       loading: null,
-      pausedUntil: -Infinity
+      pausedUntil: -Infinity,
+      threadsPausedUntil: -Infinity
     }
     entries.set(org, entry)
     return entry
@@ -96,6 +102,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   function forget(org: string): void {
     entries.get(org)?.controller.abort()
     entries.delete(org)
+    deps.notifier.forget(org)
   }
 
   function jobKey(org: string): string {
@@ -214,7 +221,37 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   }
 
   async function poll(org: string, signal: AbortSignal): Promise<void> {
+    const entry = entryOf(org)
     await untilAborted(load(org, visible.has(org) ? 'full' : 'reviews'), signal)
+    await untilAborted(observe(org, entry), signal)
+  }
+
+  async function observe(org: string, entry: OrgPrs): Promise<void> {
+    if (now() < entry.pausedUntil) return
+    const link = linkedAbort(entry.controller.signal)
+    try {
+      const status = await statusOf(org)
+      const threads = await threadsOf(entry, status, link.signal)
+      if (!link.signal.aborted) deps.notifier.observe(org, { me: status.account.adoId, review: entry.review, threads })
+    } finally {
+      link.release()
+    }
+  }
+
+  async function threadsOf(entry: OrgPrs, status: SignedInStatus, signal: AbortSignal): Promise<PrThreads[] | null> {
+    if (!deps.notifier.readsThreads() || now() < entry.threadsPausedUntil) return null
+    try {
+      const me = status.account.adoId
+      const mine = fresh(entry) ? entry.mine : await entry.source.active(me, await entry.projects(status.codeProjects, signal), signal)
+      const watched = watchedPrs(mine)
+      const read = await entry.source.threads(watched, signal)
+      return watched.map((pr, index) => ({ pr, threads: read[index] }))
+    } catch (error) {
+      if (signal.aborted) return null
+      if (error instanceof AdoError && error.code === 'forbidden') entry.threadsPausedUntil = now() + FORBIDDEN_PAUSE_MS
+      else deps.log(PR_COMMENTS_UNREAD)
+      return null
+    }
   }
 
   return {

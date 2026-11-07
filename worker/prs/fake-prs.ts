@@ -1,8 +1,14 @@
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fakeAdo, fixture, json, ORG, ORG_URL, type AdoCall, type FakeAdo } from '../boards/fake-ado'
+import type { PrsServiceDeps } from './service'
 
 export const ME = '9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b'
 export const PLATFORM = '2b3c4d5e-7777-4f8a-9b0c-1d2e3f4a5b6c'
+
+export const NO_PR_NOTIFICATIONS: Pick<PrsServiceDeps, 'notifier' | 'log'> = {
+  notifier: { readsThreads: () => false, observe: () => {}, forget: () => {} },
+  log: () => {}
+}
 
 const WORK_ITEMS: Record<number, number[]> = { 4104: [1205], 4105: [1210], 4090: [1198], 4091: [1199] }
 const FIXTURE_WORK_ITEMS = new Set([4101, 4102, 4103])
@@ -11,6 +17,7 @@ const PR_LIST = /^\/[^/]+\/([^/]+)\/_apis\/git\/pullrequests$/
 const ONE_PR = /^\/[^/]+\/[^/]+\/_apis\/git\/repositories\/[^/]+\/pullrequests\/(\d+)$/i
 const PR_WORK_ITEMS = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/(\d+)\/workitems$/
 const PR_REVIEWERS = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/\d+\/reviewers$/
+const PR_THREADS = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/(\d+)\/threads$/
 
 export const isRepositories = (call: AdoCall) => call.method === 'GET' && call.path === `/${ORG}/_apis/git/repositories`
 export const isPrList = (call: AdoCall) => call.method === 'GET' && PR_LIST.test(call.path)
@@ -20,9 +27,14 @@ export const isReviewList = (call: AdoCall) => isPrList(call) && call.query.has(
 export const isOnePr = (call: AdoCall) => call.method === 'GET' && ONE_PR.test(call.path) && known(Number(ONE_PR.exec(call.path)?.[1])) !== undefined
 export const isPrWorkItems = (call: AdoCall) => call.method === 'GET' && PR_WORK_ITEMS.test(call.path)
 export const isEvaluations = (call: AdoCall) => call.method === 'GET' && call.path.endsWith('/_apis/policy/evaluations')
+export const isThreads = (call: AdoCall) => call.method === 'GET' && PR_THREADS.test(call.path)
 
 export function projectOf(call: AdoCall): string | undefined {
   return PR_LIST.exec(call.path)?.[1]
+}
+
+export function threadsPrIdOf(call: AdoCall): number {
+  return Number(PR_THREADS.exec(call.path)?.[1])
 }
 
 export function fakePrs(): FakeAdo {
@@ -32,6 +44,7 @@ export function fakePrs(): FakeAdo {
   ado.on(isOnePr, call => json(200, known(Number(ONE_PR.exec(call.path)?.[1]))))
   ado.on(isPrWorkItems, call => json(200, workItemsOf(Number(PR_WORK_ITEMS.exec(call.path)?.[1]))))
   ado.on(call => call.method === 'GET' && PR_REVIEWERS.test(call.path), () => json(200, fixture('pull-request-reviewers')))
+  ado.on(isThreads, () => json(200, { value: [], count: 0 }))
   return ado
 }
 

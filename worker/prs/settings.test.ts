@@ -67,6 +67,53 @@ test('the auto-complete settings are declared with their defaults and labels', (
   })
 })
 
+test('the pull request notification toggles default to on and follow the settings', async () => {
+  let saved: Record<string, unknown> = {}
+  const host = mockHost({ results: { 'settings.get': () => ({ settings: saved }) } })
+  const seen: { settings?: PrSettings; api?: OrcaWorkerApi['settings'] } = {}
+  const module = {
+    default: async (orca: OrcaWorkerApi) => {
+      seen.api = orca.settings
+      seen.settings = await watchPrSettings(orca.settings, message => orca.log(message))
+    }
+  }
+  await withWorker(module, { host }, async () => {
+    const settings = seen.settings as PrSettings
+    const api = seen.api as OrcaWorkerApi['settings']
+    const change = async (next: Record<string, unknown>) => {
+      saved = next
+      await api.set('notifyReviewRequests', 'changed')
+      await drain()
+    }
+    assert.deepEqual(settings.notify(), { reviews: true, comments: true })
+
+    await change({ notifyReviewRequests: false, notifyPrComments: 'no' })
+    assert.deepEqual(settings.notify(), { reviews: false, comments: true })
+
+    await change({ notifyReviewRequests: null, notifyPrComments: false })
+    assert.deepEqual(settings.notify(), { reviews: true, comments: false })
+  })
+})
+
+test('the pull request notification settings are declared after notifyWatchedRuns, on by default', () => {
+  const keys = manifest.contributes.settings.map(setting => setting.key)
+  const watched = keys.indexOf('notifyWatchedRuns')
+  assert.deepEqual(keys.slice(watched, watched + 3), ['notifyWatchedRuns', 'notifyReviewRequests', 'notifyPrComments'])
+  const declared = Object.fromEntries(manifest.contributes.settings.map(setting => [setting.key, setting]))
+  assert.deepEqual(declared.notifyReviewRequests, {
+    key: 'notifyReviewRequests',
+    title: 'Notify when someone asks for my review',
+    type: 'boolean',
+    default: true
+  })
+  assert.deepEqual(declared.notifyPrComments, {
+    key: 'notifyPrComments',
+    title: 'Notify about new comments on my pull requests',
+    type: 'boolean',
+    default: true
+  })
+})
+
 test('shareTemplate falls back to the default when empty or not a string', async () => {
   let saved: Record<string, unknown> = {}
   const host = mockHost({ results: { 'settings.get': () => ({ settings: saved }) } })

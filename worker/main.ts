@@ -16,7 +16,7 @@ import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
 import { registerOrgHandlers } from './org-handlers'
 import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
-import { createNotifier } from './pipelines/notify'
+import { createNotifier, type Shown } from './pipelines/notify'
 import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './pipelines/open-file'
 import { createPressure } from './pipelines/pressure'
 import { openRun } from './pipelines/run-file'
@@ -29,6 +29,7 @@ import { createWatchList } from './pipelines/watched'
 import { createScheduler, realClock } from './poll/scheduler'
 import { createPrActions } from './prs/actions'
 import { registerPrHandlers } from './prs/handlers'
+import { createPrNotifier } from './prs/notify'
 import { createPrsService } from './prs/service'
 import { watchPrSettings } from './prs/settings'
 import { prShareSource } from './prs/share-source'
@@ -154,6 +155,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     postBoard: change => orca.panels.post('work.boardChanged', change),
     now: Date.now
   })
+  const showNotification = (n: Shown) => orca.host.call('notifications.show', n)
   const prs = createPrsService({
     http,
     orgs: () => connections.list(),
@@ -161,10 +163,12 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     autoComplete: () => prSettings.autoComplete(),
     post: snapshot => orca.panels.post('prs.changed', snapshot),
     counts: (org, count) => bar.setCount(org, 'toReview', count),
-    now: Date.now
+    now: Date.now,
+    notifier: createPrNotifier({ show: showNotification, prefs: () => prSettings.notify(), log }),
+    log
   })
   const notifier = createNotifier({
-    show: n => orca.host.call('notifications.show', n),
+    show: showNotification,
     prefs: () => pipelineSettings.notify(),
     since: activatedAt,
     log

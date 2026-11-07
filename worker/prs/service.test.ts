@@ -17,6 +17,7 @@ import {
   isRepositories,
   isReviewList,
   ME,
+  NO_PR_NOTIFICATIONS,
   PLATFORM,
   projectOf
 } from './fake-prs'
@@ -70,7 +71,8 @@ function harness() {
     },
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: (org, count) => counts.push([org, count]),
-    now: clock.now
+    now: clock.now,
+    ...NO_PR_NOTIFICATIONS
   })
   return {
     ado,

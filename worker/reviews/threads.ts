@@ -36,7 +36,7 @@ interface Target {
 const SYSTEM_COMMENT = 'system'
 const STATUSES: ReadonlySet<string> = new Set<ThreadStatus>(['active', 'pending', 'fixed', 'wontFix', 'closed', 'byDesign'])
 
-export function peopleOf(pr: RawPullRequest, threads: readonly RawThread[]): Map<string, string> {
+export function peopleOf(pr: Pick<RawPullRequest, 'createdBy' | 'reviewers'>, threads: readonly RawThread[]): Map<string, string> {
   const people = new Map<string, string>()
   const add = (identity: unknown) => {
     if (typeof identity !== 'object' || identity === null) return
@@ -73,10 +73,14 @@ export function fitReview(review: PrReview, budget: number): PrReview {
   return { ...review, threads: review.threads.slice(0, kept), message: trimmed }
 }
 
+export function isLiveComment(comment: RawComment): boolean {
+  return comment.isDeleted !== true && comment.commentType !== SYSTEM_COMMENT
+}
+
 function liveThread(raw: RawThread): Live {
   expectId(raw.id)
   const comments = expectList<RawComment>(raw.comments ?? [])
-    .filter(comment => comment.isDeleted !== true && comment.commentType !== SYSTEM_COMMENT)
+    .filter(isLiveComment)
     .map(comment => ({ raw: comment, at: timestamp(comment.publishedDate) }))
     .sort((a, b) => a.at - b.at || expectId(a.raw.id) - expectId(b.raw.id))
   return { raw, status: statusOf(raw.status), comments, newest: comments.at(-1)?.at ?? -Infinity }

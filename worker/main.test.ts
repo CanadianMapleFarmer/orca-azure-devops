@@ -9,9 +9,10 @@ import type { RunsSnapshot } from '../src/shared/pipelines'
 import type { PrSnapshot } from '../src/shared/prs'
 import type { OrgConfig, OrgStatus } from '../src/shared/types'
 import { AdoError } from './ado/http'
+import type { RawPullRequest } from './ado/pullrequests'
 import { accessToken, CLIENT_ID, fakeEntra, OID_ADA, tokenAnswer } from './auth/fake-entra'
 import { basicAuth } from './auth/pat'
-import { BOARDS, fakeAdo, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
+import { BOARDS, fakeAdo, fixture, isPatch, isWiql, json as reply, ORG_URL, PROJECT, REPO, STORIES, TEAM, type FakeAdo } from './boards/fake-ado'
 import * as worker from './main'
 import {
   APPROVAL_4520,
@@ -26,7 +27,7 @@ import {
   isStagePatch,
   type FakePipelines
 } from './pipelines/fake-pipelines'
-import { fakePrs, isMineActive, isPrList, isReviewList, ME } from './prs/fake-prs'
+import { fakePrs, isMineActive, isPrList, isReviewList, ME, projectOf } from './prs/fake-prs'
 import { fakeReviews, isThreads } from './reviews/fake-reviews'
 import { connectError, drain, withMockTimers, withWorker } from './test-support'
 import { fakeWiki, isPage, isSearch } from './wiki/fake-wiki'
@@ -772,11 +773,12 @@ test('work.openBoard refuses without a focused local workspace or a boards team'
   })
 })
 
-function prsHost(boards: typeof BOARDS | null = null) {
+function prsHost(boards: typeof BOARDS | null = null, settings: Record<string, JsonValue> = {}) {
   return mockHost({
     capabilities: CAPABILITIES,
     storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME }, boards }] },
-    secrets: { 'pat:contoso': PAT }
+    secrets: { 'pat:contoso': PAT },
+    settings
   })
 }
 
@@ -838,7 +840,7 @@ test('prs.autoComplete answers through the handler with the saved options', asyn
 test('the status command reports review counts', async () => {
   const ado = fakePrs()
   await withFetch(signedIn(ado), async () => {
-    const host = prsHost()
+    const host = prsHost(null, { notifyPrComments: false })
     await withWorker(worker, { host }, async w => {
       const shown = () => (host.callsOf('statusBar.update').at(-1) as { text?: string } | undefined)?.text
       assert.ok(await until(() => shown() === 'ADO · 1 to review'), 'the background run counted the pull requests to review')
@@ -857,7 +859,7 @@ test('the status command reports review counts', async () => {
 test('ui.visibility routes prs to the PRs service and work/board as before', async () => {
   const ado = fakePrs()
   await withFetch(signedIn(ado), async () => {
-    await withWorker(worker, { host: prsHost(BOARDS) }, async w => {
+    await withWorker(worker, { host: prsHost(BOARDS, { notifyPrComments: false }) }, async w => {
       assert.ok(await until(() => ado.count(isReviewList) > 0), 'the PRs job runs in the background')
       assert.deepEqual(await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true }), { ok: true })
       assert.deepEqual(await w.request('ui.visibility', { surface: 'board', org: 'contoso', visible: false }), { ok: true })
@@ -885,6 +887,49 @@ test('deactivate aborts a pull request load in flight, and nothing is posted or 
       assert.deepEqual(prsChanged(w.posts), [])
       const shown = host.callsOf('statusBar.update').map(call => (call as { text?: string }).text)
       assert.ok(shown.every(text => text === 'ADO'), JSON.stringify(shown))
+    })
+  })
+})
+
+function prNotifyHost(settings: Record<string, JsonValue>) {
+  return mockHost({
+    capabilities: [...CAPABILITIES, 'notifications:show'],
+    storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME } }] },
+    secrets: { 'pat:contoso': PAT },
+    settings,
+    results: { 'notifications.show': { delivered: true } }
+  })
+}
+
+test('a PRs poll that adds a review request shows one desktop notification, and the PR notification settings are wired', async () => {
+  const listed = fixture<{ value: RawPullRequest[] }>('pull-requests-review').value
+  const request = { ...structuredClone(listed[0]), pullRequestId: 4120, title: 'Tighten the redirect check', sourceRefName: 'refs/heads/feature/4120' }
+  const ado = fakePrs()
+  ado.on(isReviewList, call => reply(200, { value: projectOf(call) === PROJECT ? listed : [] }))
+  await withFetch(signedIn(ado), async () => {
+    const host = prNotifyHost({ notifyPrComments: false })
+    await withWorker(worker, { host }, async w => {
+      await w.request('prs.refresh', { org: 'contoso' })
+      assert.deepEqual(host.callsOf('notifications.show'), [], 'the first load only notes what is already waiting')
+
+      listed.push(request)
+      await w.request('prs.refresh', { org: 'contoso' })
+      assert.deepEqual(host.callsOf('notifications.show'), [{ title: 'Review requested: Pull Request 4120', body: 'Tighten the redirect check\nGrace Hopper · web-app' }])
+      await w.request('prs.refresh', { org: 'contoso' })
+      assert.equal(host.callsOf('notifications.show').length, 1, 'each request notifies once')
+      assert.equal(ado.count(isThreads), 0, 'notifyPrComments off reads no threads')
+      assert.equal(w.refusals.length, 0)
+    })
+
+    listed.pop()
+    const quiet = prNotifyHost({ notifyReviewRequests: false })
+    await withWorker(worker, { host: quiet }, async w => {
+      await w.request('prs.refresh', { org: 'contoso' })
+      listed.push(request)
+      await w.request('prs.refresh', { org: 'contoso' })
+      assert.deepEqual(quiet.callsOf('notifications.show'), [], 'notifyReviewRequests off shows nothing')
+      assert.ok(ado.count(isThreads) > 0, 'notifyPrComments on reads the threads of my pull requests')
+      assert.equal(w.refusals.length, 0)
     })
   })
 })

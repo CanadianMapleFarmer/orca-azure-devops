@@ -21,7 +21,7 @@ Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Mi
 | A full-tab run view with a live log tail, search, errors only and an error summary |
 | Approving or rejecting an environment approval, rerunning a failed stage and cancelling a run |
 | Sharing an approval to the clipboard, a Teams channel, a Teams chat or email |
-| Desktop notifications for failed runs, watched runs and approvals |
+| Desktop notifications for failed runs, watched runs, approvals, review requests and new comments on your pull requests |
 | Wiki: a page tree, search and rendered pages, with Edit in Orca and Publish that handles conflicts |
 | `ADO · N failed · N approvals · N to review` on the status bar |
 
@@ -500,20 +500,24 @@ The conflict shows **Their changes** (your starting copy to the current page) an
 
 ## Notifications
 
-The plugin shows desktop notifications through Orca whenever Orca is open, with the Pipelines tab hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
+The plugin shows desktop notifications through Orca whenever Orca is open, with the Pipelines and PRs tabs hidden too. The background poll runs every 5 minutes, so one can arrive a few minutes late.
 
 It notifies when:
 
 - one of your runs fails: `<pipeline> failed`, with the organisation, run number, branch and, when it is known, the stage that failed (`notifyRunFailures`);
 - a run waits for an approval that you can give, or one of your own runs waits for an approval: `<pipeline> is waiting for approval`, with where it waits and `You can approve it.` when you can (`notifyApprovals`);
-- a run you watch finishes, whether it succeeded, finished with warnings, was canceled or failed (`notifyWatchedRuns`).
+- a run you watch finishes, whether it succeeded, finished with warnings, was canceled or failed (`notifyWatchedRuns`);
+- someone asks for your review: `Review requested: Pull Request N`, with its title, author and repository, when a pull request newly appears in your To review list (`notifyReviewRequests`);
+- someone else comments on one of your 20 newest active pull requests in an organisation: `New comment on Pull Request N`, with who wrote it and its first line as plain text (`notifyPrComments`). Several new comments on one thread make one notification, `N new comments on Pull Request N`, naming the latest. Your own comments, Azure DevOps's system comments (votes, policy updates) and deleted comments never count.
 
 Each kind has a setting, on by default. See Settings.
 
 - One notification per finish and per approval. When you rerun a stage and the run fails again, it notifies again.
+- One notification per review request and per comment. A pull request that leaves To review and comes back doesn't notify again until the plugin restarts.
 - Nothing for your runs that failed, or approvals that started waiting, before the plugin started. A watched run that finished while Orca was closed does notify, once, when the plugin next runs.
-- At most 3 per poll, then one more, `N more pipeline updates`, for the rest.
-- Orca gives the plugin no click event, so a click is expected to open nothing (not yet checked on macOS). The text says where to look: the Pipelines tab.
+- The first load of an organisation after the plugin starts never notifies about pull requests: it only notes what is already waiting for your review and the comments already written. The same goes for the first load after you sign in or reconnect, the first read of a pull request's comments, and the first read after you turn `notifyPrComments` back on.
+- At most 3 per poll, then one more, `N more pipeline updates` or `N more pull request updates`, for the rest.
+- Orca gives the plugin no click event, so a click is expected to open nothing (not yet checked on macOS). The text says where to look: the Pipelines tab or the PRs tab.
 
 The plugin needs the `notifications:show` permission to show them. Orca asks you to approve it once, when the plugin first loads with it. Until you do, nothing shows. The plugin logs "Couldn't show a desktop notification." and doesn't retry.
 
@@ -532,14 +536,15 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise.
 - An open board: every 30 seconds while visible.
 - PR chip status: cached for 2 minutes, or an hour once the pull request is merged or abandoned.
-- PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list only, for the status bar). Opening the tab shows data under a minute old without asking again.
+- PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list, for the status bar and review notifications). Opening the tab shows data under a minute old without asking again.
+- Comment notifications: with `notifyPrComments` on, each PRs poll also reads the comment threads of your 20 newest active pull requests in the organisation. While the tab is hidden, it first lists your active pull requests, one request per code project. With it off, the plugin reads no threads and makes no such list.
 - PRs tab caches: completed pull requests for 5 minutes, linked work items for 10 minutes (an hour once completed), build and policy status for 2 minutes, the code project list for an hour.
-- PRs tab limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes.
+- PRs tab limits: a load makes at most 4 requests at a time for an organisation, and so do comment reads. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes. When it refuses comment threads, comment reads for that organisation pause for 10 minutes while PR loads and review notifications carry on.
 - Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 finished runs it hasn't read yet per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
 - Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
-- Reviews and the Wiki tab: never in the background. A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
+- Reviews and the Wiki tab: never in the background (comment notifications read threads on their own, as above). A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
 - Slow-down: when Azure DevOps answers any request for an organisation with `Retry-After` or `X-RateLimit-Delay`, whether for work items, pull requests or pipelines, that organisation's pipeline polling drops to the background pace for 5 minutes. The Pipelines tab then polls every 5 minutes, watched runs every 2 minutes and an open run tab every 30 seconds.
 - Pipelines limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read builds, runs for that organisation pause for 10 minutes and the tab says why. When it refuses approvals only, approvals turn off for 10 minutes while runs keep loading, and the tab says Needs me may be incomplete.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.
@@ -559,6 +564,8 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `notifyRunFailures` (Notify when my pipeline runs fail): on by default.
 - `notifyApprovals` (Notify when a run waits for approval): on by default. It covers approvals you can give and approvals on your own runs.
 - `notifyWatchedRuns` (Notify when a watched run finishes): on by default.
+- `notifyReviewRequests` (Notify when someone asks for my review): on by default.
+- `notifyPrComments` (Notify about new comments on my pull requests): on by default. Off, the plugin reads no comment threads.
 - `approvalShareTemplate` (Approval share line): one line per approval in a share. Defaults to `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`. See The Pipelines tab for the placeholders.
 - `entraClientId` (Microsoft sign-in: app (client) ID): the app registration your admin created for Sign in with Microsoft. Empty by default. See Registering the app (for admins).
 - `entraTenant` (Microsoft sign-in: tenant): a tenant ID or domain, used only when an organisation's tenant can't be found. Empty by default. Leave it empty for any work or school account.
@@ -577,7 +584,7 @@ Orca asks you to approve these when the plugin first loads. The plugin runs in a
 - `workspace:write`: shows a workspace (Check out in Orca) and opens files in an editor tab: a board, a run, a wiki draft, or a file a failing step names.
 - `agent:read`: lets the plugin hear `agent.status.changed`. It reads nothing else about agents.
 - `agent:launch`: Start an agent launches your default agent in a workspace with the item's prompt.
-- `notifications:show`: shows the desktop notifications for failed runs, watched runs and approvals (see Notifications).
+- `notifications:show`: shows the desktop notifications for failed runs, watched runs, approvals, review requests and new comments on your pull requests (see Notifications).
 - `workspace.create.before`: when Start a workspace or Check out in Orca has armed a branch, gives the next worktree you create that branch (and, for Check out in Orca, its base). Otherwise it changes nothing.
 - `workspace.create.after`: links a workspace made by Start a workspace to its work item.
 - `agent.launch.before`: notes which workspace an agent launch belongs to, so Add work item context to agent prompts knows where its prompt came from.

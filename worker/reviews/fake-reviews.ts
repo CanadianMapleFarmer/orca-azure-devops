@@ -1,7 +1,9 @@
 import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, type AdoCall, type FakeAdo } from '../boards/fake-ado'
-import { fakePrs } from '../prs/fake-prs'
+import { fakePrs, isThreads } from '../prs/fake-prs'
+
+export { isThreads }
 
 export interface FakeFile {
   objectId: string
@@ -20,7 +22,6 @@ export type FakeReviews = FakeAdo & { review: FakeReview }
 const REVIEW_PR = /\/_apis\/git\/repositories\/[^/]+\/pullrequests\/4110$/i
 const ITERATIONS = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/\d+\/iterations$/
 const CHANGES = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/\d+\/iterations\/\d+\/changes$/
-const THREADS = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/\d+\/threads$/
 const THREAD = /\/_apis\/git\/repositories\/[^/]+\/pullRequests\/\d+\/threads\/(\d+)$/
 const BLOB = /\/_apis\/git\/repositories\/[^/]+\/blobs\/([^/]+)$/
 const ITEMS = /\/_apis\/git\/repositories\/[^/]+\/items$/
@@ -28,7 +29,6 @@ const ITEMS = /\/_apis\/git\/repositories\/[^/]+\/items$/
 const isReviewPr = (call: AdoCall) => call.method === 'GET' && REVIEW_PR.test(call.path)
 export const isIterations = (call: AdoCall) => call.method === 'GET' && ITERATIONS.test(call.path)
 export const isChanges = (call: AdoCall) => call.method === 'GET' && CHANGES.test(call.path)
-export const isThreads = (call: AdoCall) => call.method === 'GET' && THREADS.test(call.path)
 export const isThreadGet = (call: AdoCall) => call.method === 'GET' && THREAD.test(call.path)
 export const isBlob = (call: AdoCall) => call.method === 'GET' && BLOB.test(call.path)
 export const isItem = (call: AdoCall) => call.method === 'GET' && ITEMS.test(call.path)

@@ -12,7 +12,7 @@ import type { SecretsPort } from '../auth/pat'
 import type { StorePort } from '../connections'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { createScheduler } from '../poll/scheduler'
-import { fakePrs, isOnePr, isPrWorkItems, ME } from '../prs/fake-prs'
+import { fakePrs, isOnePr, isPrWorkItems, ME, NO_PR_NOTIFICATIONS } from '../prs/fake-prs'
 import { approvalShareSource } from '../pipelines/share-source'
 import { createPrsService } from '../prs/service'
 import { prShareSource } from '../prs/share-source'
@@ -138,7 +138,8 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     autoComplete: () => AUTO,
     post: () => {},
     counts: () => {},
-    now: clock.now
+    now: clock.now,
+    ...NO_PR_NOTIFICATIONS
   })
   const template = { value: PR_TEMPLATE }
   const approvalTemplate = { value: APPROVAL_TEMPLATE }

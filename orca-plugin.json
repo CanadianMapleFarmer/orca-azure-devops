@@ -159,6 +159,18 @@
         "default": true
       },
       {
+        "key": "notifyReviewRequests",
+        "title": "Notify when someone asks for my review",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "notifyPrComments",
+        "title": "Notify about new comments on my pull requests",
+        "type": "boolean",
+        "default": true
+      },
+      {
         "key": "approvalShareTemplate",
         "title": "Approval share line",
         "description": "One line per approval. [text]({url}) is the link. Also {stage}, {requestedBy}, {project}.",
