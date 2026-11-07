@@ -7,7 +7,7 @@ import { EntraError, type EntraTokens } from './auth/entra'
 import { EntraTimeout, NoEntraSession, type EntraProvider, type EntraSignedIn } from './auth/entra-provider'
 import { accountFromConnectionData, decodeTokenClaims, samePinnedAccount, tokenMatchesPin } from './auth/identity'
 import { basicAuth, createPatProvider, patKey, type SecretsPort } from './auth/pat'
-import { NOT_CONNECTED } from './messages'
+import { NOT_CONNECTED, SIGN_IN_FINISH_FAILED } from './messages'
 import { CommandTimeoutError } from './sys/run'
 
 export interface StorePort {
@@ -37,6 +37,7 @@ export interface ConnectionsDeps {
   post: (orgs: OrgStatus[]) => void
   connectFailed: (failure: ConnectFailure) => void
   now: () => number
+  log: (message: string) => void
 }
 
 const ORGS_KEY = 'orgs'
@@ -568,7 +569,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         if (!isCurrent(org, attempt)) return null
         cfg.pinned = { ...account, objectId: credential.objectId ?? cfg.pinned?.objectId ?? null }
         credentials.set(org, credential)
-        await conclude(org, attempt, null)
+        await conclude(org, attempt, null).catch(finishFailed)
         return null
       }
     } catch (error) {
@@ -582,6 +583,10 @@ export function createConnections(deps: ConnectionsDeps): Connections {
     }
     await conclude(org, attempt, wiped ? outcome : { state: 'error', message: MESSAGES.wipeFailed }, wiped)
     return null
+  }
+
+  function finishFailed(): void {
+    deps.log(SIGN_IN_FINISH_FAILED)
   }
 
   function draftError(parsed: { org: string; url: string } | null, method: ConnectionMethod, message: string): OrgStatus {
@@ -653,7 +658,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         return az.getToken(org, cfg.tenantId)
       })
       return azCredential(cfg, issued)
-    }).catch(() => {})
+    }).catch(finishFailed)
     return statusFor(cfg)
   }
 
@@ -685,7 +690,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
         return entraCredential(cfg, signedIn)
       },
       () => deps.entra.save(org, signedIn)
-    ).catch(() => {})
+    ).catch(finishFailed)
     return statusFor(cfg)
   }
 

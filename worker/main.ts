@@ -141,7 +141,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       wiki.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
-    now: Date.now
+    now: Date.now,
+    log
   })
   const scheduler = createScheduler(realClock)
   const pressure = createPressure(Date.now)

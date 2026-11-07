@@ -190,6 +190,8 @@ export const ENTRA = {
   rotateNotSaved: "Couldn't save a renewed Microsoft sign-in; the previous one is kept."
 } as const
 
+export const SIGN_IN_FINISH_FAILED = 'Finishing a sign-in failed; the organization keeps its last status.'
+
 export function entraFailed(code: string | null): string {
   return code ? `Microsoft sign-in failed (${code}).` : 'Microsoft sign-in failed.'
 }

@@ -22,7 +22,7 @@ type RawComment = NonNullable<RawThread['comments']>[number]
 
 export interface PrThreads {
   pr: PrSummary
-  threads: readonly RawThread[]
+  threads: readonly RawThread[] | null
 }
 
 export interface PrUpdate {
@@ -70,7 +70,7 @@ function prNotificationsFor(input: {
   if (prefs.comments) {
     for (const { pr, threads } of update.threads ?? []) {
       const since = baseline.comments.get(keyOf(pr))
-      if (since === undefined) continue
+      if (since === undefined || threads === null) continue
       const people = peopleIn(pr, threads)
       for (const thread of threads) add(commentNote(org, update.me, pr, thread, since, people))
     }
@@ -134,12 +134,18 @@ function commentNote(org: string, me: string, pr: PrSummary, thread: RawThread, 
 }
 
 function newestSeen(read: readonly PrThreads[], previous: ReadonlyMap<string, number>): Map<string, number> {
-  return new Map(
-    read.map(({ pr, threads }) => {
-      const newest = threads.flatMap(commentsOf).reduce((max, comment) => Math.max(max, timestamp(comment.publishedDate)), 0)
-      return [keyOf(pr), Math.max(previous.get(keyOf(pr)) ?? 0, newest)]
-    })
-  )
+  const seen = new Map<string, number>()
+  for (const { pr, threads } of read) {
+    const key = keyOf(pr)
+    const before = previous.get(key)
+    if (threads === null) {
+      if (before !== undefined) seen.set(key, before)
+      continue
+    }
+    const newest = threads.flatMap(commentsOf).reduce((max, comment) => Math.max(max, timestamp(comment.publishedDate)), 0)
+    seen.set(key, Math.max(before ?? 0, newest))
+  }
+  return seen
 }
 
 function commentsOf(thread: RawThread): RawComment[] {

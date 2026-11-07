@@ -20,6 +20,8 @@ const ENRICHMENT_OFF_MS = 10 * MINUTE
 
 export type Enrichment = 'workItems' | 'checks'
 
+export type ThreadRead = { threads: RawThread[] } | { unreadable: 'gone' | 'forbidden' | 'failed' }
+
 export interface FullLoad {
   mine: PrSummary[]
   review: PrSummary[]
@@ -30,7 +32,7 @@ export interface PrSource {
   full(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<FullLoad>
   reviews(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
   active(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
-  threads(prs: PrKey[], signal?: AbortSignal): Promise<RawThread[][]>
+  threads(prs: PrKey[], signal?: AbortSignal): Promise<ThreadRead[]>
 }
 
 type Cache<T> = Map<string, { at: number; ttl: number; value: T }>
@@ -114,9 +116,21 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number): P
 
     threads(prs, signal) {
       const scoped = withSignal(http, signal)
-      return mapLimit(prs, IN_FLIGHT, pr => listThreads(scoped, org, pr, null))
+      return mapLimit(prs, IN_FLIGHT, async (pr): Promise<ThreadRead> => {
+        try {
+          return { threads: await listThreads(scoped, org, pr, null) }
+        } catch (error) {
+          if (signal?.aborted || (error instanceof AdoError && error.code === 'rate_limited')) throw error
+          return { unreadable: unreadableBecause(error) }
+        }
+      })
     }
   }
+}
+
+function unreadableBecause(error: unknown): 'gone' | 'forbidden' | 'failed' {
+  if (error instanceof AdoError && error.code === 'not_found') return 'gone'
+  return error instanceof AdoError && error.code === 'forbidden' ? 'forbidden' : 'failed'
 }
 
 function activeOf(me: string): PrCriteria {

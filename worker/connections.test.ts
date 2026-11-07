@@ -62,6 +62,7 @@ const BAD_PAT = "That token can't be used. Paste it again."
 const TOKEN_FAILED = 'Azure CLI could not get an access token'
 const SIGNED_IN_AS_GRACE = 'Signed in as grace@contoso.com, but this org is pinned to ada@contoso.com.'
 const CANCELLED = 'Sign-in was cancelled.'
+const FINISH_FAILED = 'Finishing a sign-in failed; the organization keeps its last status.'
 const TIMED_OUT = 'Sign-in timed out. Try again.'
 const STORED_ADA = JSON.stringify({ v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: REFRESH_ADA_1 })
 const STORED_FABRIKAM = JSON.stringify({ v: 1, clientId: CLIENT_ID, authority: TENANT, refreshToken: 'rt-fabrikam-1' })
@@ -256,11 +257,13 @@ function harness(
   const storage = new Map<string, unknown>()
   if (seed.orgs) storage.set('orgs', seed.orgs)
   if (seed.signingIn) storage.set('signing-in', seed.signingIn)
+  let storeError: Error | null = null
   const store: StorePort = {
     async get<T>(key: string) {
       return storage.has(key) ? (structuredClone(storage.get(key)) as T) : null
     },
     async set(key, value) {
+      if (storeError) throw storeError
       storage.set(key, structuredClone(record(value)))
     }
   }
@@ -271,6 +274,10 @@ function harness(
   const entra = fakeEntra()
   const listener = fakeListen(REDIRECT_URI, seed.bindError)
   const timeouts = fakeTimeouts()
+  const logs: string[] = []
+  const log = (message: string) => {
+    logs.push(record(message))
+  }
   const provider = createEntraProvider({
     secrets,
     fetch: entra.fetch,
@@ -279,7 +286,7 @@ function harness(
     random: bytes,
     timeout: timeouts.timeout,
     now: () => clock.now,
-    log: message => void record(message)
+    log
   })
   const posts: OrgStatus[][] = []
   const failures: ConnectFailure[] = []
@@ -299,7 +306,8 @@ function harness(
     connectFailed: failure => {
       failures.push(record(structuredClone(failure)))
     },
-    now: () => clock.now
+    now: () => clock.now,
+    log
   })
 
   const h = {
@@ -317,7 +325,18 @@ function harness(
     timeouts,
     posts,
     failures,
+    logs,
     clock,
+    failStore(error: Error | null) {
+      storeError = error
+    },
+    async logged(): Promise<void> {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        if (logs.length > 0) return
+        await flush()
+      }
+      assert.fail('nothing was logged')
+    },
     refreshGrants: () => entra.calls.filter(call => call.form.get('grant_type') === 'refresh_token'),
     async signInUrl(org = 'contoso'): Promise<string> {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -1781,6 +1800,79 @@ test('resetInterrupted wipes an Entra sign-in left by a previous worker', async 
   assert.equal(h.secretStore.has('entra:fabrikam'), true)
   assert.deepEqual(h.storage.get('signing-in'), [])
   assert.deepEqual(h.az.calls, ['signOut ghost'])
+})
+
+test('an Azure CLI sign-in that cannot be finished logs one fixed line and the org keeps its last status', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.tokens = [TOKEN_GRACE]
+  h.az.loginGate = deferred()
+  const first = await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  assert.equal(first.state, 'signing-in')
+
+  h.failStore(new Error(`The disk is full, so ${TOKEN_GRACE} was not saved.`))
+  h.az.loginGate.resolve()
+  await h.logged()
+  await drain()
+  assert.deepEqual(h.logs, [FINISH_FAILED])
+  assert.equal(h.last()?.state, 'signing-in', 'nothing newer was posted')
+})
+
+test('a Microsoft sign-in that cannot be finished logs one fixed line and the org keeps its last status', async () => {
+  const h = harness({ orgs: [entraOrg()], secrets: { 'entra:contoso': STORED_ADA } })
+  const first = await h.connect({ orgInput: 'contoso', method: 'entra' })
+  assert.equal(first.state, 'signing-in')
+  await h.signInUrl()
+
+  h.failStore(new Error('The disk is full, so rt-grace-1 was not saved.'))
+  h.entra.answer('authorization_code', tokenAnswer({ oid: OID_GRACE, upn: 'grace@contoso.com', refresh: 'rt-grace-1' }))
+  h.listener.deliver({ code: 'c-grace-1' })
+  await h.logged()
+  await drain()
+  assert.deepEqual(h.logs, [FINISH_FAILED])
+  assert.equal(h.last()?.state, 'signing-in', 'nothing newer was posted')
+})
+
+test('an Azure CLI sign-in that succeeds but cannot be saved logs one fixed line and the org keeps its last status', async () => {
+  const h = harness({ orgs: [config({ pinned: ADA })] })
+  h.az.loginGate = deferred()
+  const first = await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  assert.equal(first.state, 'signing-in')
+
+  h.failStore(new Error(`The disk is full, so ${TOKEN_ADA} was not saved.`))
+  h.az.loginGate.resolve()
+  await h.logged()
+  await drain()
+  assert.deepEqual(h.logs, [FINISH_FAILED])
+  assert.equal(h.last()?.state, 'signing-in', 'nothing newer was posted')
+})
+
+test('a Microsoft sign-in that succeeds but cannot be saved logs one fixed line and the org keeps its last status', async () => {
+  const h = harness({ orgs: [entraOrg()] })
+  const first = await h.connect({ orgInput: 'contoso', method: 'entra' })
+  assert.equal(first.state, 'signing-in')
+  await h.signInUrl()
+
+  h.failStore(new Error(`The disk is full, so ${REFRESH_ADA_1} was not saved.`))
+  h.entra.answer('authorization_code', adaTokens())
+  h.listener.deliver({ code: CODE_ADA })
+  await h.logged()
+  await drain()
+  assert.deepEqual(h.logs, [FINISH_FAILED])
+  assert.equal(h.last()?.state, 'signing-in', 'nothing newer was posted')
+})
+
+test('a first connect that fails and cannot be unregistered logs one fixed line', async () => {
+  const h = harness()
+  h.az.loginGate = deferred()
+  h.az.loginError = new Error(`az login failed for ${TOKEN_ADA}`)
+  const first = await h.connect({ orgInput: 'contoso', method: 'azure-cli' })
+  assert.equal(first.state, 'signing-in')
+  h.failStore(new Error(`The disk is full, so ${TOKEN_ADA} was not saved.`))
+  h.az.loginGate.resolve()
+  await h.logged()
+  await drain()
+  assert.deepEqual(h.logs, [FINISH_FAILED])
+  assert.deepEqual(h.failures, [], 'the failed connect was not reported because it was never unregistered')
 })
 
 test('no secrets in posts or logs', () => {

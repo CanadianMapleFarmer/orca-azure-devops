@@ -16,7 +16,7 @@ import {
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
-import { createPrSource, type FullLoad, type PrSource } from './load'
+import { createPrSource, type FullLoad, type PrSource, type ThreadRead } from './load'
 import { watchedPrs, type PrNotifier, type PrThreads } from './notify'
 import { newestCreatedAt, releaseSets, reviewedOf, toReviewOf } from './release-sets'
 
@@ -252,8 +252,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const me = status.account.adoId
       const mine = fresh(entry) ? entry.mine : await entry.source.active(me, await entry.projects(status.codeProjects, signal), signal)
       const watched = watchedPrs(mine)
-      const read = await entry.source.threads(watched, signal)
-      return watched.map((pr, index) => ({ pr, threads: read[index] }))
+      return settleThreads(entry, watched, await entry.source.threads(watched, signal))
     } catch (error) {
       if (signal.aborted) return null
       if (error instanceof AdoError && error.code === 'rate_limited') throw error
@@ -261,6 +260,20 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       else deps.log(PR_COMMENTS_UNREAD)
       return null
     }
+  }
+
+  function settleThreads(entry: OrgPrs, watched: PrSummary[], reads: ThreadRead[]): PrThreads[] | null {
+    const reasons = reads.map(read => ('unreadable' in read ? read.unreadable : null))
+    if (reasons.length > 0 && reasons.every(reason => reason === 'forbidden')) {
+      entry.threadsPausedUntil = now() + FORBIDDEN_PAUSE_MS
+      return null
+    }
+    if (reasons.includes('failed')) deps.log(PR_COMMENTS_UNREAD)
+    return watched.flatMap((pr, index): PrThreads[] => {
+      const read = reads[index]
+      if ('threads' in read) return [{ pr, threads: read.threads }]
+      return read.unreadable === 'gone' ? [] : [{ pr, threads: null }]
+    })
   }
 
   return {

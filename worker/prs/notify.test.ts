@@ -323,17 +323,17 @@ test('turning notifyPrComments off stops thread reads', async () => {
   })
 })
 
-test("a forbidden thread read pauses that org's thread reads for ten minutes", async () => {
+test("thread reads that are all forbidden pause that org's thread reads for ten minutes", async () => {
   await withPrNotifications(async h => {
     h.setOrgs([status()])
     await h.poll(0)
     const refused = { now: true }
-    h.ado.on(call => refused.now && isThreads(call) && threadsPrIdOf(call) === 4103, () => json(403, { message: 'TF401019: no access.' }))
+    h.ado.on(call => refused.now && isThreads(call), () => json(403, { message: 'TF401019: no access.' }))
     const reads = () => h.ado.count(isThreads)
 
     const before = reads()
     await h.poll()
-    assert.ok(reads() > before, 'the refused read happened at the 5 minute poll')
+    assert.equal(reads(), before + 5, 'every refused read happened at the 5 minute poll')
     const paused = reads()
 
     h.review.push(requested(4120, 'Tighten the redirect check'))
@@ -348,6 +348,83 @@ test("a forbidden thread read pauses that org's thread reads for ten minutes", a
     await drain()
     assert.equal(reads(), paused + 5, 'thread reads resume after ten minutes')
     assert.deepEqual(h.logs(), [], 'a refusal pauses; it is not logged')
+  })
+})
+
+test('one forbidden pull request is skipped without pausing the org', async () => {
+  await withPrNotifications(async h => {
+    const open = thread(201, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])
+    h.threads.set(4101, [open])
+    h.setOrgs([status()])
+    await h.poll(0)
+    h.ado.on(call => isThreads(call) && threadsPrIdOf(call) === 4103, () => json(403, { message: 'TF401019: no access.' }))
+    const reads = () => h.ado.count(isThreads)
+
+    open.comments?.push(comment(2, GRACE, T0 + MINUTE, 'And a changelog line.'))
+    const before = reads()
+    assert.deepEqual((await h.poll()).map(note => note.title), ['New comment on Pull Request 4101'], 'the other pull requests still notify')
+    assert.equal(reads(), before + 5, 'every pull request was read, the refused one included')
+    await h.poll()
+    assert.equal(reads(), before + 10, 'the next poll reads them all again')
+    assert.deepEqual(h.logs(), [], 'a refusal is not logged')
+  })
+})
+
+test('a pull request that answers 404 is skipped silently and the other two still notify', async () => {
+  await withPrNotifications(async h => {
+    const ids = [5001, 5002, 5003]
+    h.mine.splice(0, h.mine.length, ...ids.map((prId, index) => mineAt(prId, T0 - index * MINUTE)))
+    for (const prId of ids) h.threads.set(prId, [thread(prId, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])])
+    h.setOrgs([status()])
+    await h.poll(0)
+    h.ado.on(call => isThreads(call) && threadsPrIdOf(call) === 5002, () => json(404, { message: 'TF401180: The pull request does not exist.' }))
+
+    for (const prId of ids) h.threads.get(prId)?.[0].comments?.push(comment(2, GRACE, T0 + MINUTE, `Again on ${prId}`))
+    assert.deepEqual((await h.poll()).map(note => note.title).sort(), ['New comment on Pull Request 5001', 'New comment on Pull Request 5003'])
+    assert.deepEqual(h.logs(), [], 'a pull request that is gone is not a failure')
+  })
+})
+
+test('thread reads that fail log once per poll however many fail, and skip only those pull requests', async () => {
+  await withPrNotifications(async h => {
+    const open = thread(201, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])
+    h.threads.set(4101, [open])
+    h.setOrgs([status()])
+    await h.poll(0)
+    const down = [4102, 4103]
+    h.ado.on(call => isThreads(call) && down.includes(threadsPrIdOf(call)), () => json(500, { message: 'TF246017: the database is unavailable.' }))
+    const reads = () => h.ado.count(isThreads)
+
+    open.comments?.push(comment(2, GRACE, T0 + MINUTE, 'And a changelog line.'))
+    const before = reads()
+    assert.deepEqual((await h.poll()).map(note => note.title), ['New comment on Pull Request 4101'])
+    assert.equal(reads(), before + 5)
+    assert.deepEqual(h.logs(), [COMMENTS_UNREAD], 'two failures, one line')
+
+    await h.poll()
+    assert.deepEqual(h.logs(), [COMMENTS_UNREAD, COMMENTS_UNREAD], 'one more line for the next poll')
+  })
+})
+
+test('a pull request whose comments could not be read keeps its baseline, so what arrived meanwhile notifies once it recovers', async () => {
+  await withPrNotifications(async h => {
+    const failing = thread(201, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])
+    const refused = thread(301, [comment(1, GRACE, T0 - MINUTE, 'Why the offset?')])
+    h.threads.set(4101, [failing])
+    h.threads.set(4102, [refused])
+    h.setOrgs([status()])
+    await h.poll(0)
+    const down = { now: true }
+    h.ado.on(call => down.now && isThreads(call) && threadsPrIdOf(call) === 4101, () => json(500, { message: 'TF246017: the database is unavailable.' }))
+    h.ado.on(call => down.now && isThreads(call) && threadsPrIdOf(call) === 4102, () => json(403, { message: 'TF401019: no access.' }))
+
+    failing.comments?.push(comment(2, GRACE, T0 + MINUTE, 'And a changelog line.'))
+    refused.comments?.push(comment(2, GRACE, T0 + MINUTE, 'Never mind.'))
+    assert.deepEqual(await h.poll(), [], 'nothing can be said about a pull request that could not be read')
+
+    down.now = false
+    assert.deepEqual((await h.poll()).map(note => note.title).sort(), ['New comment on Pull Request 4101', 'New comment on Pull Request 4102'])
+    assert.deepEqual(await h.poll(), [], 'once')
   })
 })
 
