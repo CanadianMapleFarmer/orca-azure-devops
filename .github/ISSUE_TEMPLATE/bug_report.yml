@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in the plugin doesn't work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never paste a token, a sign-in code, a Teams webhook URL or private organisation details. Security problems go through private reporting (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you saw instead. Include the exact message the plugin showed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the Pipelines tab
+        2. ...
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Connecting and sign-in, Work tab or board, PRs and sharing, Reviews, Pipelines or run tab, Wiki, Notifications or status bar, Something else]
+    validations:
+      required: true
+  - type: dropdown
+    id: signin
+    attributes:
+      label: How the organisation is connected
+      options: [Azure CLI, Sign in with Microsoft, Personal access token]
+  - type: input
+    id: orca
+    attributes:
+      label: Orca version
+      description: From `orca --version`.
+      placeholder: "1.4.251"
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin commit or version
+      description: From `orca plugin list`, or the commit you installed.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 27, Windows 11, Ubuntu 26.04

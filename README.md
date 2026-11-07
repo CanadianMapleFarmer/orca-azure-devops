@@ -4,6 +4,21 @@ Azure DevOps work items, boards, pull requests, pipelines and wikis in the [Orca
 
 Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Microsoft.
 
+## Try the preview
+
+This is a preview for testers. It isn't in Orca's plugin catalog yet.
+
+1. Install it from GitHub:
+
+   ```bash
+   orca plugin install CanadianMapleFarmer/orca-azure-devops
+   ```
+
+2. Orca lists what the plugin will be allowed to do and prints the same command with `--approve <fingerprint>`. Read the list (Permissions below explains each item), then run that command.
+3. Open Azure DevOps in Orca's sidebar and connect an organisation (see Connecting an organisation).
+
+`orca plugin update` fetches newer versions. Report problems and ideas in [Issues](https://github.com/CanadianMapleFarmer/orca-azure-devops/issues). Never paste a token, a sign-in code or a Teams webhook URL there. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+
 | Works now |
 | --- |
 | Connecting any number of Azure DevOps organisations |

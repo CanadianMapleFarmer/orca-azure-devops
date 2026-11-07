@@ -1,0 +1,15 @@
+name: Idea or feedback
+description: Something you'd like the plugin to do, or feedback from trying it.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: Describe the moment you wanted this, and what you'd like to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
