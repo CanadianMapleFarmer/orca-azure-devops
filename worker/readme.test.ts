@@ -346,6 +346,19 @@ test('the README states the task, group, merged row, wide table and reader limit
   assert.ok(wiki.includes(`over ${MAX_READER_BYTES / 1024} KiB`), 'the size a copy is cut at is stated')
 })
 
+test('the README states which child tasks are listed and in what order, when a list starts open, and keeps panel choices out of storage:own', async () => {
+  const text = await readme()
+  const tasks = subsection(section(text, 'The Work tab'), 'Tasks under their parent')
+  assert.match(tasks, /Removed[^\n]*left out/)
+  assert.match(tasks, /your open tasks[^\n]*other people's open tasks[^\n]*finished/i)
+  assert.ok(tasks.includes(`more than ${MAX_CHILD_TASKS} of the open tasks are yours, all of those show`), 'the yours-first overflow is stated')
+  assert.ok(tasks.includes("its parent is dimmed or can't be read"), 'the open-by-default rule covers an unreadable parent')
+  const grant = text.split('\n').find(line => line.startsWith('- `storage:own`'))
+  assert.ok(grant, 'the Permissions list has a storage:own entry')
+  assert.ok(!/panel choices|Columns or Lanes/.test(grant), 'panel choices are plugin-persisted atoms, not storage:own')
+  assert.ok(!text.includes('stage bar'), 'the stage bar is gone from the panel')
+})
+
 test('the Wiki tab says where the Open in tab copy lives, that it is read-only and what a page cut for length gets', async () => {
   const wiki = section(await readme(), 'The Wiki tab')
   const reading = subsection(wiki, 'Open in tab')

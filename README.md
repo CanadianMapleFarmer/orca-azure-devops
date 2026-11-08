@@ -180,9 +180,9 @@ A card has two lines. The first is the title: press it to open the item's detail
 A task sits under its parent, whatever type the parent is. **Tasks n/m** on a parent shows how many of its tasks are done, and opens or closes the list.
 
 - The board's backlog settings say which types count as tasks: the task level's types, and bugs too when the team handles bugs as tasks.
-- The list holds every child task of the parent, whoever it is assigned to and finished ones included, up to 20 tasks. A longer list ends with `+ N more`.
+- The list holds the child tasks of the parent, whoever they are assigned to and finished ones included. Removed tasks are left out of the list and of **Tasks n/m**. Your open tasks come first, then other people's open tasks, then finished ones, up to 20 tasks. When more than 20 of the open tasks are yours, all of those show. A longer list ends with `+ N more`.
 - A row has the task's `#id` and title, its state and, when the task isn't yours, the assignee's name or `Unassigned`. Press a title to open the details. Finished tasks are muted and don't open. Your own tasks have **Move** too.
-- A list starts open when it holds a task of yours that isn't done or its parent is dimmed, and closed otherwise.
+- A list starts open when it holds a task of yours that isn't done or its parent is dimmed or can't be read, and closed otherwise.
 - A parent that isn't assigned to you but has a task of yours shows dimmed, in the column (and lane) it is in. A parent that isn't on the board goes in **Not on this board**, under its type.
 - A task that has tasks of its own is listed in **Not on this board** under its type, with its tasks nested under it. It still shows as a row under its own parent.
 - A parent you can't read shows as `#id` under **Unknown type**, in **Not on this board**, with its tasks.
@@ -653,7 +653,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - PRs tab caches: completed pull requests for 5 minutes, linked work items for 10 minutes (an hour once completed), build and policy status for 2 minutes, the code project list for an hour.
 - PRs tab limits: a load makes at most 4 requests at a time for an organisation, and so do comment reads. When Azure DevOps refuses to let the plugin read pull requests, PR loads for that organisation pause for 10 minutes. When it refuses every comment thread read in a poll, comment reads for that organisation pause for 10 minutes while PR loads and review notifications carry on. A pull request it refuses, can't find or can't read is skipped for that poll.
 - Pipelines tab: every 30 seconds while it is visible. For each code project it reads your runs from the last 7 days, the runs in progress and the pending approvals, plus the runs you watch and the runs approvals wait on. It reads stages for up to 8 runs in progress and up to 8 finished runs it hasn't read yet per load, keeps the stages of the last 100 finished runs it read, and reads an approval's environment once. Opening the tab shows data under 30 seconds old without asking again.
-- Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
+- Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage chips. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
 - Reviews and the Wiki tab: never in the background (comment notifications read threads on their own, as above). A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh, again when you press Open in tab and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
@@ -689,7 +689,7 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 
 Orca asks you to approve these when the plugin first loads. The plugin runs in a trusted worker, a separate Node.js process with your user account's access to the computer. `orca plugin inspect` lists the same grants.
 
-- `storage:own`: the plugin's own storage keeps your connected organisations and their pinned accounts, each board's nudge rules and dismissed nudges, the runs you watch, your share choices and Teams channel names, the links between work items and workspaces, the list of wiki drafts, and the panel choices you set: open groups and folders, the Columns or Lanes view, the PRs and Pipelines pickers, and Mine or To review.
+- `storage:own`: the plugin's own storage keeps your connected organisations and their pinned accounts, each board's nudge rules and dismissed nudges, the runs you watch, your share choices and Teams channel names, the links between work items and workspaces, and the list of wiki drafts.
 - `secrets:own`: Orca's encrypted secrets keep personal access tokens, the Microsoft refresh token for each organisation and each Teams webhook URL (see Where credentials live).
 - `settings:own`: reads the settings under Settings and notices when you change one.
 - `workspace:read`: finds your focused workspace and lists your workspaces, for Start an agent, opening a board, a run, a wiki draft or a wiki page, Open in Orca, and finding the workspace that holds a pull request's repository in Check out in Orca.
