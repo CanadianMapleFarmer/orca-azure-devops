@@ -1,22 +1,21 @@
-import { Button, Callout, EmptyState, read, Row, Select, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Button, Callout, EmptyState, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import { failedRuns, isActive, needsMe, runCounts, runsFor } from '../../shared/runs'
 import type { OrgStatus } from '../../shared/types'
-import { ACROSS_PROJECTS, ACROSS_REPOS, ALL_PROJECTS, ALL_REPOS, CHOOSE_ALL, counted, needYouHint, nothingIn, repoCount } from '../copy'
-import { Group } from '../group'
+import { ACROSS_PROJECTS, ACROSS_REPOS, CHOOSE_ALL, counted, needYouHint, nothingIn } from '../copy'
+import { Group, projectTitle } from '../group'
 import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Choices, type ProjectGroup } from '../grouping'
 import { cutLabel } from '../label'
-import { chooseProject, chooseRepo, runsPrefs, scopeIn } from '../prefs'
+import { runsPrefs, scopeIn } from '../prefs'
 import { Channels, openChannels } from '../share/channels'
 import { Composer } from '../share/composer'
 import { shareView } from '../share/state'
 import { LoadFailure } from '../snapshot-parts'
-import { foldActions, TabToolbar, type ToolAction } from '../toolbar'
+import { foldActions, ScopePickers, TabToolbar, type ToolAction } from '../toolbar'
 import { RunCard } from './run-card'
 import { load, notice, refresh, refreshing, retryLoad, runFilter, runPlaces, selectFilter, snapshot } from './state'
 
 const MAX_RUNS = 30
-const ALL = '*'
 
 const FILTERS: { id: RunFilter; label: string }[] = [
   { id: 'mine', label: 'Mine' },
@@ -39,29 +38,6 @@ interface View {
   me: string | null
   filter: RunFilter
   failed: ReadonlySet<number>
-}
-
-function Pickers({ org, choices }: { org: string; choices: Choices }): OrcaNode {
-  return (
-    <>
-      <Select
-        label="Project"
-        labelHidden
-        value={choices.scope.project ?? ALL}
-        options={[{ value: ALL, label: ALL_PROJECTS }, ...choices.projects.map(project => ({ value: project.id, label: cutLabel(project.name) }))]}
-        onChange={value => chooseProject(runsPrefs, org, value === ALL ? null : value)}
-      />
-      {choices.repos.length > 0 ? (
-        <Select
-          label="Repository"
-          labelHidden
-          value={choices.scope.repo ?? ALL}
-          options={[{ value: ALL, label: ALL_REPOS }, ...choices.repos.map(repo => ({ value: repo.id, label: cutLabel(repo.name) }))]}
-          onChange={value => chooseRepo(runsPrefs, org, value === ALL ? null : value)}
-        />
-      ) : null}
-    </>
-  )
 }
 
 function Filters({ filter, current, now }: { filter: RunFilter; current: RunsSnapshot; now: number }): OrcaNode {
@@ -88,7 +64,7 @@ function Toolbar({ org, filter, current, choices, now }: { org: string; filter: 
     <TabToolbar
       left={
         <>
-          <Pickers org={org} choices={choices} />
+          <ScopePickers org={org} choices={choices} prefs={runsPrefs} />
           <Filters filter={filter} current={current} now={now} />
         </>
       }
@@ -133,11 +109,6 @@ function RunGroup({ view, foldKey, title, runs, children }: RunGroupProps): Orca
       {children}
     </Group>
   )
-}
-
-function projectTitle(project: ProjectGroup<RunSummary>): string {
-  if (project.repoCount > 1) return `${project.projectName} · ${repoCount(project.repoCount)}`
-  return project.repoName === null ? project.projectName : `${project.projectName} · ${project.repoName}`
 }
 
 function ProjectRuns({ view, project }: { view: View; project: ProjectGroup<RunSummary> }): OrcaNode {

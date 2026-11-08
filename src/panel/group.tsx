@@ -1,6 +1,13 @@
 import { Collapsible, type OrcaNode } from 'orca'
+import { repoCount } from './copy'
 import { isFoldOpen, setFoldOpen, type FoldTab } from './folds'
+import type { ProjectGroup } from './grouping'
 import { cutLabel } from './label'
+
+export function projectTitle(project: Pick<ProjectGroup<unknown>, 'projectName' | 'repoName' | 'repoCount'>): string {
+  if (project.repoCount > 1) return `${project.projectName} · ${repoCount(project.repoCount)}`
+  return project.repoName === null ? project.projectName : `${project.projectName} · ${project.repoName}`
+}
 
 interface GroupProps {
   org: string
