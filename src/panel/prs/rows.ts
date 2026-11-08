@@ -1,8 +1,6 @@
 import type { PrReviewer, PrSummary, ReleaseSet } from '../../shared/prs'
 import type { Chip } from '../chips'
-import type { Place } from '../grouping'
-
-export type PlaceChip = 'repo' | 'project' | null
+import type { Place, PlaceChip } from '../grouping'
 
 export const MERGED_SHOWN = 2
 export const MIN_BRANCH_PREFIX = 4

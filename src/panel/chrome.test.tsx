@@ -1,9 +1,9 @@
 import { Stack, Text, type OrcaNode } from 'orca'
 import { assert, test, type TreeSnapshot } from 'orca/testing'
 import { Chips } from './chips'
-import { CHOOSE_ALL } from './copy'
-import { Group, ScopedEmpty } from './group'
-import type { Choices } from './grouping'
+import { CHOOSE_ALL, counted } from './copy'
+import { Group, Groups, ScopedEmpty, type Layout } from './group'
+import { groupByPlace, type Choices, type Place } from './grouping'
 import { cutLabel, MAX_LABEL_BYTES, utf8Length } from './label'
 import { foldActions, TabToolbar, type ToolAction } from './toolbar'
 import { closeCleanly, countNodes, mountPanel, org, reloadPanel } from './test-support'
@@ -268,6 +268,81 @@ test('a group title and hint over 1 KiB are cut to the label limit', async () =>
   assert.ok(title.endsWith('…') && description.endsWith('…'))
   assert.ok(description.startsWith('2 PRs · é'))
   await closeCleanly(panel)
+})
+
+interface Spot {
+  id: string
+  places: Place[]
+}
+
+const at = (projectId: string, projectName: string, repoId: string | null = null, repoName: string | null = null): Place => ({ projectId, projectName, repoId, repoName })
+const WEB_APP = at('p-web', 'Web', 'r-app', 'web-app')
+const WEB_API = at('p-web', 'Web', 'r-api', 'fabrikam-api')
+const BOARDS = at('p-boards', 'Boards', 'r-boards', 'boards')
+const SPOTS: Spot[] = [
+  { id: 'a', places: [WEB_APP] },
+  { id: 'b', places: [WEB_API] },
+  { id: 'c', places: [at('p-web', 'Web')] },
+  { id: 'd', places: [WEB_APP, WEB_API] },
+  { id: 'e', places: [WEB_APP, BOARDS] },
+  { id: 'f', places: [BOARDS] }
+]
+
+const spotGroups =
+  (prefix?: string) =>
+  (): OrcaNode => {
+    const layout: Layout<Spot> = {
+      prefix,
+      count: items => counted(items.length, 'spot', 'spots'),
+      hint: items => (items.some(item => item.id === 'a') ? 'holds a' : undefined),
+      draw: (items, place) => <Text>{`${items.map(item => item.id).join(' ')} · ${place ?? 'no chip'}`}</Text>
+    }
+    return <Groups org="contoso" tab="prs" grouped={groupByPlace(SPOTS, spot => spot.places)} layout={layout} />
+  }
+
+function groupOutline(tree: TreeSnapshot | string | null): string[] {
+  const lines: string[] = []
+  const textOf = (node: TreeSnapshot | string): string => (typeof node === 'string' ? node : childrenOf(node).map(textOf).join(''))
+  const walk = (node: TreeSnapshot | string | null, depth: number): void => {
+    if (node === null || typeof node === 'string') return
+    if (node.type === 'Text') {
+      lines.push(`${'  '.repeat(depth)}${textOf(node)}`)
+      return
+    }
+    const inner = node.type === 'Collapsible' ? depth + 1 : depth
+    if (node.type === 'Collapsible') lines.push(`${'  '.repeat(depth)}${node.props?.title} [${node.props?.description}]`)
+    for (const child of childrenOf(node)) walk(child, inner)
+  }
+  walk(tree, 0)
+  return lines
+}
+
+test('Groups draws Across projects first, then each project with its loose items before its repository groups, and prefixes fold keys only when asked', async () => {
+  for (const [prefix, keyOf] of [
+    ['mine', (key: string) => `mine/${key}`],
+    [undefined, (key: string) => key]
+  ] as const) {
+    const { panel } = await mountPanel(ORGS, {}, { module: spotGroups(prefix) })
+    assert.deepEqual(groupOutline(panel.tree()), [
+      'Across projects [1 spot]',
+      '  e · project',
+      'Boards · boards [1 spot]',
+      '  f · no chip',
+      'Web · 2 repos [4 spots · holds a]',
+      '  c · no chip',
+      '  Across repos [1 spot]',
+      '    d · repo',
+      '  fabrikam-api [1 spot]',
+      '    b · no chip',
+      '  web-app [1 spot · holds a]',
+      '    a · no chip'
+    ])
+
+    await panel.toggle({ type: 'Collapsible', label: 'fabrikam-api' })
+    await panel.toggle({ type: 'Collapsible', label: 'Across projects' })
+    assert.deepEqual(foldsOf(panel)['contoso|prs'], { all: null, open: [], closed: [keyOf('project:p-web/repo:r-api'), keyOf('across-projects')] })
+    await closeCleanly(panel)
+  }
 })
 
 const CHOICES: Choices = { projects: [{ id: 'p1', name: 'Contoso Tools' }], repos: [], scope: { project: null, repo: null } }

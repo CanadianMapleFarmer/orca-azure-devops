@@ -4,9 +4,10 @@ import { prShareItem } from '../../shared/share/pr-items'
 import { PR_TEMPLATE, PR_VARS } from '../../shared/share/template'
 import type { Identity } from '../../shared/types'
 import { Chips } from '../chips'
+import type { PlaceChip } from '../grouping'
 import { cutLabel } from '../label'
 import { openComposer } from '../share/state'
-import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, prChips, waitingOn, type PlaceChip } from './rows'
+import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, prChips, waitingOn } from './rows'
 import { act, isActing, isMergedShown, outcomeOf, toggleMerged, type Outcome } from './state'
 
 const optionsLine = (options: AutoCompleteOptions): string =>

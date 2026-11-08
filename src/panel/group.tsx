@@ -1,7 +1,7 @@
-import { Collapsible, EmptyState, type OrcaNode } from 'orca'
-import { CHOOSE_ALL, nothingIn, repoCount } from './copy'
+import { Collapsible, EmptyState, Stack, type OrcaNode } from 'orca'
+import { ACROSS_PROJECTS, ACROSS_REPOS, CHOOSE_ALL, nothingIn, repoCount } from './copy'
 import { isFoldOpen, setFoldOpen, type FoldTab } from './folds'
-import type { Choices, ProjectGroup } from './grouping'
+import { ACROSS_PROJECTS_KEY, type Choices, type Grouped, type PlaceChip, type ProjectGroup } from './grouping'
 import { cutLabel } from './label'
 
 export function projectTitle(project: Pick<ProjectGroup<unknown>, 'projectName' | 'repoName' | 'repoCount'>): string {
@@ -31,6 +31,49 @@ export function Group({ org, tab, foldKey, title, count, hint, natural = true, c
     >
       {open ? children : null}
     </Collapsible>
+  )
+}
+
+export interface Layout<T> {
+  prefix?: string
+  count: (items: readonly T[]) => string
+  hint: (items: readonly T[]) => string | undefined
+  draw: (items: readonly T[], place: PlaceChip) => OrcaNode
+}
+
+export function Groups<T>({ org, tab, grouped, layout }: { org: string; tab: FoldTab; grouped: Grouped<T>; layout: Layout<T> }): OrcaNode {
+  const group = (key: string, title: string, items: readonly T[], children: OrcaNode): OrcaNode => (
+    <Group
+      key={key}
+      org={org}
+      tab={tab}
+      foldKey={layout.prefix ? `${layout.prefix}/${key}` : key}
+      title={title}
+      count={layout.count(items)}
+      hint={layout.hint(items)}
+    >
+      {children}
+    </Group>
+  )
+  return (
+    <>
+      {grouped.across.length > 0 ? group(ACROSS_PROJECTS_KEY, ACROSS_PROJECTS, grouped.across, layout.draw(grouped.across, 'project')) : null}
+      {grouped.projects.map(project =>
+        group(
+          project.key,
+          projectTitle(project),
+          [...project.loose, ...project.repos.flatMap(repo => repo.items)],
+          project.repos.length === 0 ? (
+            layout.draw(project.loose, null)
+          ) : (
+            <Stack gap="sm">
+              {project.loose.length > 0 ? layout.draw(project.loose, null) : null}
+              {project.repos.map(repo => group(repo.key, repo.repoName ?? ACROSS_REPOS, repo.items, layout.draw(repo.items, repo.repoName === null ? 'repo' : null)))}
+            </Stack>
+          )
+        )
+      )}
+    </>
   )
 }
 

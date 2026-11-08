@@ -2,9 +2,9 @@ import { Button, Callout, read, Row, Skeleton, Stack, Text, type OrcaNode } from
 import type { RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import { failedRuns, isActive, needsMe, runCounts, runsFor } from '../../shared/runs'
 import type { OrgStatus } from '../../shared/types'
-import { ACROSS_PROJECTS, ACROSS_REPOS, counted, needYouHint } from '../copy'
-import { Group, projectTitle, ScopedEmpty } from '../group'
-import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Choices, type ProjectGroup } from '../grouping'
+import { counted, needYouHint } from '../copy'
+import { Groups, ScopedEmpty, type Layout } from '../group'
+import { choicesOf, groupByPlace, inScope, type Choices } from '../grouping'
 import { runsPrefs, scopeIn } from '../prefs'
 import { Channels, openChannels } from '../share/channels'
 import { Composer } from '../share/composer'
@@ -94,57 +94,18 @@ function hintOf(runs: readonly RunSummary[], failed: ReadonlySet<number>): strin
   return active > 0 ? `${active} running` : undefined
 }
 
-interface RunGroupProps {
-  view: View
-  foldKey: string
-  title: string
-  runs: readonly RunSummary[]
-  children: OrcaNode
-}
-
-function RunGroup({ view, foldKey, title, runs, children }: RunGroupProps): OrcaNode {
-  return (
-    <Group org={view.org} tab="pipelines" foldKey={foldKey} title={title} count={counted(runs.length, 'run', 'runs')} hint={hintOf(runs, view.failed)}>
-      {children}
-    </Group>
-  )
-}
-
-function ProjectRuns({ view, project }: { view: View; project: ProjectGroup<RunSummary> }): OrcaNode {
-  const runs = [...project.loose, ...project.repos.flatMap(repo => repo.items)]
-  return (
-    <RunGroup view={view} foldKey={project.key} title={projectTitle(project)} runs={runs}>
-      {project.repos.length === 0 ? (
-        <Cards view={view} runs={project.loose} />
-      ) : (
-        <Stack gap="sm">
-          {project.loose.length > 0 ? <Cards view={view} runs={project.loose} /> : null}
-          {project.repos.map(repo => (
-            <RunGroup key={repo.key} view={view} foldKey={repo.key} title={repo.repoName ?? ACROSS_REPOS} runs={repo.items}>
-              <Cards view={view} runs={repo.items} />
-            </RunGroup>
-          ))}
-        </Stack>
-      )}
-    </RunGroup>
-  )
-}
-
 function Runs({ view, current, choices, now }: { view: View; current: RunsSnapshot; choices: Choices; now: number }): OrcaNode {
   const runs = inScope(runsFor(view.filter, current.runs, now), runPlaces, choices.scope)
   if (runs.length === 0) return <ScopedEmpty choices={choices} title={EMPTY[view.filter].title} description={EMPTY[view.filter].description} />
   const shown = runs.slice(0, MAX_RUNS)
-  const grouped = groupByPlace(shown, runPlaces)
+  const layout: Layout<RunSummary> = {
+    count: items => counted(items.length, 'run', 'runs'),
+    hint: items => hintOf(items, view.failed),
+    draw: items => <Cards view={view} runs={items} />
+  }
   return (
     <Stack gap="sm">
-      {grouped.across.length > 0 ? (
-        <RunGroup view={view} foldKey={ACROSS_PROJECTS_KEY} title={ACROSS_PROJECTS} runs={grouped.across}>
-          <Cards view={view} runs={grouped.across} />
-        </RunGroup>
-      ) : null}
-      {grouped.projects.map(project => (
-        <ProjectRuns key={project.key} view={view} project={project} />
-      ))}
+      <Groups org={view.org} tab="pipelines" grouped={groupByPlace(shown, runPlaces)} layout={layout} />
       {shown.length < runs.length ? (
         <Text size="sm" muted>
           {`Showing ${shown.length} of ${runs.length} runs.`}

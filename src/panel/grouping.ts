@@ -23,6 +23,7 @@ export interface Grouped<T> {
   across: T[]
   projects: ProjectGroup<T>[]
 }
+export type PlaceChip = 'repo' | 'project' | null
 export interface Scope {
   project: string | null
   repo: string | null

@@ -2,9 +2,9 @@ import { Button, Callout, List, ListItem, read, Row, Skeleton, Stack, Text, type
 import type { PrSnapshot, PrSummary, ReleaseSet } from '../../shared/prs'
 import { votePhrase } from '../../shared/reviews'
 import type { OrgStatus } from '../../shared/types'
-import { ACROSS_PROJECTS, ACROSS_REPOS, counted, needYouHint } from '../copy'
-import { Group, projectTitle, ScopedEmpty } from '../group'
-import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Choices, type Grouped, type Place } from '../grouping'
+import { counted, needYouHint } from '../copy'
+import { Group, Groups, ScopedEmpty, type Layout } from '../group'
+import { choicesOf, groupByPlace, inScope, type Choices, type Place } from '../grouping'
 import { cutLabel } from '../label'
 import { choosePrsView, prsPrefs, prsViewIn, scopeIn, type PrsView } from '../prefs'
 import { Channels, openChannels } from '../share/channels'
@@ -15,7 +15,7 @@ import { foldActions, ScopePickers, TabToolbar, type ToolAction } from '../toolb
 import { ReleaseSetCard } from './release-set'
 import { ReviewView } from './review/review-view'
 import { openReview, showReview } from './review/state'
-import { myVoteOn, needsYou, prPlace, setPlaces, type PlaceChip } from './rows'
+import { myVoteOn, needsYou, prPlace, setPlaces } from './rows'
 import { load, notice, refresh, refreshing, retryLoad, snapshot } from './state'
 
 const MAX_SETS = 30
@@ -29,41 +29,6 @@ interface View {
   org: string
   current: PrSnapshot
   choices: Choices
-}
-
-interface Layout<T> {
-  prefix: PrsView
-  count: (items: readonly T[]) => string
-  hint: (items: readonly T[]) => string | undefined
-  draw: (items: readonly T[], place: PlaceChip) => OrcaNode
-}
-
-function Groups<T>({ org, grouped, layout }: { org: string; grouped: Grouped<T>; layout: Layout<T> }): OrcaNode {
-  const group = (foldKey: string, title: string, items: readonly T[], children: OrcaNode): OrcaNode => (
-    <Group key={foldKey} org={org} tab="prs" foldKey={`${layout.prefix}/${foldKey}`} title={title} count={layout.count(items)} hint={layout.hint(items)}>
-      {children}
-    </Group>
-  )
-  return (
-    <>
-      {grouped.across.length > 0 ? group(ACROSS_PROJECTS_KEY, ACROSS_PROJECTS, grouped.across, layout.draw(grouped.across, 'project')) : null}
-      {grouped.projects.map(project =>
-        group(
-          project.key,
-          projectTitle(project),
-          [...project.loose, ...project.repos.flatMap(repo => repo.items)],
-          project.repos.length === 0 ? (
-            layout.draw(project.loose, null)
-          ) : (
-            <Stack gap="sm">
-              {project.loose.length > 0 ? layout.draw(project.loose, null) : null}
-              {project.repos.map(repo => group(repo.key, repo.repoName ?? ACROSS_REPOS, repo.items, layout.draw(repo.items, repo.repoName === null ? 'repo' : null)))}
-            </Stack>
-          )
-        )
-      )}
-    </>
-  )
 }
 
 interface Shown {
@@ -106,7 +71,7 @@ function Mine({ org, current, choices }: View): OrcaNode {
   }
   return (
     <Stack gap="sm">
-      <Groups org={org} grouped={groupByPlace(shown, ({ set }) => setPlaces(set))} layout={layout} />
+      <Groups org={org} tab="prs" grouped={groupByPlace(shown, ({ set }) => setPlaces(set))} layout={layout} />
       {shown.length < sets.length ? (
         <Text size="sm" muted>
           {`Showing ${shown.length} of ${sets.length} sets.`}
@@ -138,7 +103,7 @@ function ToReview({ org, current, choices }: View): OrcaNode {
   }
   return (
     <Stack gap="sm">
-      <Groups org={org} grouped={groupByPlace(shown, prPlaces)} layout={layout} />
+      <Groups org={org} tab="prs" grouped={groupByPlace(shown, prPlaces)} layout={layout} />
       {total > shown.length ? (
         <Text size="sm" muted>
           {`Showing ${shown.length} of ${total} pull requests.`}
