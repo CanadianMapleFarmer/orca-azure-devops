@@ -39,6 +39,10 @@ const KIND_PREFIXES: [string, string][] = [
   ['stateDiagram', 'state diagram']
 ]
 const ANY_DIAGRAM = 'diagram'
+const DELIMITER_CELL = /^:?-+:?$/
+
+export const WIDE_TABLE_COLUMNS = 4
+export const WIDE_TABLE_CHARS = 48
 
 export function isColonOpener(line: string): boolean {
   return COLON_OPENER.test(withoutCr(line))
@@ -97,6 +101,71 @@ export function diagramKind(body: string): string {
   return KINDS.get(word) ?? KIND_PREFIXES.find(([prefix]) => word.startsWith(prefix))?.[1] ?? ANY_DIAGRAM
 }
 
+export function tableAt(lines: readonly string[], index: number): { columns: string[]; rows: string[][]; last: number } | null {
+  const columns = splitRow(lines[index] ?? '')
+  const delimiter = splitRow(lines[index + 1] ?? '')
+  if (columns === null || columns.length === 0 || delimiter?.length !== columns.length || !delimiter.every(cell => DELIMITER_CELL.test(cell))) return null
+  const rows: string[][] = []
+  let last = index + 1
+  for (let at = index + 2; at < lines.length; at += 1) {
+    const cells = fenceOf(withoutCr(lines[at])) ? null : splitRow(lines[at])
+    if (cells === null) break
+    rows.push(Array.from(columns, (_, column) => cells[column] ?? ''))
+    last = at
+  }
+  return { columns, rows, last }
+}
+
+export function isWideTable(columns: readonly string[], rows: readonly string[][]): boolean {
+  if (columns.length >= WIDE_TABLE_COLUMNS) return true
+  const widest = columns.map((header, column) => rows.reduce((longest, row) => Math.max(longest, row[column]?.length ?? 0), header.length))
+  return widest.reduce((total, width) => total + width, 0) > WIDE_TABLE_CHARS
+}
+
+function splitRow(line: string): string[] | null {
+  const text = line.trim()
+  const cells: string[] = []
+  let cell = ''
+  let at = 0
+  while (at < text.length) {
+    const char = text[at]
+    if (char === '\\' && at + 1 < text.length) {
+      cell += text[at + 1] === '|' ? '|' : text.slice(at, at + 2)
+      at += 2
+    } else if (char === '`') {
+      const end = codeSpanEnd(text, at)
+      cell += text.slice(at, end)
+      at = end
+    } else if (char === '|') {
+      cells.push(cell)
+      cell = ''
+      at += 1
+    } else {
+      cell += char
+      at += 1
+    }
+  }
+  cells.push(cell)
+  if (cells.length === 1) return null
+  if (text.startsWith('|')) cells.shift()
+  if (cells.at(-1) === '') cells.pop()
+  return cells.map(cell => cell.trim())
+}
+
+function codeSpanEnd(text: string, start: number): number {
+  let opened = start
+  while (text[opened] === '`') opened += 1
+  const run = opened - start
+  let from = text.indexOf('`', opened)
+  while (from !== -1) {
+    let end = from
+    while (text[end] === '`') end += 1
+    if (end - from === run) return end
+    from = text.indexOf('`', end)
+  }
+  return opened
+}
+
 function firstLine(body: string): string {
   const lines = body.split('\n').map(line => line.trim())
   let start = Math.max(0, lines.findIndex(line => line !== ''))
@@ -123,7 +192,7 @@ function longestTicks(body: string): number {
   return body.split('\n').reduce((longest, line) => Math.max(longest, LEADING_TICKS.exec(line)?.[1].length ?? 0), 0)
 }
 
-function withoutCr(line: string): string {
+export function withoutCr(line: string): string {
   return line.endsWith('\r') ? line.slice(0, -1) : line
 }
 

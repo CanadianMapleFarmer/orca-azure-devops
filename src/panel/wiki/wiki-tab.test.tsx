@@ -4,7 +4,28 @@ import { SEARCH_TOO_SHORT } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from '../../shared/wiki'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type MountOptions, type TestHost } from '../test-support'
-import { CODE_WIKI, draftOf, largeLevels, LEVELS, levelOf, MINE_DIFF, NOW, nodeOf, OPEN_PAGE, pageOf, PAGE_CONTENT, PROJECT_WIKI, refOf, ROOT_PAGES, THEIRS_DIFF, WIKIS } from './fixtures'
+import {
+  CARDS_CONTENT,
+  CODE_WIKI,
+  draftOf,
+  largeLevels,
+  LEVELS,
+  levelOf,
+  MINE_DIFF,
+  NOW,
+  nodeOf,
+  OPEN_PAGE,
+  pageOf,
+  PAGE_CONTENT,
+  PROJECT_WIKI,
+  refOf,
+  ROOT_PAGES,
+  RUNBOOK_URL,
+  SERVICES_TABLE,
+  STEPS_TABLE,
+  THEIRS_DIFF,
+  WIKIS
+} from './fixtures'
 import { MAX_EXPAND_LOADS, MAX_REMEMBERED_FOLDERS, MAX_TREE_ITEMS, search, TREE_BYTES, treeItems } from './state'
 
 let panel: TestPanel
@@ -54,7 +75,7 @@ function held<T>() {
 
 const TREE = { type: 'Tree', label: 'Pages' }
 const SEARCH_BOX = { type: 'Input', label: 'Search the wiki' }
-const BACK = { type: 'IconButton', label: 'Back' }
+const BACK = { type: 'Link', text: /^‹ / }
 
 const treeOf = () => (panel.find(TREE)?.props.items ?? []) as TreeItem[]
 
@@ -134,6 +155,25 @@ const buttonsIn = (title: string) => inside(cardOf(title), { type: 'Button' }).m
 const treeBytes = () => new TextEncoder().encode(JSON.stringify(panel.tree())).length
 
 const heading = () => panel.find({ type: 'Heading' })?.text
+
+const textOf = (node: TreeSnapshot | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+
+const actionsRow = (nodes: readonly TreeSnapshot[]) =>
+  nodes.find(node => node.type === 'Row' && (node.children ?? []).some(child => typeof child !== 'string' && child.type === 'Button' && textOf(child) === 'Open in tab'))
+
+const typesOf = (node?: TreeSnapshot) => (node?.children ?? []).flatMap(child => (typeof child === 'string' ? [] : [child.type]))
+
+const partsOf = (row: TreeSnapshot) =>
+  (row.children ?? []).flatMap(child => (typeof child === 'string' ? [] : [[child.type, child.type === 'IconButton' ? child.props?.label : textOf(child)]]))
+
+const headerOf = (nodes: readonly TreeSnapshot[]) => {
+  const row = actionsRow(nodes)
+  return nodes.find(node => node.type === 'Stack' && row !== undefined && (node.children ?? []).includes(row))
+}
+
+const markdownOf = () => panel.findAll({ type: 'Markdown' }).map(node => String(node.props.content))
+
+const utf8 = (text: string) => new TextEncoder().encode(text).length
 
 const CONFLICT: WikiResult = {
   status: 'conflict',
@@ -326,8 +366,8 @@ test('choosing a page shows it rendered with Open in Azure DevOps', async () => 
   assert.equal(panel.find(TREE), null)
   assert.equal(panel.find({ type: 'Heading' })?.props.level, 3)
   assert.equal(heading(), 'Home')
-  const path = panel.find({ type: 'Text', text: '/Home' })
-  assert.deepEqual([path?.props.muted, path?.props.size], [true, 'sm'])
+  assert.equal(panel.find({ type: 'Text', text: '/Home' }), null, 'the muted path line is gone')
+  assert.equal(panel.find({ type: 'IconButton', label: 'Back' }), null, 'so is the close button')
   assert.equal(panel.find({ type: 'Markdown' })?.props.content, PAGE_CONTENT)
   assert.equal(panel.find({ type: 'Link', text: 'Open in Azure DevOps' })?.props.href, pageOf('/Home').url)
   assert.ok(panel.find({ type: 'IconButton', label: 'Refresh' }))
@@ -338,6 +378,63 @@ test('choosing a page shows it rendered with Open in Azure DevOps', async () => 
   assert.deepEqual(keysOf(treeOf()), ROOT_PAGES)
   assert.equal(panel.persisted.workspace.wikiPage ?? null, null)
   assert.equal(requestsTo(host, 'wiki.list').length, 1)
+})
+
+test('a page shows a back link to its parent, the title and one row of actions', async () => {
+  let answer: { opened: boolean; message: string } = { opened: false, message: 'Open a local workspace first; wiki pages open in a tab there.' }
+  await open({ 'wiki.edit': () => answer }, { persisted: { workspace: { wikiPage: OPEN_PAGE } } })
+  assert.deepEqual(
+    panel.findAll({ type: 'Link' }).map(link => link.text),
+    ['‹ Runbooks', 'Open in Azure DevOps']
+  )
+  assert.equal(heading(), 'Deploy')
+  assert.deepEqual(
+    panel.findAll({ type: 'IconButton' }).filter(item => item.label === 'Back' || item.props.icon === 'close'),
+    [],
+    'no close button'
+  )
+
+  const nodes = walkNodes(panel.tree())
+  const row = actionsRow(nodes)
+  assert.ok(row, 'the actions share one row')
+  const header = headerOf(nodes)
+  assert.deepEqual(typesOf(header), ['Stack', 'Row'], 'the title block, then the one row')
+  assert.deepEqual(typesOf(header?.children?.[0] as TreeSnapshot), ['Link', 'Heading'], 'the back link above the title')
+  assert.deepEqual([row.props?.gap, row.props?.align, row.props?.wrap], ['sm', 'center', true])
+  assert.deepEqual(partsOf(row), [
+    ['Button', 'Open in tab'],
+    ['Button', 'Edit in Orca'],
+    ['Link', 'Open in Azure DevOps'],
+    ['IconButton', 'Refresh']
+  ])
+  const openInTab = button('Open in tab')
+  const edit = button('Edit in Orca')
+  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant], ['sm', 'solid'])
+  assert.deepEqual([edit?.props.size, edit?.props.variant, edit?.props.icon], ['sm', 'outline', 'edit'])
+  const refresh = panel.find({ type: 'IconButton', label: 'Refresh' })
+  assert.deepEqual([refresh?.props.variant, refresh?.props.size], ['ghost', 'sm'])
+
+  await panel.press({ type: 'Button', text: 'Edit in Orca' })
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  const later = walkNodes(panel.tree())
+  assert.deepEqual(typesOf(headerOf(later)), ['Stack', 'Row', 'Callout'], "Edit's result sits under the row")
+  assert.deepEqual(
+    later.filter(node => node.type === 'Callout').map(callout => textOf(callout)),
+    ['Open a local workspace first; wiki pages open in a tab there.']
+  )
+})
+
+test("a top-level page's back link says All pages, and pressing it returns to the tree", async () => {
+  await open()
+  await panel.selectItem(TREE, '/Home')
+  assert.deepEqual(
+    panel.findAll({ type: 'Link' }).map(link => link.text),
+    ['‹ All pages', 'Open in Azure DevOps']
+  )
+  await panel.press({ type: 'Link', text: '‹ All pages' })
+  assert.deepEqual(keysOf(treeOf()), ROOT_PAGES)
+  assert.equal(panel.find({ type: 'Heading' }), null)
+  assert.equal(panel.persisted.workspace.wikiPage ?? null, null)
 })
 
 test('Refresh reloads the page and shows a failure above it', async () => {
@@ -392,13 +489,18 @@ test('while a page loads a skeleton and Back are shown', async () => {
   assert.ok(panel.find({ type: 'Markdown' }))
 })
 
-test('a code wiki page has no Edit and says why', async () => {
+test('a code wiki page offers Open in tab but not Edit in Orca, and says why', async () => {
   const notice = 'This wiki is published from a repository. Edit its files there.'
   const host = await open({ 'wiki.list': [CODE_WIKI], 'wiki.page': input => pageOf(input.path, { editable: false, notice }) })
   await panel.selectItem(TREE, '/Home')
+  assert.deepEqual(
+    panel.findAll({ type: 'Button' }).map(item => item.text),
+    ['Open in tab']
+  )
   assert.equal(button('Edit in Orca'), null)
   const note = panel.find({ type: 'Text', text: notice })
   assert.deepEqual([note?.props.muted, note?.props.size], [true, 'sm'])
+  assert.deepEqual(typesOf(headerOf(walkNodes(panel.tree()))), ['Stack', 'Row', 'Text'], 'the notice sits under the row')
   assert.equal(requestsTo(host, 'wiki.edit').length, 0)
 })
 
@@ -412,8 +514,117 @@ test('an empty page says it has no content yet', async () => {
 test('a link that cannot be opened is left out', async () => {
   await open({ 'wiki.page': input => pageOf(input.path, { url: 'javascript:alert(1)' }) })
   await panel.selectItem(TREE, '/Home')
-  assert.equal(panel.find({ type: 'Link' }), null)
+  assert.deepEqual(
+    panel.findAll({ type: 'Link' }).map(link => link.text),
+    ['‹ All pages']
+  )
   assert.ok(panel.find({ type: 'Markdown' }))
+})
+
+const pageWith = (content: string) => ({ 'wiki.page': (input: WikiPageRef) => pageOf(input.path, { content }) })
+
+test('a Mermaid block in either form becomes a Diagram card with Open in tab', async () => {
+  const answer = held<{ opened: boolean; message: string }>()
+  const host = await open({ ...pageWith(CARDS_CONTENT), 'wiki.openInTab': () => answer.promise })
+  await panel.selectItem(TREE, '/Home')
+  const diagrams = ['Diagram · flowchart', 'Diagram · sequence diagram']
+  assert.deepEqual(
+    cardTitles().filter(title => title?.startsWith('Diagram')),
+    diagrams
+  )
+  for (const title of diagrams) {
+    assert.deepEqual(buttonsIn(title), ['Open in tab'])
+    const openInTab = button('Open in tab', cardOf(title))
+    assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.disabled], ['sm', 'outline', false])
+  }
+  assert.deepEqual(markdownOf().filter(text => /graph TD|sequenceDiagram|mermaid|:::/.test(text)), [], 'the diagram source is not drawn as text')
+
+  const pressing = pressIn('Diagram · sequence diagram', 'Open in tab')
+  await until(() => button('Open in tab')?.disabled)
+  assert.deepEqual(
+    panel.findAll({ type: 'Button', text: 'Open in tab' }).map(item => item.disabled),
+    [true, true, true, true],
+    'every Open in tab waits for the one that is running'
+  )
+  answer.release({ opened: true, message: 'Opened Home in a tab.' })
+  await pressing
+  assert.deepEqual(inputsTo(host, 'wiki.openInTab'), [refOf('/Home')])
+  assert.equal(requestsTo(host, 'wiki.openInTab')[0]?.timeoutMs, 90_000)
+  assert.equal(button('Open in tab')?.disabled, false)
+})
+
+test('a page keeps its prose in order between its cards, and a link reference below a diagram still works above it', async () => {
+  await open(pageWith(CARDS_CONTENT))
+  await panel.selectItem(TREE, '/Home')
+  const lines = CARDS_CONTENT.split('\n')
+  assert.deepEqual(markdownOf(), [
+    `${lines.slice(0, 4).join('\n')}\n\n[rb]: ${RUNBOOK_URL}`,
+    lines.slice(12, 17).join('\n'),
+    lines.slice(21).join('\n')
+  ])
+  assert.deepEqual(
+    walkNodes(panel.tree())
+      .filter(node => node.type === 'Markdown' || node.type === 'Card')
+      .map(node => (node.type === 'Card' ? node.props?.title : 'Markdown')),
+    ['Markdown', 'Diagram · flowchart', 'Table · 4 columns', 'Markdown', 'Diagram · sequence diagram', 'Markdown']
+  )
+})
+
+test('a wide table becomes a Table card naming its columns, and a narrow one stays in the text', async () => {
+  const long = ['| Name | Command | Description |', '| --- | --- | --- |', `| ${'a'.repeat(20)} | ${'b'.repeat(20)} | ${'c'.repeat(20)} |`]
+  const single = ['| ' + 'only '.repeat(11) + '|', '| --- |']
+  const host = await open(pageWith([...SERVICES_TABLE, '', ...STEPS_TABLE, '', ...long, '', ...single].join('\n')))
+  await panel.selectItem(TREE, '/Home')
+  assert.deepEqual(
+    cardTitles().filter(title => title?.startsWith('Table')),
+    ['Table · 4 columns', 'Table · 3 columns', 'Table · 1 column']
+  )
+  assert.deepEqual(
+    panel.findAll({ type: 'Card' }).map(card => card.props.description),
+    ['Service · Owner · Region · Tier', 'Name · Command · Description', 'only only only only only only only only only only only']
+  )
+  assert.deepEqual(
+    panel.findAll({ type: 'Card' }).map(card => buttonsIn(String(card.label))),
+    [['Open in tab'], ['Open in tab'], ['Open in tab']]
+  )
+  const narrow = markdownOf()
+  assert.equal(narrow.length, 1)
+  assert.ok(narrow[0].includes('| Deploy | Grace Hopper |'), 'the narrow table stays in the text')
+  assert.ok(!narrow[0].includes('Service') && !narrow[0].includes('Command'), 'the wide ones are cards')
+
+  await pressIn('Table · 3 columns', 'Open in tab')
+  assert.deepEqual(inputsTo(host, 'wiki.openInTab'), [refOf('/Home')])
+})
+
+test('a table with 64 long column names keeps its card description within a label', async () => {
+  const names = Array.from({ length: 64 }, (_, index) => `Column ${String(index + 1).padStart(2, '0')} ${'n'.repeat(40)}`)
+  await open(pageWith([`| ${names.join(' | ')} |`, `| ${names.map(() => '---').join(' | ')} |`].join('\n')))
+  await panel.selectItem(TREE, '/Home')
+  const card = panel.find({ type: 'Card' })
+  assert.equal(card?.label, 'Table · 64 columns')
+  assert.ok(utf8(String(card?.props.description)) <= 1024)
+  assert.ok(String(card?.props.description).endsWith('…'))
+  assert.ok(String(card?.props.description).startsWith('Column 01'))
+})
+
+test('a 60 KiB page with twenty diagrams and tables stays under 4,000 nodes and 450 KiB', async () => {
+  const definitions = Array.from({ length: 20 }, (_, index) => `[ref${index}]: ${RUNBOOK_URL}${index}`)
+  const uses = definitions.map((_, index) => `[ref${index}]`).join(' ')
+  const cardLines = (index: number) =>
+    index % 2 === 0 ? ['::: mermaid', 'graph TD', `  A${index} --> B${index}`, ':::'] : ['| a | b | c | d |', '| - | - | - | - |', `| ${index} | 2 | 3 | 4 |`]
+  const share = Math.floor((59_500 - utf8(definitions.join('\n')) - 20 * 70) / 21)
+  const prose = `${uses} ${'word '.repeat(Math.floor((share - uses.length - 1) / 5))}`
+  const content = [...Array.from({ length: 20 }, (_, index) => [prose, '', ...cardLines(index), '']).flat(), prose, '', ...definitions].join('\n')
+  assert.ok(utf8(content) > 58_000 && utf8(content) <= 60_000, `${utf8(content)} bytes`)
+
+  await open(pageWith(content))
+  await panel.selectItem(TREE, '/Home')
+  assert.equal(panel.findAll({ type: 'Card' }).length, 20)
+  assert.equal(markdownOf().length, 21)
+  assert.ok(markdownOf().every(text => utf8(text) < 64 * 1024))
+  assert.ok(markdownOf().every(text => text.includes('[ref19]: ')), 'each stretch of prose keeps its links')
+  assert.ok(countNodes(panel.tree()) < 4_000, `${countNodes(panel.tree())} nodes`)
+  assert.ok(treeBytes() < 450 * 1024, `${treeBytes()} bytes`)
 })
 
 test('Edit in Orca sends wiki.edit and shows the message', async () => {

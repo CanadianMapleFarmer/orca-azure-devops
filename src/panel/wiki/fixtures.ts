@@ -59,6 +59,34 @@ export function largeLevels(): Record<string, WikiLevel> {
 
 export const PAGE_CONTENT = '# Deploy\n\nRun the **release** pipeline, then check the dashboard.'
 
+export const RUNBOOK_URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_wiki/wikis/Fabrikam%20Web.wiki?pagePath=%2FRunbooks'
+
+export const SERVICES_TABLE = ['| Service | Owner | Region | Tier |', '| --- | --- | --- | --- |', '| web-app | Ada Lovelace | west | gold |']
+
+export const STEPS_TABLE = ['| Step | Who |', '| --- | --- |', '| Deploy | Grace Hopper |']
+
+export const CARDS_CONTENT = [
+  '# Release flow',
+  '',
+  'Read the [runbook][rb] before you ship.',
+  '',
+  '::: mermaid',
+  'graph TD',
+  '  Build --> Release',
+  ':::',
+  '',
+  ...SERVICES_TABLE,
+  '',
+  ...STEPS_TABLE,
+  '',
+  '```mermaid',
+  'sequenceDiagram',
+  '  Ada->>Grace: ship it',
+  '```',
+  '',
+  `[rb]: ${RUNBOOK_URL}`
+].join('\n')
+
 export function pageOf(path: string, over: Partial<WikiPage> = {}): WikiPage {
   return {
     ...refOf(path),

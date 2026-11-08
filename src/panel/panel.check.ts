@@ -5,7 +5,7 @@ import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, wai
 import { workViewKey } from './prefs'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
-import { draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
+import { CARDS_CONTENT, draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
 import { board, BOARDS, item, LANES, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
@@ -209,7 +209,7 @@ export default defineCheck({
       'ui.visibility': { ok: true },
       'wiki.list': [PROJECT_WIKI],
       'wiki.pages': input => LEVELS[input.path] ?? { pages: [], total: 0 },
-      'wiki.page': pageOf('/Runbooks/Deploy'),
+      'wiki.page': pageOf('/Runbooks/Deploy', { content: CARDS_CONTENT }),
       'wiki.drafts': [draftOf('/Runbooks/Deploy', { changed: true })]
     }
   },

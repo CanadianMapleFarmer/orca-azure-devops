@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { diagramKind, mermaidBlocks, toFencedMermaid } from './wiki-blocks'
+import { diagramKind, isWideTable, mermaidBlocks, tableAt, toFencedMermaid, WIDE_TABLE_CHARS, WIDE_TABLE_COLUMNS } from './wiki-blocks'
 
 test('mermaidBlocks finds both forms, skips other fences and runs an unclosed block to the end', () => {
   const both = ['# Flow', '::: mermaid', 'graph TD', '  A --> B', ':::', '', '```mermaid', 'sequenceDiagram', '  A->>B: hi', '```', 'After']
@@ -123,4 +123,59 @@ test('diagramKind names each Mermaid kind and falls back to diagram', () => {
     ['', 'diagram']
   ]
   for (const [body, kind] of cases) assert.equal(diagramKind(body), kind, JSON.stringify(body))
+})
+
+test('tableAt splits on unescaped pipes outside code spans and isWideTable applies both limits', () => {
+  const page = ['Intro', '| Name | Notes |', '| :--- | ---: |', '| a \\| b | `x|y` and ``p | q`` |', '| unmatched ` tick | plain |', '', 'After']
+  assert.deepEqual(tableAt(page, 1), {
+    columns: ['Name', 'Notes'],
+    rows: [
+      ['a | b', '`x|y` and ``p | q``'],
+      ['unmatched ` tick', 'plain']
+    ],
+    last: 4
+  })
+  assert.equal(tableAt(page, 0), null)
+  assert.equal(tableAt(page, 2), null)
+  assert.equal(tableAt(page, 99), null)
+
+  assert.deepEqual(tableAt(['a | b', '--- | :-:'], 0), { columns: ['a', 'b'], rows: [], last: 1 })
+  assert.deepEqual(tableAt(['| a | b', '|---|---|', 'c | d |', 'e | f', 'plain text', '| g | h |'], 0), {
+    columns: ['a', 'b'],
+    rows: [
+      ['c', 'd'],
+      ['e', 'f']
+    ],
+    last: 3
+  })
+  assert.deepEqual(tableAt(['| a | b |', '|---|---|', '| 1 |', '| 1 | 2 | 3 |', '|', '| x | y |'], 0)?.rows, [
+    ['1', ''],
+    ['1', '2'],
+    ['', ''],
+    ['x', 'y']
+  ])
+  assert.deepEqual(tableAt(['| a | |', '|---|---|'], 0)?.columns, ['a', ''])
+  assert.deepEqual(tableAt(['| a \\|', '|---|'], 0)?.columns, ['a |'])
+  assert.deepEqual(tableAt(['| `a\\|b` | c \\\\| d |', '|---|---|---|'], 0)?.columns, ['`a\\|b`', 'c \\\\', 'd'])
+
+  const crlf = ['| a | b |\r', '|---|---|\r', '| 1 | 2 |\r', '\r', '| 3 | 4 |\r']
+  assert.deepEqual(tableAt(crlf, 0), { columns: ['a', 'b'], rows: [['1', '2']], last: 2 })
+
+  assert.equal(tableAt(['| a | b |', '| 1 | 2 |'], 0), null, 'no delimiter row')
+  assert.equal(tableAt(['| a | b |', '|---|'], 0), null, 'delimiter has fewer cells')
+  assert.equal(tableAt(['| a | b |', '|---|-x-|'], 0), null, 'delimiter cell is not dashes')
+  assert.equal(tableAt(['a', '---'], 0), null, 'a setext heading')
+  assert.equal(tableAt(['| a | b |', '---'], 0), null, 'a delimiter without pipes')
+  assert.equal(tableAt(['| a | b |'], 0), null)
+  assert.equal(tableAt(['| a | b |', '|---|---|', '| 1 | 2 |', '```x|y', '| 3 | 4 |'], 0)?.last, 2, 'a fence ends the table')
+
+  assert.deepEqual([WIDE_TABLE_COLUMNS, WIDE_TABLE_CHARS], [4, 48])
+  const of = (length: number, fill = 'x') => fill.repeat(length)
+  assert.equal(isWideTable(['a', 'b', 'c'], [['1', '2', '3']]), false)
+  assert.equal(isWideTable(['a', 'b', 'c', 'd'], []), true, 'four columns')
+  assert.equal(isWideTable([of(16), of(16), of(16)], []), false, '48 characters')
+  assert.equal(isWideTable([of(17), of(16), of(16)], []), true, '49 characters')
+  assert.equal(isWideTable(['a', 'b'], [[of(30), 'y'], ['z', of(18)]]), false, 'the longest cell of each column, not the sum of the rows')
+  assert.equal(isWideTable(['a', 'b'], [[of(30), 'y'], ['z', of(19)]]), true)
+  assert.equal(isWideTable([of(49)], []), true, 'a header counts')
 })
