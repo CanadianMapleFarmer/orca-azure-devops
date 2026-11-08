@@ -1,24 +1,23 @@
-import { Badge, Box, Button, Callout, Card, IconButton, Link, RelativeTime, Row, Stack, Text, type OrcaNode } from 'orca'
+import { Badge, Button, Callout, Card, IconButton, Link, RelativeTime, Row, Text, type OrcaNode, type Tone } from 'orca'
 import { MAX_STAGE_CHIPS, type RunSummary, type StageChip, type StepState } from '../../shared/pipelines'
 import { isActive, RUN_STATE_TEXT, RUN_STATE_TONE, STEP_GLYPH } from '../../shared/runs'
+import { Chips, type Chip } from '../chips'
 import { ApprovalBlock, OutcomeCallout } from './approval'
 import { isBusy, noteOf, openRun, orphanOutcomes, toggleWatch } from './state'
 
-const SEGMENT: Record<StepState, 'success' | 'danger' | 'warning' | 'accent' | 'muted'> = {
+export const STAGE_TONE: Record<StepState, Tone> = {
   succeeded: 'success',
   failed: 'danger',
   waiting: 'warning',
   warning: 'warning',
   running: 'accent',
-  pending: 'muted',
-  skipped: 'muted',
-  canceled: 'muted'
+  pending: 'neutral',
+  skipped: 'neutral',
+  canceled: 'neutral'
 }
 
-export function stageLine(stages: readonly StageChip[]): string {
-  const parts = stages.slice(0, MAX_STAGE_CHIPS).map(stage => `${stage.name} ${STEP_GLYPH[stage.state]}`)
-  if (stages.length > MAX_STAGE_CHIPS) parts.push(`+${stages.length - MAX_STAGE_CHIPS} more`)
-  return parts.join(' · ')
+export function stageChips(stages: readonly StageChip[]): Chip[] {
+  return stages.slice(0, MAX_STAGE_CHIPS).map(stage => ({ tone: STAGE_TONE[stage.state], text: `${stage.name} ${STEP_GLYPH[stage.state]}` }))
 }
 
 function describe(run: RunSummary): string {
@@ -34,19 +33,8 @@ function When({ run }: { run: RunSummary }): OrcaNode {
   )
 }
 
-function StageBar({ stages }: { stages: readonly StageChip[] }): OrcaNode {
-  return (
-    <Stack gap="xs">
-      <Row gap="xs">
-        {stages.slice(0, MAX_STAGE_CHIPS).map(stage => (
-          <Box key={stage.id} width={14} height={6} radius="full" background={SEGMENT[stage.state]} />
-        ))}
-      </Row>
-      <Text size="xs" muted truncate>
-        {stageLine(stages)}
-      </Text>
-    </Stack>
-  )
+export function StageChips({ stages }: { stages: readonly StageChip[] | null }): OrcaNode {
+  return stages && stages.length > 0 ? <Chips chips={stageChips(stages)} /> : null
 }
 
 export function RunCard({ org, me, run }: { org: string; me: string | null; run: RunSummary }): OrcaNode {
@@ -58,7 +46,7 @@ export function RunCard({ org, me, run }: { org: string; me: string | null; run:
         <Badge tone={RUN_STATE_TONE[run.state]}>{RUN_STATE_TEXT[run.state]}</Badge>
         <When run={run} />
       </Row>
-      {run.stages && run.stages.length > 0 ? <StageBar stages={run.stages} /> : null}
+      <StageChips stages={run.stages} />
       <Row gap="sm" align="center" wrap>
         <Button size="sm" disabled={isBusy(`open:${run.buildId}`)} onPress={() => openRun(org, run)}>
           Open run

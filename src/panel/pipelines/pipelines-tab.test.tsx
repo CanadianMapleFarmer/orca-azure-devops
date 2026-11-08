@@ -3,7 +3,7 @@ import type { RunActionResult, RunFilter, RunState, StepState } from '../../shar
 import type { OrgStatus } from '../../shared/types'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } from '../test-support'
 import { approvalOf, HOUR, MINUTE, NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './fixtures'
-import { stageLine } from './run-card'
+import { stageChips, STAGE_TONE } from './run-card'
 
 let panel: TestPanel
 
@@ -48,6 +48,13 @@ const within = (buildId: number, query: Parameters<TestPanel['findAll']>[0]): Te
   return found
 }
 
+const stageRow = (buildId: number): TestElement | undefined => inside(cardOf(buildId), { type: 'Row' }).find(row => row.props.gap === 'xs')
+
+const stageBadges = (buildId: number): TestElement[] => {
+  const row = stageRow(buildId)
+  return row ? inside(row, { type: 'Badge' }) : []
+}
+
 const waitingBlocks = (buildId: number) => inside(cardOf(buildId), { type: 'Callout' }).filter(callout => callout.props.title === 'Waiting for approval')
 
 const KEPT = 'Azure DevOps is unreachable. Showing the last results.'
@@ -63,25 +70,14 @@ const STATES: [RunState, string, string][] = [
   ['canceled', 'canceled', 'neutral']
 ]
 
-test('runs show their state, stage bar and stage line', async () => {
-  const stages: [string, StepState][] = [
-    ['Build', 'succeeded'],
-    ['Image', 'failed'],
-    ['Deploy production', 'skipped'],
-    ['Test', 'warning'],
-    ['Approve', 'waiting'],
-    ['Smoke', 'running'],
-    ['Lint', 'pending'],
-    ['Docs', 'canceled']
-  ]
+test('runs show their state and when they were queued, started or finished', async () => {
   const finished = (state: RunState) => state === 'succeeded' || state === 'warning' || state === 'failed' || state === 'canceled'
   const runs = STATES.map(([state], index) =>
     runOf(100 + index, {
       state,
       queuedAt: NOW - (10 + index) * MINUTE,
       startedAt: state === 'queued' ? null : NOW - (9 + index) * MINUTE,
-      finishedAt: finished(state) ? NOW - 5 * MINUTE : null,
-      stages: index === 6 ? stages.map(([name, step]) => stageOf(name, step)) : null
+      finishedAt: finished(state) ? NOW - 5 * MINUTE : null
     })
   )
   await open(runsSnapshotOf({ runs }))
@@ -94,17 +90,38 @@ test('runs show their state, stage bar and stage line', async () => {
   assert.match(within(101, { type: 'Text', text: /^started / }).text, /^started /)
   assert.match(within(104, { type: 'Text', text: /^finished / }).text, /^finished /)
   assert.ok(within(100, { type: 'RelativeTime' }))
-
-  const bar = inside(cardOf(106), { type: 'Box' }).filter(box => box.props.width === 14)
-  assert.deepEqual(bar.map(box => box.props.background), ['success', 'danger', 'muted', 'warning', 'warning', 'accent', 'muted', 'muted'])
-  assert.ok(bar.every(box => box.props.height === 6 && box.props.radius === 'full'))
-  const line = within(106, { type: 'Text', text: /^Build ✓/ })
-  assert.equal(line.text, 'Build ✓ · Image ✗ · Deploy production – · Test ! · Approve ⏸ · Smoke ● · Lint ○ · Docs ⊘')
-  assert.equal(line.props.size, 'xs')
-  assert.equal(line.props.muted, true)
-  assert.equal(line.props.truncate, true)
-  assert.equal(inside(cardOf(105), { type: 'Box' }).length, 0)
   assert.equal(inside(cardOf(105), { type: 'Text', text: /✓|✗/ }).length, 0)
+})
+
+test("stage chips show each stage's name and mark in its tone", async () => {
+  const stages: [string, StepState][] = [
+    ['Build', 'succeeded'],
+    ['Image', 'failed'],
+    ['Deploy production', 'skipped'],
+    ['Test', 'warning'],
+    ['Approve', 'waiting'],
+    ['Smoke', 'running'],
+    ['Lint', 'pending'],
+    ['Docs', 'canceled']
+  ]
+  await open(runsSnapshotOf({ runs: [runOf(1, { state: 'failed', stages: stages.map(([name, step]) => stageOf(name, step)) })] }))
+  assert.deepEqual(
+    stageBadges(1).map(chip => [chip.text, chip.props.tone]),
+    [
+      ['Build ✓', 'success'],
+      ['Image ✗', 'danger'],
+      ['Deploy production –', 'neutral'],
+      ['Test !', 'warning'],
+      ['Approve ⏸', 'warning'],
+      ['Smoke ●', 'accent'],
+      ['Lint ○', 'neutral'],
+      ['Docs ⊘', 'neutral']
+    ]
+  )
+  assert.equal(inside(cardOf(1), { type: 'Box' }).filter(box => box.props.width === 14).length, 0)
+  assert.equal(inside(cardOf(1), { type: 'Box' }).length, 0)
+  assert.deepEqual(panel.summary().filter(line => line.startsWith('Box')), [])
+  assert.equal(inside(cardOf(1), { type: 'Text', text: /^Build ✓/ }).length, 0)
 })
 
 test('a run card names the pipeline, run, branch, PR and requester, and links to Azure DevOps', async () => {
@@ -132,26 +149,44 @@ test('running runs come first, newest first', async () => {
   assert.deepEqual(ids(), [304, 302, 303, 301])
 })
 
-test('stageLine writes each stage with its glyph and says how many more there are', () => {
-  assert.equal(stageLine([stageOf('Build', 'succeeded'), stageOf('Image', 'failed'), stageOf('Deploy production', 'skipped')]), 'Build ✓ · Image ✗ · Deploy production –')
-  assert.equal(stageLine([]), '')
-  const many = Array.from({ length: 14 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
-  assert.equal(stageLine(many), `${many.slice(0, 12).map(stage => `${stage.name} ✓`).join(' · ')} · +2 more`)
-  assert.equal(stageLine(many.slice(0, 12)).includes('more'), false)
+test('stageChips maps every step state to its mark and tone', () => {
+  const expected: [StepState, string, string][] = [
+    ['succeeded', '✓', 'success'],
+    ['failed', '✗', 'danger'],
+    ['waiting', '⏸', 'warning'],
+    ['warning', '!', 'warning'],
+    ['running', '●', 'accent'],
+    ['pending', '○', 'neutral'],
+    ['skipped', '–', 'neutral'],
+    ['canceled', '⊘', 'neutral']
+  ]
+  for (const [state, mark, tone] of expected) assert.deepEqual(stageChips([stageOf('Deploy production', state)]), [{ tone, text: `Deploy production ${mark}` }], state)
+  assert.deepEqual(Object.keys(STAGE_TONE).sort(), expected.map(([state]) => state).sort())
+  assert.deepEqual(stageChips([]), [])
+  const many = Array.from({ length: 15 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
+  assert.deepEqual(stageChips(many).map(chip => chip.text), many.slice(0, 12).map(stage => `${stage.name} ✓`))
 })
 
-test('a run with an empty stage list draws no stage bar and no stage line', async () => {
-  await open(runsSnapshotOf({ runs: [runOf(1, { stages: [] }), runOf(2, { stages: [stageOf('Build', 'succeeded')] })] }))
-  assert.equal(inside(cardOf(1), { type: 'Box' }).length, 0)
-  assert.equal(inside(cardOf(1), { type: 'Text' }).filter(text => text.props.size === 'xs').length, 0)
-  assert.equal(inside(cardOf(2), { type: 'Box' }).length, 1)
+test('a run with no stages or an empty stage list draws no stage chips', async () => {
+  await open(runsSnapshotOf({ runs: [runOf(1, { stages: null }), runOf(2, { stages: [] }), runOf(3, { stages: [stageOf('Build', 'succeeded')] })] }))
+  for (const buildId of [1, 2]) {
+    assert.equal(stageRow(buildId), undefined, `run ${buildId} has no chip row`)
+    assert.equal(inside(cardOf(buildId), { type: 'Badge' }).length, 1, `run ${buildId} shows only its state`)
+    assert.equal(inside(cardOf(buildId), { type: 'Box' }).length, 0, `run ${buildId} draws no box`)
+  }
+  assert.deepEqual(stageBadges(3).map(chip => chip.text), ['Build ✓'])
+  assert.equal(inside(cardOf(3), { type: 'Box' }).length, 0)
 })
 
-test('a stage bar draws at most twelve segments', async () => {
-  const stages = Array.from({ length: 15 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
+test('twelve stages draw twelve chips and no overflow count', async () => {
+  const stages = Array.from({ length: 12 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
   await open(runsSnapshotOf({ runs: [runOf(1, { stages })] }))
-  assert.equal(inside(cardOf(1), { type: 'Box' }).filter(box => box.props.width === 14).length, 12)
-  assert.match(within(1, { type: 'Text', text: /^S1 ✓/ }).text, / · \+3 more$/)
+  assert.deepEqual(
+    stageBadges(1).map(chip => chip.text),
+    stages.map(stage => `${stage.name} ✓`)
+  )
+  assert.equal(inside(cardOf(1), { type: 'Badge', text: /more/ }).length, 0)
+  assert.equal(inside(cardOf(1), { type: 'Text', text: /more/ }).length, 0)
 })
 
 const mixed = () => [
