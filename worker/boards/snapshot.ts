@@ -119,7 +119,7 @@ export function hasTask(families: WorkFamilies, id: number): boolean {
 }
 
 export async function isCompleted(source: ItemSource, cfg: BoardConfig, item: { type: string; state: string }): Promise<boolean> {
-  return categoryOf(await source.states(cfg.projectId, item.type), item.state) === 'Completed'
+  return completedIn(await source.states(cfg.projectId, item.type), item.state)
 }
 
 export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, everyone: boolean): Promise<Loaded & { truncated: boolean }> {
@@ -251,6 +251,10 @@ function categoryOf(states: TypeState[] | undefined, name: string): string | und
   return states?.find(state => state.name === name)?.category
 }
 
+function completedIn(states: TypeState[] | undefined, name: string): boolean {
+  return categoryOf(states, name) === 'Completed'
+}
+
 async function summarize(source: ItemSource, cfg: BoardConfig, bases: Base[], states: StatesByType): Promise<Loaded> {
   return (await summarizeWithParents(source, cfg, bases, states)).loaded
 }
@@ -317,12 +321,13 @@ function groupTasks(children: RawWorkItem[], linkedFrom: Map<number, number>, st
   const byParent = new Map<number, WorkTask[]>()
   for (const raw of children) {
     const typeStates = states.get(typeOf(raw))
-    const category = categoryOf(typeStates, textOr(raw.fields['System.State'], ''))
+    const state = textOr(raw.fields['System.State'], '')
+    const category = categoryOf(typeStates, state)
     const parent = raw.fields['System.Parent']
     const parentId = typeof parent === 'number' ? parent : linkedFrom.get(raw.id)
     if (!typeStates || category === 'Removed' || parentId === undefined) continue
     const tasks = byParent.get(parentId) ?? []
-    tasks.push(taskOf(raw, category === 'Completed', me))
+    tasks.push(taskOf(raw, completedIn(typeStates, state), me))
     byParent.set(parentId, tasks)
   }
   return [...byParent].map(([parentId, tasks]) => taskListOf(parentId, tasks))

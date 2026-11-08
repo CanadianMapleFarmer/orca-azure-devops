@@ -1389,6 +1389,18 @@ test('a failed children read still posts the items, with no task lists and a mes
     assert.deepEqual(h.posts.at(-1), snapshot)
   }
 
+  const cold = harness(status({ account: ALEX }))
+  addChildren(cold.ado, 1204, children())
+  cold.ado.state.wiql = [1204, 1205]
+  cold.ado.on(isTypeStates('Task'), () => json(500, { message: 'TF400898: An Internal Error Occurred.' }))
+  const unread = await cold.service.refresh(ORG)
+  assert.equal(cold.ado.count(isFieldsBatch), 1, 'the children were read')
+  assert.ok(cold.ado.count(isTypeStates('Task')) > 0, 'the Task states read was attempted')
+  assert.deepEqual([...unread.mine, ...unread.other].map(entry => entry.id), [1204, 1205])
+  assert.deepEqual(unread.families.lists, [])
+  assert.equal(unread.message, TASKS_NOT_LOADED)
+  assert.deepEqual(cold.posts.at(-1), unread)
+
   const ado = fakeAdo()
   addChildren(ado, 1204, children())
   const hung = ado.hang(isFieldsBatch)
