@@ -1082,6 +1082,44 @@ test('wiki.edit and wiki.drafts answer through the handlers', async () => {
   }
 })
 
+test('wiki.openInTab answers through the handler', async () => {
+  const ado = fakeWiki()
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))
+  try {
+    await withFetch(signedIn(ado), async () => {
+      let focused: typeof FOCUSED | null = FOCUSED
+      const host = mockHost({
+        capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+        storage: { orgs: [{ ...PAT_ORG, pinned: { ...ADA, adoId: ME } }] },
+        secrets: { 'pat:contoso': PAT },
+        results: { 'workspace.readContext': () => focused, 'workspace.list': () => workspaceAt(dir), 'editor.open': { opened: true } }
+      })
+      await withWorker(worker, { host }, async w => {
+        const wikiId = ado.wikis.find(wiki => wiki.name === 'Fabrikam Web.wiki')!.id
+        const ref = { org: 'contoso', projectId: PROJECT, wikiId, path: '/Release process/Checklist' }
+        const copy = 'wiki-read/contoso/Fabrikam Web.wiki/Release process/Checklist.md'
+        const file = path.join(dir, '.orca-ado', ...copy.split('/'))
+        assert.deepEqual(await w.request('wiki.openInTab', ref), { opened: true, message: 'Opened Checklist in a tab.' })
+        assert.deepEqual(host.callsOf('editor.open'), [{ workspaceId: 'ws-web', path: `.orca-ado/${copy}` }])
+        const text = await fs.readFile(file, 'utf8')
+        assert.ok(text.startsWith('*A read-only copy of Checklist. To change it, use Edit in Orca in the Azure DevOps sidebar.*\n\n'), text)
+        assert.deepEqual([text.includes('\n# Release checklist\n'), text.includes('[[_TOC_]]')], [true, false])
+        assert.equal((await fs.stat(file)).mode & 0o777, 0o444)
+
+        focused = null
+        assert.deepEqual(await w.request('wiki.openInTab', ref), {
+          opened: false,
+          message: 'Open a local workspace first; wiki pages open in a tab there.'
+        })
+        assert.equal(host.callsOf('editor.open').length, 1)
+        assert.equal(w.refusals.length, 0)
+      })
+    })
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('wiki.publish answers through the handler', async () => {
   const ado = fakeWiki()
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'main-test-workspace-'))

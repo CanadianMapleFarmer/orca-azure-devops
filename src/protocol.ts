@@ -68,6 +68,7 @@ declare module 'orca' {
     'wiki.pages': { input: WikiPageRef; output: WikiLevel }
     'wiki.page': { input: WikiPageRef; output: WikiPage }
     'wiki.search': { input: Omit<WikiPageRef, 'path'> & { text: string }; output: { hits: WikiHit[]; total: number } }
+    'wiki.openInTab': { input: WikiPageRef; output: { opened: boolean; message: string } }
     'wiki.edit': { input: WikiPageRef; output: { opened: boolean; message: string } }
     'wiki.drafts': { input: { org: string }; output: DraftSummary[] }
     'wiki.discard': { input: { key: string }; output: { ok: true; message: string } }

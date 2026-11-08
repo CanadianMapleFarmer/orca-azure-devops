@@ -466,6 +466,71 @@ test('a second Edit in Orca press before the button redraws sends nothing', asyn
   assert.equal(button('Edit in Orca')?.disabled, false)
 })
 
+test('Open in tab sends wiki.openInTab for the page and shows a refusal', async () => {
+  const refusal = 'Open a local workspace first; wiki pages open in a tab there.'
+  let answer: () => { opened: boolean; message: string } = () => ({ opened: true, message: 'Opened Deploy in a tab.' })
+  const host = await open({ 'wiki.openInTab': () => answer() })
+  await panel.expand(TREE, '/Runbooks')
+  await panel.selectItem(TREE, '/Runbooks/Deploy')
+  assert.deepEqual(
+    panel.findAll({ type: 'Button' }).map(item => item.text),
+    ['Open in tab', 'Edit in Orca']
+  )
+  const openInTab = button('Open in tab')
+  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.disabled], ['sm', 'solid', false])
+
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  assert.deepEqual(inputsTo(host, 'wiki.openInTab'), [refOf('/Runbooks/Deploy')])
+  assert.equal(requestsTo(host, 'wiki.openInTab')[0]?.timeoutMs, 90_000)
+  assert.deepEqual(panel.findAll({ type: 'Callout' }), [], 'opening shows nothing')
+
+  answer = () => ({ opened: false, message: refusal })
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', refusal]])
+
+  answer = () => {
+    throw hostError('action_failed', 'The wiki draft folder leads outside this workspace, so nothing was written.')
+  }
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  assert.deepEqual(
+    panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]),
+    [['danger', 'The wiki draft folder leads outside this workspace, so nothing was written.']]
+  )
+
+  answer = () => ({ opened: true, message: 'Opened Deploy in a tab.' })
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  assert.deepEqual(panel.findAll({ type: 'Callout' }), [], 'a later opening clears the refusal')
+  assert.equal(requestsTo(host, 'wiki.edit').length, 0)
+})
+
+test('a code wiki page offers Open in tab as its first action', async () => {
+  const notice = 'This wiki is published from a repository. Edit its files there.'
+  const host = await open({ 'wiki.list': [CODE_WIKI], 'wiki.page': input => pageOf(input.path, { ...refOf(input.path, CODE_WIKI), editable: false, notice }) })
+  await panel.selectItem(TREE, '/Home')
+  assert.deepEqual(
+    panel.findAll({ type: 'Button' }).map(item => item.text),
+    ['Open in tab']
+  )
+  await panel.press({ type: 'Button', text: 'Open in tab' })
+  assert.deepEqual(inputsTo(host, 'wiki.openInTab'), [refOf('/Home', CODE_WIKI)])
+})
+
+test('a second Open in tab press before the button redraws sends nothing', async () => {
+  const answer = held<{ opened: boolean; message: string }>()
+  const host = await open({ 'wiki.openInTab': () => answer.promise })
+  await panel.selectItem(TREE, '/Home')
+  const openInTab = button('Open in tab')
+  assert.ok(openInTab)
+  const presses = [panel.press(openInTab), panel.press(openInTab)]
+  await until(() => button('Open in tab')?.disabled)
+  assert.equal(button('Open in tab')?.disabled, true)
+  assert.equal(button('Edit in Orca')?.disabled, false, 'Edit in Orca stays free')
+  answer.release({ opened: true, message: 'Opened Home in a tab.' })
+  await Promise.all(presses)
+  assert.equal(requestsTo(host, 'wiki.openInTab').length, 1)
+  assert.equal(button('Open in tab')?.disabled, false)
+})
+
 const HITS: WikiHit[] = [
   { path: '/Runbooks/Deploy', title: 'Deploy', snippet: 'Run the release pipeline' },
   { path: '/Home', title: 'Home', snippet: 'Start here' }

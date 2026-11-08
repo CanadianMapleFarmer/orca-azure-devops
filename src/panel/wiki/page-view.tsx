@@ -1,7 +1,7 @@
 import { Button, Callout, Heading, IconButton, Link, Markdown, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import { draftKey, type WikiPage } from '../../shared/wiki'
 import { LoadFailure } from '../snapshot-parts'
-import { closePage, edit, isRunning, loadedPage, loadPageWhenIdle, openPage, outcomeOf, pageLoad, reloadPage } from './state'
+import { closePage, edit, isRunning, loadedPage, loadPageWhenIdle, openInTab, openPage, outcomeOf, pageLoad, readKey, reloadPage } from './state'
 
 const openable = (url: string): boolean => /^https?:\/\//i.test(url) && url.length <= 2048
 
@@ -19,19 +19,27 @@ function Title({ title, path }: { title: string; path: string }): OrcaNode {
   )
 }
 
-function Edit({ page }: { page: WikiPage }): OrcaNode {
-  const key = draftKey(page)
-  const outcome = outcomeOf(key)
+function Actions({ page }: { page: WikiPage }): OrcaNode {
+  const editKey = draftKey(page)
+  const tabKey = readKey(page)
+  const edited = page.editable ? outcomeOf(editKey) : undefined
+  const tabbed = outcomeOf(tabKey)
   return (
     <Stack gap="xs">
-      <Row gap="sm">
-        <Button size="sm" icon="edit" disabled={isRunning(key)} onPress={() => edit(page)}>
-          Edit in Orca
+      <Row gap="sm" wrap>
+        <Button size="sm" variant="solid" disabled={isRunning(tabKey)} onPress={() => openInTab(page)}>
+          Open in tab
         </Button>
+        {page.editable ? (
+          <Button size="sm" icon="edit" disabled={isRunning(editKey)} onPress={() => edit(page)}>
+            Edit in Orca
+          </Button>
+        ) : null}
       </Row>
-      {outcome?.status === 'opened' || outcome?.status === 'refused' ? (
-        <Callout tone={outcome.status === 'opened' ? 'accent' : 'danger'}>{outcome.message}</Callout>
+      {edited?.status === 'opened' || edited?.status === 'refused' ? (
+        <Callout tone={edited.status === 'opened' ? 'accent' : 'danger'}>{edited.message}</Callout>
       ) : null}
+      {tabbed?.status === 'refused' ? <Callout tone="danger">{tabbed.message}</Callout> : null}
     </Stack>
   )
 }
@@ -57,7 +65,7 @@ export function PageView(): OrcaNode {
   return (
     <Stack gap="md">
       <Title title={page.title} path={page.path} />
-      {page.editable ? <Edit page={page} /> : null}
+      <Actions page={page} />
       <Row gap="sm" align="center" wrap>
         {openable(page.url) ? <Link href={page.url}>Open in Azure DevOps</Link> : null}
         <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={load.status === 'loading'} onPress={reloadPage} />

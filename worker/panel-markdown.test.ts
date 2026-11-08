@@ -188,6 +188,46 @@ test('panelMarkdown cuts at a line and closes an open code block', () => {
   assert.equal(md('```\ncode', { maxBytes: 8 }), '```\ncode')
 })
 
+test('panelMarkdown leaves a ::: mermaid block untouched like code, and a cut closes it', () => {
+  const diagram = [
+    'graph TD',
+    '  A --> B[label]',
+    '  C[see](Guide.md)',
+    `  D["<a href='https://example.com'>docs</a>"]`,
+    `  E["<b>x</b><br/>"] --> @<${STRANGER}>`,
+    '%% a comment',
+    '[[_TOC_]]'
+  ]
+  for (const opener of ['::: mermaid', ':::mermaid', '   :::  MERMAID  ']) {
+    const source = ['Intro, see [the guide](Guide.md).', '', opener, ...diagram, ':::', '', `After @<${ME}>`].join('\n')
+    const expected = [`Intro, see [the guide](${resolve('Guide.md')}).`, '', opener, ...diagram, ':::', '', 'After @Alex Contoso'].join('\n')
+    assert.equal(md(source), expected, opener)
+    assert.equal(md(source.replaceAll('\n', '\r\n')), expected, `${opener} with CRLF`)
+  }
+
+  const unclosed = ['Intro', '::: mermaid', ...diagram].join('\n')
+  assert.equal(md(unclosed), unclosed)
+
+  const lines = ['Intro', '::: mermaid', 'graph TD', ...Array.from({ length: 40 }, (_, i) => `  N${i} --> N${i + 1}[step ${i}](x.md)`), ':::', 'After']
+  const source = lines.join('\n')
+  const out = md(source, { maxBytes: 500 })
+  assert.ok(bytes(out) <= 500, `${bytes(out)} bytes`)
+  const head = headOf(out, `\n:::${CUT}`)
+  assert.ok(source.startsWith(`${head}\n`), head)
+  assert.ok(head.split('\n').length > 5)
+})
+
+test('panelMarkdown takes its own cut note', () => {
+  const note = 'This page is too long to show here in full. Open it in Azure DevOps to read the rest.'
+  const lines = ['Intro', '```ts', ...Array.from({ length: 300 }, (_, i) => `const v${i} = ${i}`), '```', 'After']
+  const source = lines.join('\n')
+  const out = md(source, { maxBytes: 1_000, cutNote: note })
+  assert.ok(bytes(out) <= 1_000, `${bytes(out)} bytes`)
+  const head = headOf(out, `\n\`\`\`\n\n*${note}*`)
+  assert.ok(source.startsWith(`${head}\n`))
+  assert.equal(out.includes(MARKDOWN_CUT_NOTE), false)
+})
+
 test('panelMarkdown stays fast on adversarial input', () => {
   const inputs = [
     '<a '.repeat(60_000),

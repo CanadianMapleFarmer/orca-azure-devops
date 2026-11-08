@@ -48,6 +48,7 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
       'runs.snapshot': input => runsSnapshotOf({ org: input.org, updatedAt: 0 }),
       'wiki.list': [],
       'wiki.drafts': [],
+      'wiki.openInTab': { opened: true, message: '' },
       'share.prefs': input => ({
         template: input.kind === 'approval' ? APPROVAL_TEMPLATE : PR_TEMPLATE,
         channels: [],

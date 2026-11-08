@@ -1,3 +1,4 @@
+import { isColonCloser, isColonOpener } from '../src/shared/wiki-blocks'
 import { decode, escapeText } from './ado/html-text'
 import { IMAGE_ALT, imageLink, MARKDOWN_CUT_NOTE, UNKNOWN_AUTHOR } from './messages'
 
@@ -5,6 +6,7 @@ export interface MarkdownTarget {
   maxBytes: number
   resolve: (href: string) => string
   people?: ReadonlyMap<string, string>
+  cutNote?: string
 }
 
 interface Context {
@@ -32,8 +34,7 @@ interface Destination {
   raw: string
 }
 
-const CUT_SUFFIX = `\n\n*${MARKDOWN_CUT_NOTE}*`
-const CUT_SUFFIX_BYTES = Buffer.byteLength(CUT_SUFFIX)
+const COLON_FENCE = ':::'
 const NO_JOIN = '​'
 const MAX_OPENERS = 32
 const MAX_LABEL = 999
@@ -83,6 +84,8 @@ const LETTER = /\p{L}/u
 
 export function panelMarkdown(text: string, target: MarkdownTarget): string {
   const ctx: Context = { resolve: target.resolve, people: lowerKeys(target.people) }
+  const cutSuffix = `\n\n*${target.cutNote ?? MARKDOWN_CUT_NOTE}*`
+  const cutSuffixBytes = Buffer.byteLength(cutSuffix)
   const pieces: string[] = []
   let used = -1
   let kept = { count: 0, fence: '' }
@@ -90,15 +93,15 @@ export function panelMarkdown(text: string, target: MarkdownTarget): string {
     const piece = unit.code ? unit.line : renderInline(unit.lines.join('\n'), ctx)
     const size = used + 1 + Buffer.byteLength(piece)
     if (size > target.maxBytes) {
-      const room = target.maxBytes - CUT_SUFFIX_BYTES - used - 1
+      const room = target.maxBytes - cutSuffixBytes - used - 1
       const partial = !unit.code && kept.count === pieces.length ? partialProse(unit.lines, room, ctx, pieces.length === 0) : null
       const head = partial === null ? [...pieces.slice(0, kept.count), ...(kept.fence ? [kept.fence] : [])] : [...pieces, partial]
-      return head.join('\n') + CUT_SUFFIX
+      return head.join('\n') + cutSuffix
     }
     pieces.push(piece)
     used = size
     const fence = unit.code ? unit.fence : ''
-    if (size + (fence ? fence.length + 1 : 0) + CUT_SUFFIX_BYTES <= target.maxBytes) kept = { count: pieces.length, fence }
+    if (size + (fence ? fence.length + 1 : 0) + cutSuffixBytes <= target.maxBytes) kept = { count: pieces.length, fence }
   }
   return pieces.join('\n')
 }
@@ -188,11 +191,13 @@ function prose(units: Unit[], line: string): string[] {
 }
 
 function fenceOf(line: string): string {
+  if (isColonOpener(line)) return COLON_FENCE
   const found = FENCE.exec(line)
   return found && !(found[1][0] === '`' && found[2].includes('`')) ? found[1] : ''
 }
 
 function closesFence(line: string, fence: string): boolean {
+  if (fence === COLON_FENCE) return isColonCloser(line)
   const found = FENCE_END.exec(line)
   return found !== null && found[1][0] === fence[0] && found[1].length >= fence.length
 }

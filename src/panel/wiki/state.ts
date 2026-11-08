@@ -627,16 +627,27 @@ export const discard = (key: string): Promise<void> =>
     await loadDrafts(org)
   })
 
+async function opening(send: () => Promise<{ opened: boolean; message: string }>): Promise<Outcome> {
+  try {
+    const { opened, message } = await send()
+    return { status: opened ? 'opened' : 'refused', message }
+  } catch (error) {
+    return { status: 'refused', message: messageOf(error) }
+  }
+}
+
 export const edit = (ref: WikiPageRef): Promise<void> =>
   exclusively(draftKey(ref), async org => {
-    let outcome: Outcome
-    try {
-      const { opened, message } = await plugin.request('wiki.edit', pageRef(ref), LONG_WAIT)
-      outcome = { status: opened ? 'opened' : 'refused', message }
-    } catch (error) {
-      outcome = { status: 'refused', message: messageOf(error) }
-    }
+    const outcome = await opening(() => plugin.request('wiki.edit', pageRef(ref), LONG_WAIT))
     if (read(source) !== org) return
     record(draftKey(ref), outcome)
     await loadDrafts(org)
+  })
+
+export const readKey = (ref: WikiPageRef): string => `read:${draftKey(ref)}`
+
+export const openInTab = (ref: WikiPageRef): Promise<void> =>
+  exclusively(readKey(ref), async org => {
+    const outcome = await opening(() => plugin.request('wiki.openInTab', pageRef(ref), LONG_WAIT))
+    if (read(source) === org) record(readKey(ref), outcome)
   })
