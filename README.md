@@ -782,11 +782,14 @@ Microsoft sign-in and network:
 
 Panel overhaul:
 
-- Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens drawn, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and Refresh while the tab is open rewrites the copy. A page over 600 KiB opens cut, with its note.
+- Each of the four tabs at 360 px in light and dark, with real data.
+- PRs and Pipelines: every card's project is visible without opening it, a project with several repositories splits and one with a single repository stays flat, and the project and repository pickers survive a reload.
+- Child tasks on a real board: every task of yours sits under its parent or in **No parent** and nothing that showed before is missing, a parent that isn't yours is dimmed in its column, a task under a task, a parent you can't read, whether a bug counts as a task on a team that handles bugs as tasks, and the message when the child read fails.
+- Swimlanes: **Columns** and **Lanes** on a board with swimlanes and **Lanes** on one without, each card in the lane Azure DevOps puts it in, and the unnamed lane as **Default lane**.
+- A reload: the Work view and open groups survive a reload, and so do the PRs view and the open wiki folders.
+- Wiki: folders look different from pages and show their page counts.
+- Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens with both Mermaid forms drawn and a wide table readable, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and Refresh while the tab is open rewrites the copy. A page over 600 KiB opens cut, with its note.
 - Mermaid in both forms: `::: mermaid` with and without a space, a fenced `mermaid` block, a front matter block, and the diagram kinds Azure DevOps lists.
-- Child tasks on a real board: every task of yours sits under its parent or in **No parent**, a parent that isn't yours is dimmed in its column, a task under a task, a parent you can't read, whether a bug counts as a task on a team that handles bugs as tasks, and the message when the child read fails.
-- Swimlanes: Lanes on a board with swimlanes and on one without, each card in the lane Azure DevOps puts it in, and the unnamed lane as Default lane.
-- Each of the four tabs at 360 px in light and dark, with real data: every card's project is visible without opening it, a project with several repositories splits and one with a single repository stays flat, and the pickers, the open groups, the view and the open wiki folders survive a reload.
 - Stage chips on every run card.
 
 ## License

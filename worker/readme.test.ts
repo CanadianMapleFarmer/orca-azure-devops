@@ -378,3 +378,22 @@ test('the pending live checks name the panel overhaul checks', async () => {
     assert.match(pending, topic)
   }
 })
+
+test('the pending live checks list each done-means check of the overhaul', async () => {
+  const text = await readme()
+  const start = text.indexOf('\nPanel overhaul:\n')
+  const pending = text.slice(start, text.indexOf('\n## License'))
+  for (const check of [
+    /every card's project is visible without opening it/,
+    /several repositories splits[^\n]*single repository stays flat/,
+    /project and repository pickers survive a reload/,
+    /nothing that showed before is missing/,
+    /\*\*Columns\*\* and \*\*Lanes\*\* on a board with swimlanes/,
+    /Work view and open groups survive a reload/,
+    /folders look different from pages/,
+    /both Mermaid forms drawn[^\n]*wide table readable/,
+    /Stage chips on every run card/
+  ]) {
+    assert.match(pending, check)
+  }
+})

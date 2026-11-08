@@ -111,7 +111,7 @@ Read from `out/main/index.js` (in `app.asar`), `out/main/chunks/orcad-migration-
 
 ## Live checks
 
-Every row above marked **pending live** is still pending (ruling R1). Task 13 runs these with the author present; fill the Result column when a check is run, then correct the code or README it contradicts.
+Every row above marked **pending live** is still pending (ruling R1). Task 13 verified the build offline and left these for a session with the author present, because each needs the author's organisation or Orca's own window. Rows (e) to (i) are design §8's presentation checks. Fill the Result column when a check is run, then correct the code or README it contradicts. The README lists the same checks under Panel overhaul.
 
 | Check | What to do | Rows it settles | Result |
 |-------|------------|-----------------|--------|
@@ -119,10 +119,16 @@ Every row above marked **pending live** is still pending (ruling R1). Task 13 ru
 | (b) | Read one real page with a `::: mermaid` block, one with `:::mermaid` and one with a fenced block, one with front matter, and one saved with CRLF. | S2 forms and front matter. | pending live |
 | (c) | On the author's organisation, load the Work tab with child tasks: tasks of others, done ones, one in a project the account can't read. Send one `fields` request with `$expand` and record the status and text. Note what the lane field holds for an item on the default lane. | S4 `errorPolicy`, the refusal, the default lane. | pending live |
 | (d) | On a process with bugs managed as tasks, read the backlog configuration and record `taskBacklog.workItemTypes`, `bugsBehavior` and `bugWorkItems.workItemTypes`; confirm the last field's name, which Task 6 reads (`worker/ado/board-config.ts:113`) without a source. | S4 task types. | pending live |
-| (e) | Each tab at 360 px, in light and dark. | Design §8. | pending live |
+| (e) | Open each of the four tabs (Work, Pipelines, PRs, Wiki) at 360 px, in the light and the dark theme, with real data. | Design §8, last bullet. | pending live |
+| (f) | PRs and Pipelines: read the project of every card without opening it. Find a project with several repositories and confirm it splits into repository sub-groups, and one with a single repository and confirm it stays flat. Pick a project and a repository, reload, and confirm both pickers come back. | Design §8, first and second bullets. | pending live |
+| (g) | Work: confirm every task sits under its parent or in No parent, and that nothing the tab showed before the overhaul is missing. Press Columns and Lanes on a board with swimlanes. Choose Lanes, close a group, reload, and confirm the view and the open groups come back. | Design §8, second bullet. | pending live |
+| (h) | Wiki: confirm a folder looks different from a page. Press Open in tab on a page with a diagram in each form and a wide table: both diagrams are drawn and the table is readable. Confirm the read-only behaviour (a refused save, an untouched file) that S1 predicted. | S1 (c), (d), (e); design §8, third bullet. | pending live |
+| (i) | Pipelines: confirm stage chips show on every run card. | Design §8, fourth bullet. | pending live |
 
 ## Decisions
 
 Settled offline in Task 0: the baseline (answers (a) to (e), the drift table and the notes), S1 (**Option A**: Orca's own Markdown view of a `0o444` copy, colon blocks fenced, the copy within 614,400 bytes, no Contents list), S2 (both colon spellings, colon blocks kept whole in `panelMarkdown`), S3 (every planned prop exists at 1.4.248; closed groups draw no children and are tested through `panel.tree()`; no `Box` marks) and S4 (no worker change for PRs and Pipelines; the child read's shape and the fixture).
 
 Open for the controller: the test-scope drift for T3 (carry the state-badge assertions into its rewrite), T4, T5, T6, T7, T9 and T11; the interface drift for T5, T6, T10 and T11; whether T6 should add the bug types for bugs managed as tasks once the live check answers; and whether the author wants the copy to render as the read-only preview.
+
+Task 13 (verification): `npm run typecheck`, the full test run (including the largest-fixture groups of Tasks 4 to 9 and 11), `orca plugin validate` and `orca plugin check` pass, and a public data scan of the branch diff against the local mock-ups found nothing beyond a common word. S1 to S4 stay settled offline as above. Rows (a) to (i) of Live checks, and the **pending live** cells of S1, S2 and S4, wait for a session with the author.
