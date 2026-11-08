@@ -1,4 +1,4 @@
-import { isColonCloser, isColonOpener } from '../src/shared/wiki-blocks'
+import { closesFence, fenceOf, isColonCloser, isColonOpener } from '../src/shared/wiki-blocks'
 import { decode, escapeText } from './ado/html-text'
 import { IMAGE_ALT, imageLink, MARKDOWN_CUT_NOTE, UNKNOWN_AUTHOR } from './messages'
 
@@ -40,8 +40,6 @@ const MAX_OPENERS = 32
 const MAX_LABEL = 999
 const INPUT_PER_BYTE = 16
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
-const FENCE_END = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
 const TOC = /^ {0,3}\[\[_(?:TOC|TOSP)_\]\][ \t]*$/
 const QUOTE_MARKS = /^(?: {0,3}>[ \t]?)*/
 const INTERRUPTS = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[-+*][ \t]|\d{1,9}[.)][ \t]|(?:[-*_][ \t]*){3,}$)/
@@ -152,11 +150,11 @@ function toUnits(text: string): Unit[] {
   let chunk: string[] | null = null
   for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     if (fence) {
-      if (closesFence(line, fence)) fence = ''
+      if (closesOpenFence(line, fence)) fence = ''
       units.push({ code: true, line, fence })
       continue
     }
-    const opened = html === undefined ? fenceOf(line) : ''
+    const opened = html === undefined ? openingFence(line) : ''
     if (opened) {
       fence = opened
       chunk = null
@@ -190,16 +188,12 @@ function prose(units: Unit[], line: string): string[] {
   return lines
 }
 
-function fenceOf(line: string): string {
-  if (isColonOpener(line)) return COLON_FENCE
-  const found = FENCE.exec(line)
-  return found && !(found[1][0] === '`' && found[2].includes('`')) ? found[1] : ''
+function openingFence(line: string): string {
+  return isColonOpener(line) ? COLON_FENCE : (fenceOf(line)?.fence ?? '')
 }
 
-function closesFence(line: string, fence: string): boolean {
-  if (fence === COLON_FENCE) return isColonCloser(line)
-  const found = FENCE_END.exec(line)
-  return found !== null && found[1][0] === fence[0] && found[1].length >= fence.length
+function closesOpenFence(line: string, fence: string): boolean {
+  return fence === COLON_FENCE ? isColonCloser(line) : closesFence(line, fence)
 }
 
 function htmlBlock(line: string, inParagraph: boolean): RegExp | null | undefined {

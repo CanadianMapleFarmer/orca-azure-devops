@@ -1,7 +1,7 @@
 import * as path from 'node:path'
 import type { WikiPage, WikiPageRef } from '../../src/shared/wiki'
 import { fenceAfter, toFencedMermaid } from '../../src/shared/wiki-blocks'
-import { NO_LOCAL_WORKSPACE_WIKI, openedReader, READER_CUT_NOTE, readerBanner } from '../messages'
+import { NO_LOCAL_WORKSPACE_WIKI, openedReader, READER_CUT_NOTE, READER_OUTSIDE, readerBanner } from '../messages'
 import { ensureTabFolder, TAB_FOLDER } from '../tab-files'
 import { focusedWorkspace, type HostCall } from '../workspace/focused'
 import { assertInside, readerName, type DraftFs } from './draft-files'
@@ -41,7 +41,7 @@ export function createReader(deps: { wiki: Pick<WikiService, 'wiki' | 'page'>; c
 }
 
 async function writeReadOnly(fs: ReaderFs, workspacePath: string, name: string, text: string): Promise<void> {
-  const file = await assertInside(fs, workspacePath, name)
+  const file = await assertInside(fs, workspacePath, name, READER_OUTSIDE)
   await ensureTabFolder(fs, workspacePath)
   const current = await fs.readFile(file, 'utf8').catch(error => {
     if (error?.code === 'ENOENT') return null

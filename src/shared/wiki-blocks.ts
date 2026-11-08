@@ -108,13 +108,13 @@ function firstLine(body: string): string {
   return lines.slice(start).find(line => line !== '' && !line.startsWith(COMMENT)) ?? ''
 }
 
-function fenceOf(line: string): { fence: string; info: string } | null {
+export function fenceOf(line: string): { fence: string; info: string } | null {
   const found = FENCE.exec(line)
   if (!found || (found[1][0] === '`' && found[2].includes('`'))) return null
   return { fence: found[1], info: found[2].trim() }
 }
 
-function closesFence(line: string, fence: string): boolean {
+export function closesFence(line: string, fence: string): boolean {
   const found = FENCE_END.exec(line)
   return found !== null && found[1][0] === fence[0] && found[1].length >= fence.length
 }

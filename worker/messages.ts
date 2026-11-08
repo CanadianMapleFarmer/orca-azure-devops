@@ -131,6 +131,7 @@ export const WIKI_READ_ONLY = 'This wiki is published from a repository. Edit it
 export const WIKI_SEARCH_UNAVAILABLE = "Wiki search isn't available in this organization."
 export const BAD_TAB_FILE = "That file name can't be used."
 export const DRAFT_OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
+export const READER_OUTSIDE = "The .orca-ado folder leads outside this workspace or is in the way, so the page wasn't opened."
 export const DRAFT_WORKSPACE_GONE = 'The workspace holding this draft is gone. Discard the draft to edit the page again.'
 export const NO_LOCAL_WORKSPACE_WIKI = 'Open a local workspace first; wiki pages open in a tab there.'
 export const WIKI_PAGE_TOO_LARGE = 'This page is too large to edit here. Edit it in Azure DevOps.'

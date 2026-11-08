@@ -55,10 +55,10 @@ export function theirsName(draft: string): string {
   return `${WIKI_FOLDER}/${THEIRS_FOLDER}/${insideWiki(draft)}`
 }
 
-export async function assertInside(fs: DraftFs, workspacePath: string, relative: string): Promise<string> {
+export async function assertInside(fs: DraftFs, workspacePath: string, relative: string, outside = DRAFT_OUTSIDE): Promise<string> {
   const segments = relative.split('/')
   if (path.isAbsolute(relative) || relative.includes('\\') || segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
-    throw badRequest(DRAFT_OUTSIDE)
+    throw badRequest(outside)
   }
   const root = await fs.realpath(workspacePath)
   const parts = [TAB_FOLDER, ...segments]
@@ -75,7 +75,7 @@ export async function assertInside(fs: DraftFs, workspacePath: string, relative:
     if (wrongKind && depth > WIKI_DEPTH && parts[WIKI_DEPTH - 1] === WIKI_FOLDER) {
       throw badRequest(draftPathTaken(parts.slice(WIKI_DEPTH, depth).join('/')))
     }
-    throw badRequest(DRAFT_OUTSIDE)
+    throw badRequest(outside)
   }
   return path.join(root, TAB_FOLDER, relative)
 }

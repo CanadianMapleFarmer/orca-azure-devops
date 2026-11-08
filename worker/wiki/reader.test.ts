@@ -4,11 +4,11 @@ import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
 import type { OrgStatus } from '../../src/shared/types'
 import type { WikiPage, WikiPageRef } from '../../src/shared/wiki'
-import { createAdoHttp } from '../ado/http'
+import { AdoError, createAdoHttp } from '../ado/http'
 import { ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
 import { ME } from '../prs/fake-prs'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
-import { listing, outside } from './draft-test-support'
+import { listing } from './draft-test-support'
 import { fakeWiki, isPage } from './fake-wiki'
 import { createReader, MAX_READER_BYTES, readerMarkdown, type ReaderFs } from './reader'
 import { createWikiService } from './service'
@@ -27,6 +27,7 @@ const NO_WORKSPACE = 'Open a local workspace first; wiki pages open in a tab the
 const TOO_LONG = '\n\n*This page is too long to show here in full. Open it in Azure DevOps to read the rest.*'
 const PANEL_CUT_NOTE = 'The rest is in Azure DevOps.'
 const READ_ONLY = 0o444
+const READER_OUTSIDE = "The .orca-ado folder leads outside this workspace or is in the way, so the page wasn't opened."
 
 const PAGE = [
   '# Release flow',
@@ -107,6 +108,14 @@ function harness(workspaces: WorkspaceEntry[], files: ReaderFs = fs) {
 
 function ref(pagePath: string, wikiId = WIKI): WikiPageRef {
   return { org: ORG, projectId: PROJECT, wikiId, path: pagePath }
+}
+
+function refused(label: string): (error: unknown) => boolean {
+  return error => {
+    assert.ok(error instanceof AdoError, `${label}: expected an AdoError, got ${String(error)}`)
+    assert.deepEqual([error.code, error.status, error.message], ['bad_request', 400, READER_OUTSIDE], label)
+    return true
+  }
 }
 
 function onDisk(dir: string, name: string): string {
@@ -232,7 +241,7 @@ test('the copy stays inside .orca-ado and refuses a symlinked folder', async () 
       const h = harness([workspace(web)])
       await plant(web, outsideDir)
       const before = [await listing(outsideDir), await listing(web)]
-      await assert.rejects(h.reader.openInTab(ref(CHECKLIST)), outside(label))
+      await assert.rejects(h.reader.openInTab(ref(CHECKLIST)), refused(label))
       assert.deepEqual([await listing(outsideDir), await listing(web)], before, `${label}: nothing is written, outside or in the workspace`)
       assert.deepEqual(h.opened, [], label)
     })
@@ -246,6 +255,24 @@ test('the copy stays inside .orca-ado and refuses a symlinked folder', async () 
     assert.deepEqual(await fs.readdir(web), ['.orca-ado'])
     assert.deepEqual(await fs.readdir(outsideDir), [])
   })
+})
+
+test('a file and a folder wanting the same name refuse with the reader wording, whichever came first', async () => {
+  const folderPage = '/Release process/Checklist.md/Steps'
+  for (const [label, first, second] of [
+    ['the file first', CHECKLIST, folderPage],
+    ['the folder first', folderPage, CHECKLIST]
+  ]) {
+    await withDirs(1, async ([web]) => {
+      const h = harness([workspace(web)])
+      h.ado.pages.set(folderPage, { content: 'Steps.\n', etag: '"1"' })
+      assert.equal((await h.reader.openInTab(ref(first))).opened, true, label)
+      const before = await listing(web)
+      await assert.rejects(h.reader.openInTab(ref(second)), refused(label))
+      assert.deepEqual(await listing(web), before, `${label}: nothing is written`)
+      assert.equal(h.opened.length, 1, label)
+    })
+  }
 })
 
 test('a changed page rewrites a read-only copy and leaves it read-only', async () => {
