@@ -21,7 +21,7 @@ const wide = (columns: number, row = 'x') => {
 }
 
 test('pageSegments keeps every line outside diagrams and wide tables', () => {
-  const crlf = ['# Release', '', '::: mermaid', 'graph TD', '  A --> B', ':::', '', '| a | b | c | d |', '|---|---|---|---|', '| 1 | 2 | 3 | 4 |', 'After the table', ''].join('\r\n')
+  const crlf = ['# Release', '', ':::mermaid', 'graph TD', '  A --> B', ':::', '', '| a | b | c | d |', '|---|---|---|---|', '| 1 | 2 | 3 | 4 |', 'After the table', ''].join('\r\n')
   const crlfSegments = pageSegments(crlf)
   assert.deepEqual(summary(crlfSegments), [
     ['markdown', 0, 1],

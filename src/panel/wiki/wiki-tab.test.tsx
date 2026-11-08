@@ -381,8 +381,12 @@ test('choosing a page shows it rendered with Open in Azure DevOps', async () => 
 })
 
 test('a page shows a back link to its parent, the title and one row of actions', async () => {
-  let answer: { opened: boolean; message: string } = { opened: false, message: 'Open a local workspace first; wiki pages open in a tab there.' }
-  await open({ 'wiki.edit': () => answer }, { persisted: { workspace: { wikiPage: OPEN_PAGE } } })
+  const editRefusal = 'Open a local workspace first; wiki pages open in a tab there.'
+  const tabRefusal = 'Open a local workspace of this wiki first.'
+  await open(
+    { 'wiki.edit': () => ({ opened: false, message: editRefusal }), 'wiki.openInTab': () => ({ opened: false, message: tabRefusal }) },
+    { persisted: { workspace: { wikiPage: OPEN_PAGE } } }
+  )
   assert.deepEqual(
     panel.findAll({ type: 'Link' }).map(link => link.text),
     ['‹ Runbooks', 'Open in Azure DevOps']
@@ -414,13 +418,20 @@ test('a page shows a back link to its parent, the title and one row of actions',
   const refresh = panel.find({ type: 'IconButton', label: 'Refresh' })
   assert.deepEqual([refresh?.props.variant, refresh?.props.size], ['ghost', 'sm'])
 
-  await panel.press({ type: 'Button', text: 'Edit in Orca' })
   await panel.press({ type: 'Button', text: 'Open in tab' })
-  const later = walkNodes(panel.tree())
-  assert.deepEqual(typesOf(headerOf(later)), ['Stack', 'Row', 'Callout'], "Edit's result sits under the row")
+  const tabbed = walkNodes(panel.tree())
+  assert.deepEqual(typesOf(headerOf(tabbed)), ['Stack', 'Row', 'Callout'], "Open in tab's refusal sits under the row")
   assert.deepEqual(
-    later.filter(node => node.type === 'Callout').map(callout => textOf(callout)),
-    ['Open a local workspace first; wiki pages open in a tab there.']
+    tabbed.filter(node => node.type === 'Callout').map(callout => textOf(callout)),
+    [tabRefusal]
+  )
+
+  await panel.press({ type: 'Button', text: 'Edit in Orca' })
+  const edited = walkNodes(panel.tree())
+  assert.deepEqual(typesOf(headerOf(edited)), ['Stack', 'Row', 'Callout', 'Callout'], "Edit's result sits under the row too")
+  assert.deepEqual(
+    edited.filter(node => node.type === 'Callout').map(callout => textOf(callout)),
+    [editRefusal, tabRefusal]
   )
 })
 
