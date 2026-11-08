@@ -2,6 +2,7 @@ import { atom, plugin, read, set, update } from 'orca'
 import { messageOf } from '../../shared/messages'
 import type { ApprovalSummary, RunActionResult, RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import type { OrgStatus } from '../../shared/types'
+import type { Place } from '../grouping'
 import { LONG_WAIT } from '../state'
 import { syncSurface, type SyncedSurface } from '../surface-sync'
 import { surfaceVisibility } from '../visibility'
@@ -34,11 +35,11 @@ export const hidePipelines = visibility.hide
 
 export const confirmOf = (approvalId: string): Confirm | undefined => read(confirms)[approvalId]
 
-export const outcomeOf = (approvalId: string): Outcome | undefined => read(outcomes).find(outcome => outcome.approvalId === approvalId)
+export const outcomesOf = (run: RunSummary): Outcome[] => read(outcomes).filter(outcome => outcome.buildId === run.buildId)
 
-export function orphanOutcomes(run: RunSummary): Outcome[] {
-  return read(outcomes).filter(outcome => outcome.buildId === run.buildId && !run.approvals.some(approval => approval.approvalId === outcome.approvalId))
-}
+export const runPlaces = (run: RunSummary): Place[] => [
+  { projectId: run.projectId, projectName: run.projectName, repoId: run.repository?.id ?? null, repoName: run.repository?.name ?? null }
+]
 
 export const noteOf = (buildId: number): string | undefined => read(runNotes)[buildId]
 

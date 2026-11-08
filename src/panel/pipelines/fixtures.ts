@@ -65,3 +65,26 @@ export function waitingRun(buildId: number, approvals: ApprovalSummary[], over: 
     ...over
   })
 }
+
+const LARGE_PLACES: Pick<RunSummary, 'projectId' | 'projectName' | 'repository'>[] = [
+  { projectId: 'proj-web', projectName: 'Fabrikam Web', repository: { id: 'repo-web-app', name: 'web-app' } },
+  { projectId: 'proj-web', projectName: 'Fabrikam Web', repository: { id: 'repo-api', name: 'fabrikam-api' } },
+  { projectId: 'proj-tools', projectName: 'Contoso Tools', repository: { id: 'repo-tools-app', name: 'web-app' } },
+  { projectId: 'proj-boards', projectName: 'Fabrikam Boards', repository: { id: 'repo-boards', name: 'boards-app' } }
+]
+
+export function largeRuns(): RunSummary[] {
+  const stages = Array.from({ length: 12 }, (_, index) => stageOf(`Stage number ${index + 1}`, index < 8 ? 'succeeded' : 'waiting'))
+  return Array.from({ length: 30 }, (_, index) => {
+    const buildId = 2000 + index
+    const place = LARGE_PLACES[index % LARGE_PLACES.length]
+    const approval = approvalOf(`ap-${index}`, buildId, {
+      projectId: place.projectId,
+      canApprove: true,
+      instructions: 'z'.repeat(600),
+      minRequired: 2,
+      approvers: Array.from({ length: 3 }, (_, who) => ({ id: `u-${who}`, name: `Approver ${who}`, uniqueName: `a${who}@contoso.com`, isGroup: who === 2 }))
+    })
+    return waitingRun(buildId, [approval], { ...place, stages, watched: index % 2 === 0 })
+  })
+}

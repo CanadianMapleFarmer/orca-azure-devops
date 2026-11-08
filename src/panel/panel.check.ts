@@ -122,8 +122,11 @@ const prsSnapshot = snapshotOf({
 
 const runsSnapshot = runsSnapshotOf({
   runs: [
-    waitingRun(3, [approvalOf('approval-3', 3, { canApprove: true, instructions: 'Check the smoke tests before approving.' })]),
+    waitingRun(3, [approvalOf('approval-3', 3, { canApprove: true, instructions: 'Check the smoke tests before approving.' })], {
+      repository: { id: 'repo-web-app', name: 'web-app' }
+    }),
     runOf(2, {
+      repository: { id: 'repo-api', name: 'fabrikam-api' },
       state: 'running',
       startedAt: RUN_NOW - 4 * MINUTE,
       finishedAt: null,
@@ -131,6 +134,9 @@ const runsSnapshot = runsSnapshotOf({
       stages: [stageOf('Build', 'succeeded'), stageOf('Image', 'running'), stageOf('Deploy production', 'pending')]
     }),
     runOf(1, {
+      projectId: 'proj-tools',
+      projectName: 'Contoso Tools',
+      repository: { id: 'repo-tools-app', name: 'web-app' },
       state: 'failed',
       prId: 77,
       finishedAt: RUN_NOW - 12 * MINUTE,
