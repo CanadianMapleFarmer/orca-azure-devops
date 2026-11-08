@@ -1,47 +1,70 @@
-import { Badge, Box, Button, Callout, Collapsible, EmptyState, IconButton, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
-import type { OrgStatus } from '../../shared/types'
-import type { WorkItemSummary, WorkSnapshot } from '../../shared/work'
-import { openSettings } from '../org-settings'
-import { LoadFailure, SnapshotMessage } from '../snapshot-parts'
-import { ItemCard } from './item-card'
-import { ItemDetails } from './item-details'
+import { Badge, Button, Callout, EmptyState, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { MAX_CHIPS } from '../../shared/chips'
 import { NO_BOARDS } from '../../shared/messages'
-import { closedGroups, dismiss, load, move, notice, openBoard, openItem, refresh, refreshing, retryLoad, setGroupOpen, snapshot } from './state'
+import type { BoardsTarget, OrgStatus } from '../../shared/types'
+import type { WorkSnapshot } from '../../shared/work'
+import { counted, showMore } from '../copy'
+import { isFoldOpen } from '../folds'
+import { Group } from '../group'
+import { cutLabel } from '../label'
+import { openSettings } from '../org-settings'
+import { LoadFailure } from '../snapshot-parts'
+import { foldActions, TabToolbar, type ToolAction } from '../toolbar'
+import { ItemCard, ParentCard } from './item-card'
+import { ItemDetails } from './item-details'
+import { byColumn, GROUP_PAGE, planWork, tasksKey, tasksOpenByDefault, WORK_NODE_BUDGET, type TaskRow, type WorkCard, type WorkPlan } from './plan'
+import { dismiss, load, move, notice, openBoard, openItem, pages, refresh, refreshing, retryLoad, showNextPage, snapshot } from './state'
+import { TaskRows } from './task-rows'
 
-const MAX_CARDS = 300
 const MAX_NUDGES = 10
+const CARD_NODES = 12
+const BADGE_NODES = 2
+const ROW_NODES = 8
+const GROUP_NODES = 4
+const NOT_ON_BOARD = 'Not on this board'
+const UNKNOWN_TYPE = 'Unknown type'
+const NO_PARENT = 'No parent'
+const SOME_HIDDEN = 'Some items are hidden. Collapse a group to see others.'
 
-function columnGroups(current: WorkSnapshot): { name: string; items: WorkItemSummary[] }[] {
-  const names = current.board?.columns.map(column => column.name) ?? []
-  const groups = new Map(names.map(name => [name, [] as WorkItemSummary[]]))
-  for (const item of current.mine) {
-    const name = item.column !== null && groups.has(item.column) ? item.column : (names[0] ?? item.column ?? 'No column')
-    const list = groups.get(name)
-    if (list) list.push(item)
-    else groups.set(name, [item])
-  }
-  return [...groups].filter(([, items]) => items.length > 0).map(([name, items]) => ({ name, items }))
+interface Draw {
+  org: string
+  left: number
+  hidden: boolean
+  shown: Record<string, number>
 }
 
-function Header({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+function fits(draw: Draw, nodes: number): boolean {
+  if (draw.hidden || draw.left < nodes) {
+    draw.hidden = true
+    return false
+  }
+  draw.left -= nodes
+  return true
+}
+
+function fitting<T>(draw: Draw, items: readonly T[], nodes: number): T[] {
+  const kept: T[] = []
+  for (const item of items) {
+    if (!fits(draw, nodes)) break
+    kept.push(item)
+  }
+  return kept
+}
+
+function Toolbar({ org, boards, current }: { org: string; boards: BoardsTarget; current: WorkSnapshot }): OrcaNode {
+  const actions: ToolAction[] = [
+    ...foldActions(org, 'work'),
+    { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
+    { icon: 'open-external', label: 'Open board', onPress: () => openBoard(org) }
+  ]
   return (
-    <Stack gap="xs">
-      <Row justify="between" align="center" gap="sm">
-        <Box grow shrink minWidth={0}>
-          <Row gap="sm" align="center" wrap>
-            {current.board ? <Badge>{current.board.boardName}</Badge> : null}
-            <Text muted size="sm">
-              Updated <RelativeTime at={current.updatedAt} />
-            </Text>
-          </Row>
-        </Box>
-        <Row gap="xs" align="center">
-          <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={read(refreshing)} onPress={() => refresh(org)} />
-          <IconButton icon="open-external" label="Open board" variant="ghost" size="sm" onPress={() => openBoard(org)} />
-        </Row>
-      </Row>
-      <SnapshotMessage message={current.message} stale={current.stale} />
-    </Stack>
+    <TabToolbar
+      left={current.board ? <Badge>{cutLabel(`${boards.teamName} · ${current.board.boardName}`)}</Badge> : null}
+      actions={actions}
+      updatedAt={current.updatedAt}
+      message={current.message}
+      stale={current.stale}
+    />
   )
 }
 
@@ -81,32 +104,89 @@ function moreNudges(count: number): string {
   return count === 1 ? '1 more suggestion not shown.' : `${count} more suggestions not shown.`
 }
 
-function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
-  const total = current.mine.length + current.other.length
-  if (total === 0) return <EmptyState title="Nothing assigned to you on this board" />
-  const groups = columnGroups(current).map(group => ({ key: `column:${group.name}`, ...group }))
-  if (current.other.length > 0) groups.push({ key: 'other', name: 'Other', items: current.other })
-  const closed = read(closedGroups)
-  let room = MAX_CARDS
-  const shown = groups.map(group => {
-    const items = group.items.slice(0, room)
-    room -= items.length
-    return { ...group, count: group.items.length, items }
-  })
+function cardNodes(card: WorkCard): number {
+  const prs = card.item?.prs.length ?? 0
+  return CARD_NODES + BADGE_NODES * (Math.min(prs, MAX_CHIPS) + (prs > MAX_CHIPS ? 1 : 0))
+}
+
+function cardBlock(draw: Draw, card: WorkCard): OrcaNode {
+  if (!fits(draw, cardNodes(card))) return null
+  const open = card.total > 0 && isFoldOpen(draw.org, 'work', tasksKey(card.id), tasksOpenByDefault(card))
+  const rows = open ? fitting(draw, card.tasks, ROW_NODES) : []
+  return (
+    <Stack key={card.key} gap="xs">
+      {card.item ? <ItemCard org={draw.org} item={card.item} card={card} open={open} /> : <ParentCard org={draw.org} card={card} open={open} />}
+      {rows.length > 0 || (open && card.more > 0) ? <TaskRows org={draw.org} rows={rows} more={card.more} /> : null}
+    </Stack>
+  )
+}
+
+function paged<T>(draw: Draw, key: string, items: readonly T[], drawEach: (shown: readonly T[]) => OrcaNode): OrcaNode {
+  const limit = draw.shown[key] ?? GROUP_PAGE
+  const body = drawEach(items.slice(0, limit))
+  const left = items.length - limit
   return (
     <Stack gap="sm">
-      {shown.map(group => (
-        <Collapsible key={group.key} title={`${group.name} (${group.count})`} open={!closed.includes(group.key)} onChange={open => setGroupOpen(group.key, open)}>
-          <Stack gap="sm">
-            {group.items.map(item => (
-              <ItemCard key={item.id} org={org} item={item} />
-            ))}
-          </Stack>
-        </Collapsible>
-      ))}
-      {total > MAX_CARDS ? (
+      {body}
+      {left > 0 && !draw.hidden ? (
+        <Button size="sm" variant="ghost" onPress={() => showNextPage(key)}>
+          {showMore(Math.min(GROUP_PAGE, left))}
+        </Button>
+      ) : null}
+    </Stack>
+  )
+}
+
+function drawGroup(draw: Draw, key: string, title: string, count: string, body: () => OrcaNode): OrcaNode {
+  draw.left -= GROUP_NODES
+  const open = isFoldOpen(draw.org, 'work', key)
+  return (
+    <Group key={key} org={draw.org} tab="work" foldKey={key} title={title} count={count}>
+      {open ? body() : null}
+    </Group>
+  )
+}
+
+function cardGroup(draw: Draw, key: string, title: string, cards: readonly WorkCard[]): OrcaNode {
+  return drawGroup(draw, key, title, counted(cards.length, 'item', 'items'), () => paged(draw, key, cards, shown => shown.map(card => cardBlock(draw, card))))
+}
+
+function offBoardGroup(draw: Draw, plan: WorkPlan): OrcaNode {
+  const total = plan.offBoard.reduce((sum, type) => sum + type.cards.length, 0) + plan.unknown.length
+  if (total === 0) return null
+  return drawGroup(draw, 'offboard', NOT_ON_BOARD, counted(total, 'item', 'items'), () => (
+    <Stack gap="sm">
+      {plan.offBoard.map(type => cardGroup(draw, `offboard/type:${type.type}`, type.type, type.cards))}
+      {plan.unknown.length > 0 ? cardGroup(draw, 'offboard/unknown', UNKNOWN_TYPE, plan.unknown) : null}
+    </Stack>
+  ))
+}
+
+function noParentGroup(draw: Draw, rows: readonly TaskRow[]): OrcaNode {
+  if (rows.length === 0) return null
+  return drawGroup(draw, 'noparent', NO_PARENT, counted(rows.length, 'task', 'tasks'), () =>
+    paged(draw, 'noparent', rows, shown => {
+      const drawn = fitting(draw, shown, ROW_NODES)
+      return drawn.length > 0 ? <TaskRows org={draw.org} rows={drawn} more={0} /> : null
+    })
+  )
+}
+
+function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+  const plan = planWork(current)
+  if (plan.board.length + plan.offBoard.length + plan.unknown.length + plan.noParent.length === 0) {
+    return <EmptyState title="Nothing assigned to you on this board" />
+  }
+  const draw: Draw = { org, left: WORK_NODE_BUDGET, hidden: false, shown: read(pages) }
+  const columns = byColumn(plan.board, current.board ?? { columns: [] })
+  return (
+    <Stack gap="sm">
+      {columns.map(column => cardGroup(draw, `column:${column.name}`, column.name, column.cards))}
+      {offBoardGroup(draw, plan)}
+      {noParentGroup(draw, plan.noParent)}
+      {draw.hidden ? (
         <Text size="sm" muted>
-          {`Showing ${MAX_CARDS} of ${total} items. Open the board to see the rest.`}
+          {SOME_HIDDEN}
         </Text>
       ) : null}
     </Stack>
@@ -133,7 +213,7 @@ export function WorkTab({ org }: { org: OrgStatus }): OrcaNode {
   const shown = read(notice)
   return (
     <Stack gap="md">
-      <Header org={org.org} current={current} />
+      <Toolbar org={org.org} boards={org.boards} current={current} />
       {shown ? <Callout tone={shown.tone}>{shown.text}</Callout> : null}
       <Nudges org={org.org} current={current} />
       <Groups org={org.org} current={current} />

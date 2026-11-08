@@ -1,10 +1,11 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import { NO_FAMILIES, type WorkItemSummary, type WorkSnapshot } from '../shared/work'
+import type { WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
 import { draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
+import { BOARDS, item, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -20,76 +21,39 @@ function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-const BOARDS = { projectId: 'proj-web', projectName: 'Fabrikam Web', teamId: 'team-web', teamName: 'Web Team' }
 const NOW = 1_700_000_000_000
+const states = { columns: [], states: ['New', 'Active', 'Resolved', 'Closed'] }
 
-function item(id: number, over: Partial<WorkItemSummary>): WorkItemSummary {
-  return {
-    org: 'contoso',
-    id,
-    rev: 3,
-    type: 'User Story',
-    title: `Story ${id}`,
-    state: 'Active',
-    column: 'Active',
-    columnDone: false,
-    lane: null,
-    assignedTo: 'Ada Lovelace',
-    parentId: null,
-    parentTitle: null,
-    changedAt: NOW,
-    url: `https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/${id}`,
-    prs: [],
-    targets: { columns: ['New', 'Active', 'Done'], states: [] },
-    ...over
-  }
-}
-
-const prOf = (prId: number, over: Partial<WorkItemSummary['prs'][number]>): WorkItemSummary['prs'][number] => ({
-  prId,
-  repoId: 'repo-web',
-  projectId: BOARDS.projectId,
-  target: 'main',
-  state: 'open',
-  build: 'none',
-  url: `https://dev.azure.com/contoso/Fabrikam%20Web/_git/web/pullrequest/${prId}`,
-  ...over
-})
-
-const workSnapshot: WorkSnapshot = {
-  org: 'contoso',
-  board: {
-    org: 'contoso',
-    projectId: BOARDS.projectId,
-    teamId: BOARDS.teamId,
-    boardId: 'board-stories',
-    boardName: 'Stories',
-    requirementTypes: ['User Story'],
-    columns: ['New', 'Active', 'Done'].map((name, index) => ({
-      id: `col-${index}`,
-      name,
-      isSplit: false,
-      columnType: index === 0 ? 'incoming' : index === 2 ? 'outgoing' : 'inProgress',
-      stateMappings: { 'User Story': name }
-    })),
-    lanes: [],
-    fields: { column: 'WEF_1_Kanban.Column', columnDone: 'WEF_1_Kanban.Column.Done', lane: 'WEF_1_Kanban.Lane' },
-    areaPaths: [],
-    doneStates: {}
-  },
+const workSnapshot: WorkSnapshot = snapshotOfWork({
   mine: [
-    item(101, { title: 'Fix the sign-in redirect that sends people to the wrong page', column: 'Active', prs: [prOf(55, { state: 'merged' })] }),
-    item(102, { title: 'Add CSV export', column: 'New', prs: [prOf(56, { build: 'running' }), prOf(57, { target: 'release', build: 'failed' })] }),
+    item(101, { title: 'Fix the sign-in redirect that sends people to the wrong page', column: 'Active', prs: [pr(55, { state: 'merged' })] }),
+    item(102, { title: 'Add CSV export', column: 'New', prs: [pr(56, { build: 'running' }), pr(57, { target: 'release', build: 'failed' })] }),
     item(103, { title: 'Cache invalidation', column: 'Active' })
   ],
   other: [
-    item(201, { type: 'Task', title: 'Update the runbook', state: 'New', column: null, targets: { columns: [], states: ['Active', 'Closed'] } })
+    item(210, { type: 'Feature', title: 'Checkout revamp', column: null, targets: states }),
+    task(201, { title: 'Update the runbook', state: 'New', targets: { columns: [], states: ['Active', 'Closed'] } }),
+    task(301, { title: 'Write the redirect tests', parentId: 101, parentTitle: 'Fix the sign-in redirect that sends people to the wrong page' }),
+    task(304, { title: 'Draft the delivery copy', parentId: 150, parentTitle: 'Show the delivery estimate' }),
+    task(305, { title: 'Check the payment flags', parentId: 210, parentTitle: 'Checkout revamp' })
   ],
   nudges: [{ itemId: 101, prId: 55, branch: 'main', toColumn: 'Done' }],
-  families: NO_FAMILIES,
-  updatedAt: NOW,
-  stale: false
-}
+  families: {
+    parents: [parentOf(150, { title: 'Show the delivery estimate', column: 'Active' })],
+    lists: [
+      listOf(
+        101,
+        [
+          workTask(301, { title: 'Write the redirect tests', mine: true, assignee: 'Ada Lovelace' }),
+          workTask(302, { title: 'Update the sign-in copy', assignee: null }),
+          workTask(303, { title: 'Reproduce on staging', state: 'Closed', done: true, assignee: 'Grace Hopper' })
+        ],
+        { total: 4, done: 2 }
+      ),
+      listOf(150, [workTask(304, { title: 'Draft the delivery copy', mine: true, assignee: 'Ada Lovelace' }), workTask(306, { title: 'Pick the estimate rules' })])
+    ]
+  }
+})
 
 const WEB_API = { repoId: 'repo-api', repoName: 'fabrikam-api' }
 const TOOLS_APP = { projectId: 'proj-tools', projectName: 'Contoso Tools', repoId: 'repo-tools-app', repoName: 'web-app' }

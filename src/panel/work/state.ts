@@ -2,9 +2,9 @@ import { atom, plugin, read, set, update } from 'orca'
 import { messageOf } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { MoveTarget, Nudge, WorkSnapshot } from '../../shared/work'
-import { foldedAfter } from '../folds'
 import { tab } from '../state'
 import { hostIsVisible, surfaceVisibility } from '../visibility'
+import { GROUP_PAGE } from './plan'
 
 export type Load = { status: 'loading' | 'ready' } | { status: 'failed'; message: string }
 export type Notice = { tone: 'danger' | 'neutral'; text: string }
@@ -16,7 +16,7 @@ export const notice = atom<Notice | null>(null)
 export const refreshing = atom(false)
 export const openItem = atom<{ org: string; id: number } | null>(null)
 export const moveResets = atom(0)
-export const closedGroups = atom<string[]>([])
+export const pages = atom<Record<string, number>>({})
 const source = atom<Source | null>(null)
 const visibility = surfaceVisibility('work')
 
@@ -39,7 +39,7 @@ function align(wanted: Source | null, visibleOrg: string | null): void {
     set(source, wanted)
     set(snapshot, null)
     set(openItem, null)
-    set(closedGroups, [])
+    set(pages, {})
     set(notice, null)
     set(refreshing, false)
     if (wanted) void loadSnapshot(wanted)
@@ -58,8 +58,8 @@ export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
   void Promise.resolve().then(() => align(wanted, visibleOrg))
 }
 
-export function setGroupOpen(key: string, open: boolean): void {
-  update(closedGroups, keys => foldedAfter(keys, key, open))
+export function showNextPage(key: string): void {
+  update(pages, shown => ({ ...shown, [key]: (shown[key] ?? GROUP_PAGE) + GROUP_PAGE }))
 }
 
 export function acceptChange(next: WorkSnapshot): void {
