@@ -84,7 +84,7 @@ export function snapshotOf(over: Partial<WorkSnapshot> = {}): WorkSnapshot {
 }
 
 const LARGE_COLUMNS = ['New', 'Ready', 'Active', 'Review', 'Done']
-const LARGE_LANES = [
+export const LANES = [
   { id: 'lane-default', name: '' },
   { id: 'lane-expedite', name: 'Expedite' }
 ]
@@ -128,7 +128,7 @@ export function largeWork(): WorkSnapshot {
     )
   ]
   return snapshotOf({
-    board: board('contoso', { lanes: LARGE_LANES }, LARGE_COLUMNS),
+    board: board('contoso', { lanes: LANES }, LARGE_COLUMNS),
     mine: stories,
     other: [...features, bug, ...myTasks],
     families: { lists, parents }

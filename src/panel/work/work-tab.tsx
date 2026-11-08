@@ -8,11 +8,12 @@ import { isFoldOpen } from '../folds'
 import { Group } from '../group'
 import { cutLabel } from '../label'
 import { openSettings } from '../org-settings'
+import { chooseWorkView, workViewIn, workViewKey, workViews, type WorkView } from '../prefs'
 import { LoadFailure } from '../snapshot-parts'
 import { foldActions, TabToolbar, type ToolAction } from '../toolbar'
 import { ItemCard, ParentCard } from './item-card'
 import { ItemDetails } from './item-details'
-import { byColumn, GROUP_PAGE, planWork, tasksKey, tasksOpenByDefault, WORK_NODE_BUDGET, type TaskRow, type WorkCard, type WorkPlan } from './plan'
+import { byColumn, byLane, GROUP_PAGE, planWork, tasksKey, tasksOpenByDefault, WORK_NODE_BUDGET, type LaneGroup, type TaskRow, type WorkCard, type WorkPlan } from './plan'
 import { dismiss, load, move, notice, openBoard, openItem, pages, refresh, refreshing, retryLoad, showNextPage, snapshot } from './state'
 import { TaskRows } from './task-rows'
 
@@ -25,6 +26,7 @@ const NOT_ON_BOARD = 'Not on this board'
 const UNKNOWN_TYPE = 'Unknown type'
 const NO_PARENT = 'No parent'
 const SOME_HIDDEN = 'Some items are hidden. Collapse a group to see others.'
+const NO_SWIMLANES = 'This board has no swimlanes, so Lanes shows the columns.'
 
 interface Draw {
   org: string
@@ -51,15 +53,29 @@ function fitting<T>(draw: Draw, items: readonly T[], nodes: number): T[] {
   return kept
 }
 
-function Toolbar({ org, boards, current }: { org: string; boards: BoardsTarget; current: WorkSnapshot }): OrcaNode {
+function Toolbar({ org, boards, current, view }: { org: string; boards: BoardsTarget; current: WorkSnapshot; view: WorkView }): OrcaNode {
   const actions: ToolAction[] = [
     ...foldActions(org, 'work'),
     { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
     { icon: 'open-external', label: 'Open board', onPress: () => openBoard(org) }
   ]
+  const key = workViewKey(org, boards)
+  const choose = (next: WorkView) => (view === next ? 'solid' : 'ghost')
   return (
     <TabToolbar
-      left={current.board ? <Badge>{cutLabel(`${boards.teamName} · ${current.board.boardName}`)}</Badge> : null}
+      left={
+        <>
+          {current.board ? <Badge>{cutLabel(`${boards.teamName} · ${current.board.boardName}`)}</Badge> : null}
+          <Row gap="xs">
+            <Button size="sm" variant={choose('columns')} onPress={() => chooseWorkView(key, 'columns')}>
+              Columns
+            </Button>
+            <Button size="sm" variant={choose('lanes')} onPress={() => chooseWorkView(key, 'lanes')}>
+              Lanes
+            </Button>
+          </Row>
+        </>
+      }
       actions={actions}
       updatedAt={current.updatedAt}
       message={current.message}
@@ -151,6 +167,14 @@ function cardGroup(draw: Draw, key: string, title: string, cards: readonly WorkC
   return drawGroup(draw, key, title, counted(cards.length, 'item', 'items'), () => paged(draw, key, cards, shown => shown.map(card => cardBlock(draw, card))))
 }
 
+function laneGroup(draw: Draw, lane: LaneGroup): OrcaNode {
+  const count = lane.columns.reduce((sum, column) => sum + column.cards.length, 0)
+  const key = `lane:${lane.id}`
+  return drawGroup(draw, key, lane.name, counted(count, 'item', 'items'), () => (
+    <Stack gap="sm">{lane.columns.map(column => cardGroup(draw, `${key}/column:${column.name}`, column.name, column.cards))}</Stack>
+  ))
+}
+
 function offBoardGroup(draw: Draw, plan: WorkPlan): OrcaNode {
   const total = plan.offBoard.reduce((sum, type) => sum + type.cards.length, 0) + plan.unknown.length
   if (total === 0) return null
@@ -172,16 +196,24 @@ function noParentGroup(draw: Draw, rows: readonly TaskRow[]): OrcaNode {
   )
 }
 
-function Groups({ org, current }: { org: string; current: WorkSnapshot }): OrcaNode {
+function Groups({ org, current, view }: { org: string; current: WorkSnapshot; view: WorkView }): OrcaNode {
   const plan = planWork(current)
   if (plan.board.length + plan.offBoard.length + plan.unknown.length + plan.noParent.length === 0) {
     return <EmptyState title="Nothing assigned to you on this board" />
   }
   const draw: Draw = { org, left: WORK_NODE_BUDGET, hidden: false, shown: read(pages) }
-  const columns = byColumn(plan.board, current.board ?? { columns: [] })
+  const config = current.board ?? { columns: [], lanes: [] }
+  const swimlanes = view === 'lanes' && config.lanes.length > 1
   return (
     <Stack gap="sm">
-      {columns.map(column => cardGroup(draw, `column:${column.name}`, column.name, column.cards))}
+      {view === 'lanes' && !swimlanes ? (
+        <Text size="sm" muted>
+          {NO_SWIMLANES}
+        </Text>
+      ) : null}
+      {swimlanes
+        ? byLane(plan.board, config).map(lane => laneGroup(draw, lane))
+        : byColumn(plan.board, config).map(column => cardGroup(draw, `column:${column.name}`, column.name, column.cards))}
       {offBoardGroup(draw, plan)}
       {noParentGroup(draw, plan.noParent)}
       {draw.hidden ? (
@@ -211,12 +243,13 @@ export function WorkTab({ org }: { org: OrgStatus }): OrcaNode {
     return <LoadFailure message={status.message} onRetry={retryLoad} />
   }
   const shown = read(notice)
+  const view = workViewIn(read(workViews), workViewKey(org.org, org.boards))
   return (
     <Stack gap="md">
-      <Toolbar org={org.org} boards={org.boards} current={current} />
+      <Toolbar org={org.org} boards={org.boards} current={current} view={view} />
       {shown ? <Callout tone={shown.tone}>{shown.text}</Callout> : null}
       <Nudges org={org.org} current={current} />
-      <Groups org={org.org} current={current} />
+      <Groups org={org.org} current={current} view={view} />
     </Stack>
   )
 }

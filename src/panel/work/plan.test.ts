@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { NO_FAMILIES } from '../../shared/work'
-import { board, item, listOf, parentOf, snapshotOf, task, workTask } from './fixtures'
-import { byColumn, planWork, tasksOpenByDefault, typeIcon, type WorkCard, type WorkPlan } from './plan'
+import { board, item, LANES, listOf, parentOf, snapshotOf, task, workTask } from './fixtures'
+import { byColumn, byLane, DEFAULT_LANE, planWork, tasksOpenByDefault, typeIcon, type WorkCard, type WorkPlan } from './plan'
 
 const rowsOf = (card: WorkCard) => card.tasks.map(row => `${row.id}${row.item ? '*' : ''}`).join(' ')
 
@@ -171,4 +171,92 @@ test('typeIcon maps the process types and falls back to a page', () => {
     ['User Story', 'Product Backlog Item', 'Requirement', 'Bug', 'Task', 'Feature', 'Epic', 'Impediment', 'Risk', 'Test Case', 'Issue', 'Change Request'].map(typeIcon),
     ['book', 'book', 'book', 'bug', 'check', 'layers', 'flag', 'warning', 'warning', 'activity', 'file-text', 'file-text']
   )
+})
+
+const laneCards = (cards: WorkCard[], lanes: { id: string; name: string }[], columns?: readonly string[]) =>
+  byLane(cards, board('contoso', { lanes }, columns)).map(lane => [lane.id, lane.name, lane.columns.map(column => [column.name, column.cards.map(card => card.id)])])
+
+test('byLane puts cards in their lanes in board order, and the rest in Default lane', () => {
+  const cards = planWork(
+    snapshotOf({
+      mine: [
+        item(101, { column: 'Active', lane: 'Expedite' }),
+        item(102, { column: 'New', lane: null }),
+        item(103, { column: 'Done', lane: '' }),
+        item(104, { column: 'New', lane: 'Gone' }),
+        item(105, { column: 'New', lane: 'Expedite' }),
+        item(106, { column: 'Active', lane: null })
+      ]
+    })
+  ).board
+  assert.equal(DEFAULT_LANE, 'Default lane')
+  assert.deepEqual(laneCards(cards, LANES), [
+    [
+      'lane-default',
+      'Default lane',
+      [
+        ['New', [102, 104]],
+        ['Active', [106]],
+        ['Done', [103]]
+      ]
+    ],
+    [
+      'lane-expedite',
+      'Expedite',
+      [
+        ['New', [105]],
+        ['Active', [101]]
+      ]
+    ]
+  ])
+  assert.deepEqual(byLane(cards, board('contoso', { lanes: LANES })).map(lane => lane.id), ['lane-default', 'lane-expedite'])
+})
+
+test('byLane falls back to the first lane when none is named empty, and keeps empty lanes', () => {
+  const cards = planWork(
+    snapshotOf({ mine: [item(101, { column: 'Active', lane: 'Urgent' }), item(102, { column: 'New', lane: null }), item(103, { column: 'Done', lane: 'Gone' })] })
+  ).board
+  const lanes = [
+    { id: 'lane-a', name: 'Planned' },
+    { id: 'lane-b', name: 'Urgent' },
+    { id: 'lane-c', name: 'Blocked' }
+  ]
+  assert.deepEqual(laneCards(cards, lanes), [
+    [
+      'lane-a',
+      'Planned',
+      [
+        ['New', [102]],
+        ['Done', [103]]
+      ]
+    ],
+    ['lane-b', 'Urgent', [['Active', [101]]]],
+    ['lane-c', 'Blocked', []]
+  ])
+  assert.deepEqual(laneCards(cards, []), [])
+  assert.deepEqual(laneCards([], LANES), [
+    ['lane-default', 'Default lane', []],
+    ['lane-expedite', 'Expedite', []]
+  ])
+})
+
+test('byLane places a dimmed parent by its own lane and column, and an unknown column in the first one', () => {
+  const plan = planWork(
+    snapshotOf({
+      mine: [item(101, { column: 'Gone', lane: 'Expedite' })],
+      other: [task(301, { parentId: 150 })],
+      families: { parents: [parentOf(150, { column: 'Done', lane: 'Expedite' })], lists: [] }
+    })
+  )
+  assert.deepEqual(laneCards(plan.board, LANES), [
+    ['lane-default', 'Default lane', []],
+    [
+      'lane-expedite',
+      'Expedite',
+      [
+        ['New', [101]],
+        ['Done', [150]]
+      ]
+    ]
+  ])
 })

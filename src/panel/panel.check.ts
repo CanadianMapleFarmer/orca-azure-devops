@@ -2,10 +2,11 @@ import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
 import type { WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
+import { workViewKey } from './prefs'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
 import { draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
-import { BOARDS, item, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
+import { board, BOARDS, item, LANES, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -54,6 +55,13 @@ const workSnapshot: WorkSnapshot = snapshotOfWork({
     ]
   }
 })
+
+const workLanesSnapshot: WorkSnapshot = {
+  ...workSnapshot,
+  board: board('contoso', { lanes: LANES }),
+  mine: workSnapshot.mine.map(each => (each.id === 102 ? { ...each, lane: 'Expedite' } : each)),
+  families: { ...workSnapshot.families, parents: workSnapshot.families.parents.map(parent => ({ ...parent, lane: 'Expedite' })) }
+}
 
 const WEB_API = { repoId: 'repo-api', repoName: 'fabrikam-api' }
 const TOOLS_APP = { projectId: 'proj-tools', projectName: 'Contoso Tools', repoId: 'repo-tools-app', repoName: 'web-app' }
@@ -151,6 +159,14 @@ export default defineCheck({
       'orgs.list': [org('contoso', { boards: BOARDS })],
       'ui.visibility': { ok: true },
       'work.snapshot': workSnapshot
+    }
+  },
+  workLanes: {
+    persisted: { plugin: { workViews: { [workViewKey('contoso', BOARDS)]: 'lanes' } } },
+    requests: {
+      'orgs.list': [org('contoso', { boards: BOARDS })],
+      'ui.visibility': { ok: true },
+      'work.snapshot': workLanesSnapshot
     }
   },
   prs: {

@@ -34,6 +34,7 @@ export interface WorkPlan {
 export const MAX_TITLE_CHARS = 90
 export const GROUP_PAGE = 25
 export const WORK_NODE_BUDGET = 3200
+export const DEFAULT_LANE = 'Default lane'
 
 const NO_COLUMN = 'No column'
 
@@ -168,4 +169,25 @@ export function byColumn(cards: readonly WorkCard[], board: Pick<BoardConfig, 'c
   const groups = new Map(names.map(name => [name, [] as WorkCard[]]))
   for (const card of cards) listIn(groups, card.column !== null && groups.has(card.column) ? card.column : (names[0] ?? card.column ?? NO_COLUMN)).push(card)
   return [...groups].filter(([, listedCards]) => listedCards.length > 0).map(([name, listedCards]) => ({ name, cards: listedCards }))
+}
+
+export interface LaneGroup {
+  id: string
+  name: string
+  columns: { name: string; cards: WorkCard[] }[]
+}
+
+export function byLane(cards: readonly WorkCard[], board: Pick<BoardConfig, 'columns' | 'lanes'>): LaneGroup[] {
+  const index = new Map<string, number>()
+  board.lanes.forEach((lane, at) => {
+    if (!index.has(lane.name)) index.set(lane.name, at)
+  })
+  const home = index.get('') ?? 0
+  const buckets = board.lanes.map((): WorkCard[] => [])
+  for (const card of cards) buckets[(card.lane === null ? undefined : index.get(card.lane)) ?? home]?.push(card)
+  return board.lanes.map((lane, at) => ({
+    id: lane.id,
+    name: lane.name === '' ? DEFAULT_LANE : lane.name,
+    columns: byColumn(buckets[at] ?? [], board)
+  }))
 }

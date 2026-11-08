@@ -1,4 +1,5 @@
 import { atom, update, type Atom } from 'orca'
+import type { BoardsTarget } from '../shared/types'
 import type { Scope } from './grouping'
 
 export type PrsView = 'mine' | 'review'
@@ -36,4 +37,14 @@ export function chooseProject<S extends Scope>(prefs: Atom<Record<string, S>>, o
 
 export function chooseRepo<S extends Scope>(prefs: Atom<Record<string, S>>, org: string, repo: string | null): void {
   update(prefs, all => ({ ...all, [org]: { ...entryIn(all, org), repo } as S }))
+}
+
+export const workViewKey = (org: string, boards: Pick<BoardsTarget, 'projectId' | 'teamId'>): string => `${org}/${boards.projectId}/${boards.teamId}`
+
+export function workViewIn(all: Record<string, unknown> | null | undefined, key: string): WorkView {
+  return all?.[key] === 'lanes' ? 'lanes' : 'columns'
+}
+
+export function chooseWorkView(key: string, view: WorkView): void {
+  update(workViews, all => ({ ...all, [key]: view }))
 }
