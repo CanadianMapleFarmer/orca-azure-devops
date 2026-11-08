@@ -54,7 +54,7 @@ export const rootLoad = atom<Load>({ status: 'idle' })
 export const expanded = atom<string[]>([])
 export const treeKey = atom(0)
 export const treeNotice = atom<string | null>(null)
-export const lastShown = atom<WikiPageRef | null>(null)
+const lastShown = atom<WikiPageRef | null>(null)
 export const refreshingTree = atom(false)
 export const query = atom('')
 export const found = atom<Found | null>(null)
@@ -525,6 +525,7 @@ export function closePage(): void {
 
 export function collapseAll(): void {
   epochs.bulk += 1
+  set(treeNotice, null)
   set(expanded, [])
   const scope = scopeOf()
   if (scope) setRemembered(scopeKey(scope), [])
@@ -544,6 +545,7 @@ function visibleFolders(): string[] {
 }
 
 export async function expandAll(): Promise<void> {
+  set(treeNotice, null)
   const scope = scopeOf()
   if (scope) await openFolders(scope, visibleFolders(), epochs.tree, true)
 }

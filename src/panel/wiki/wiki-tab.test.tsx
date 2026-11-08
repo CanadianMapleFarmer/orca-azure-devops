@@ -302,6 +302,7 @@ test('a folder that fails to load collapses and says why, and expanding again re
   })
   await panel.expand(TREE, '/Runbooks')
   assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), [])
   assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', 'This page was moved or deleted in Azure DevOps.']])
   failing = false
   await panel.expand(TREE, '/Runbooks')
@@ -782,6 +783,38 @@ test('Expand all keeps a folder closed when its level fails to load, and says wh
   assert.deepEqual(rememberedAt()?.slice().sort(), [folderPath(0), folderPath(2)])
 })
 
+test('an Expand all that works clears the failure notice of an earlier one', async () => {
+  let failing = true
+  const levels = folderLevels(3)
+  await open({
+    'wiki.pages': input => {
+      if (failing && input.path === folderPath(1)) throw hostError('action_failed', 'This page was moved or deleted in Azure DevOps.')
+      return pagesFrom(levels)(input)
+    }
+  })
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(panel.findAll({ type: 'Callout' }).length, 1)
+  failing = false
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.deepEqual([...panel.expandedOf(TREE)].sort(), [folderPath(0), folderPath(1), folderPath(2)])
+  assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
+test('Collapse all clears the failure notice of an Expand all', async () => {
+  const levels = folderLevels(3)
+  await open({
+    'wiki.pages': input => {
+      if (input.path === folderPath(1)) throw hostError('action_failed', 'This page was moved or deleted in Azure DevOps.')
+      return pagesFrom(levels)(input)
+    }
+  })
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(panel.findAll({ type: 'Callout' }).length, 1)
+  await panel.press({ type: 'IconButton', label: 'Collapse all' })
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
 test('Collapse all stops an Expand all that is still loading', async () => {
   const slow = held<WikiLevel>()
   const levels = folderLevels(3)
@@ -794,6 +827,48 @@ test('Collapse all stops an Expand all that is still loading', async () => {
   await Promise.all([expanding, collapsing])
   assert.deepEqual(panel.expandedOf(TREE), [])
   assert.deepEqual(rememberedAt(), [])
+})
+
+const WIKI_SELECT = { type: 'Select', label: 'Wiki' }
+
+function holdingFolderOne(levels: Record<string, WikiLevel>, slow: { promise: Promise<WikiLevel> }) {
+  return {
+    'wiki.list': WIKIS,
+    'wiki.pages': (input: WikiPageRef) => (input.wikiId === 'wiki-project' && input.path === folderPath(1) ? slow.promise : pagesFrom(levels)(input))
+  }
+}
+
+test("switching wiki during Expand all drops the first wiki's late folders", async () => {
+  const slow = held<WikiLevel>()
+  const levels = folderLevels(3)
+  const host = await open(holdingFolderOne(levels, slow), { persisted: { plugin: { wikiChoice: { contoso: 'wiki-project' } } } })
+  const expanding = panel.press({ type: 'IconButton', label: 'Expand all' })
+  await until(() => readsOf(host).length === 4)
+  const switching = panel.select(WIKI_SELECT, 'wiki-code')
+  await until(() => readsOf(host).length === 5)
+  slow.release(levels[folderPath(1)])
+  await Promise.all([expanding, switching])
+  assert.equal(panel.valueOf(WIKI_SELECT), 'wiki-code')
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.equal(rememberedAt('contoso|wiki-code'), undefined)
+  assert.equal(rememberedAt(), undefined)
+})
+
+test("switching wiki while a start reloads remembered folders drops the first wiki's late folders", async () => {
+  const slow = held<WikiLevel>()
+  const levels = folderLevels(3)
+  const remembered = [folderPath(0), folderPath(1), folderPath(2)]
+  const host = await open(holdingFolderOne(levels, slow), { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: remembered } } } })
+  const starting = panel.select(WIKI_SELECT, 'wiki-project')
+  await until(() => readsOf(host).length === 5)
+  const switching = panel.select(WIKI_SELECT, 'wiki-code')
+  await until(() => readsOf(host).length === 6)
+  slow.release(levels[folderPath(1)])
+  await Promise.all([starting, switching])
+  assert.equal(panel.valueOf(WIKI_SELECT), 'wiki-code')
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), remembered)
+  assert.equal(rememberedAt('contoso|wiki-code'), undefined)
 })
 
 test('expanded folders are remembered per wiki and reopen after a reload', async () => {
@@ -908,6 +983,66 @@ test('a remembered folder whose parent no longer lists it is forgotten, and so a
   assert.deepEqual(rememberedAt(), ['/Runbooks'])
 })
 
+test('expanding a folder by hand forgets a remembered subfolder that its level no longer lists', async () => {
+  const levels = {
+    '/': levelOf(['/A'], {}, ['/A']),
+    '/A': levelOf(['/A/B', '/A/C'], {}, ['/A/C'])
+  }
+  const host = await open({ 'wiki.pages': pagesFrom(levels) }, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/A/B'] } } } })
+  assert.deepEqual(readsOf(host), ['/'])
+  assert.deepEqual(rememberedAt(), ['/A/B'])
+  await panel.expand(TREE, '/A')
+  assert.deepEqual(rememberedAt(), ['/A'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/A'])
+})
+
+test('Refresh pages collapses and forgets a folder that its parent now lists as a page', async () => {
+  let folder = true
+  const host = await open({ 'wiki.pages': input => (input.path === '/' && !folder ? levelOf(ROOT_PAGES) : (LEVELS[input.path] ?? levelOf([]))) })
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+  folder = false
+  await panel.press({ type: 'IconButton', label: 'Refresh pages' })
+  assert.deepEqual(readsOf(host).slice(-2), ['/', '/Runbooks'])
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), [])
+  assert.equal(itemOf('/Runbooks')?.hasChildren, false)
+  assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
+test('a subfolder that vanished under a folder opened by Expand all is forgotten', async () => {
+  const levels = {
+    '/': levelOf(['/A'], {}, ['/A']),
+    '/A': levelOf(['/A/Gone'])
+  }
+  const host = await open({ 'wiki.pages': pagesFrom(levels) }, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/A/Gone'] } } } })
+  assert.deepEqual(readsOf(host), ['/'])
+  assert.deepEqual(rememberedAt(), ['/A/Gone'])
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.deepEqual(readsOf(host), ['/', '/A'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/A'])
+  assert.deepEqual(rememberedAt(), ['/A'])
+})
+
+test('a subfolder that vanished under a remembered folder is forgotten when a start reopens it', async () => {
+  const levels = {
+    '/': levelOf(['/A'], {}, ['/A']),
+    '/A': levelOf(['/A/Gone'])
+  }
+  const host = await open({ 'wiki.pages': pagesFrom(levels) }, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/A/Gone', '/A'] } } } })
+  assert.deepEqual(readsOf(host), ['/', '/A'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/A'])
+  assert.deepEqual(rememberedAt(), ['/A'])
+})
+
+test('a capped level keeps a remembered folder it does not list', async () => {
+  const levels = { '/': levelOf(['/A'], { total: 340 }, ['/A']) }
+  const host = await open({ 'wiki.pages': pagesFrom(levels) }, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/Z'] } } } })
+  assert.deepEqual(readsOf(host), ['/'])
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), ['/Z'])
+})
+
 test('a remembered folder that fails to load stays closed, is forgotten and says why', async () => {
   const host = await open(
     {
@@ -938,10 +1073,18 @@ test('a remembered folder too deep for the tree is not read', async () => {
 })
 
 test('a remembered list that is not a list of paths is read as empty', async () => {
-  const host = await open({}, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: 'nonsense', other: [3, null, '/Runbooks'] } } } })
+  const host = await open({}, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: 'nonsense' } } } })
   assert.deepEqual(readsOf(host), ['/'])
   await panel.expand(TREE, '/Runbooks')
   assert.deepEqual(rememberedAt(), ['/Runbooks'])
+})
+
+test('a remembered list with entries that are not paths keeps only the paths', async () => {
+  const host = await open({}, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: [3, null, '/Runbooks'] } } } })
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  await panel.collapse(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), [])
 })
 
 test('going back from a page shows it selected with its folders expanded', async () => {
@@ -981,6 +1124,7 @@ test('going back to a page found by search loads and opens its folders, parents 
   assert.deepEqual(readsOf(host), ['/', '/A', '/A/B'])
   await panel.press({ type: 'Button', text: 'Clear search' })
   assert.deepEqual(panel.expandedOf(TREE), ['/A', '/A/B'])
+  assert.deepEqual(rememberedAt(), ['/A', '/A/B'])
   assert.equal(panel.find(TREE)?.props.selected, '/A/B/Page')
   assert.deepEqual(childrenOf('/A'), ['/A/B'])
 })
