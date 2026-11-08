@@ -1,6 +1,7 @@
-import { Button, Callout, EmptyState, IconButton, Input, List, ListItem, read, Row, Select, set, Skeleton, Stack, Text, Tree, type OrcaNode } from 'orca'
+import { Box, Button, Callout, EmptyState, IconButton, Input, List, ListItem, read, Row, Select, set, Skeleton, Stack, Text, Tree, type OrcaNode } from 'orca'
 import type { WikiLevel, WikiNode, WikiRef } from '../../shared/wiki'
 import type { OrgStatus } from '../../shared/types'
+import { COLLAPSE_ALL, EXPAND_ALL } from '../copy'
 import { cutLabel } from '../label'
 import { LoadFailure } from '../snapshot-parts'
 import { Drafts } from './drafts'
@@ -9,6 +10,8 @@ import {
   chooseWiki,
   chosenWiki,
   clearSearch,
+  collapseAll,
+  expandAll,
   expanded,
   found,
   levelRef,
@@ -20,10 +23,12 @@ import {
   refreshTree,
   retryRoot,
   retryWikis,
+  ROOT,
   rootLoad,
   search,
   searching,
   searchNotice,
+  selectedIn,
   showPage,
   toggleFolder,
   treeItems,
@@ -62,18 +67,26 @@ function Header({ org }: { org: string }): OrcaNode {
   const wiki = chosenWiki(org)
   if (!wiki) return <EmptyState title="No wikis" description="Project wikis and published code wikis in this organization show up here." />
   const notice = read(searchNotice)
+  const unavailable = !read(levels).has(ROOT) || read(refreshingTree)
   return (
     <Stack gap="xs">
       <Picker org={org} wiki={wiki} />
-      <Input
-        type="search"
-        label="Search the wiki"
-        labelHidden
-        placeholder="Search the wiki"
-        value={read(query)}
-        onChange={text => set(query, text)}
-        onSubmit={text => search(text)}
-      />
+      <Row gap="xs" align="center">
+        <Box grow shrink minWidth={0}>
+          <Input
+            type="search"
+            label="Search the wiki"
+            labelHidden
+            placeholder="Search the wiki"
+            value={read(query)}
+            onChange={text => set(query, text)}
+            onSubmit={text => search(text)}
+          />
+        </Box>
+        <IconButton icon="collapse" label={COLLAPSE_ALL} variant="ghost" size="sm" disabled={unavailable} onPress={collapseAll} />
+        <IconButton icon="expand" label={EXPAND_ALL} variant="ghost" size="sm" disabled={unavailable} onPress={() => expandAll()} />
+        <IconButton icon="refresh" label="Refresh pages" variant="ghost" size="sm" disabled={unavailable} onPress={() => refreshTree()} />
+      </Row>
       {notice ? <Callout tone="danger">{notice}</Callout> : null}
     </Stack>
   )
@@ -122,7 +135,7 @@ function nodeAt(all: ReadonlyMap<string, WikiLevel>, path: string): WikiNode | u
 
 function Pages({ org, wiki }: { org: string; wiki: WikiRef }): OrcaNode {
   const loaded = read(levels)
-  if (!loaded.has('/')) {
+  if (!loaded.has(ROOT)) {
     const status = read(rootLoad)
     return status.status === 'failed' ? <LoadFailure message={status.message} onRetry={retryRoot} /> : <Skeleton lines={3} label="Loading pages" />
   }
@@ -131,9 +144,6 @@ function Pages({ org, wiki }: { org: string; wiki: WikiRef }): OrcaNode {
   const notice = read(treeNotice)
   return (
     <Stack gap="xs">
-      <Row justify="end">
-        <IconButton icon="refresh" label="Refresh pages" variant="ghost" size="sm" disabled={read(refreshingTree)} onPress={() => refreshTree()} />
-      </Row>
       {notice ? <Callout tone="danger">{notice}</Callout> : null}
       {items.length === 0 ? (
         <EmptyState title="No pages yet" description="Pages in this wiki show up here." />
@@ -143,6 +153,7 @@ function Pages({ org, wiki }: { org: string; wiki: WikiRef }): OrcaNode {
           label="Pages"
           maxHeight="lg"
           items={items}
+          selected={selectedIn(items, { org, wiki })}
           expanded={open}
           onToggle={({ key, expanded: next }) => toggleFolder(levelRef({ org, wiki }, key), next)}
           onSelect={({ key }) => {

@@ -214,7 +214,7 @@ export default defineCheck({
     }
   },
   wikiTree: {
-    persisted: { workspace: { tab: 'wiki' } },
+    persisted: { plugin: { wikiExpanded: { 'contoso|wiki-project': ['/Runbooks'] } }, workspace: { tab: 'wiki' } },
     requests: {
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },

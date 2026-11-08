@@ -45,6 +45,18 @@ export const LEVELS: Record<string, WikiLevel> = {
   '/Runbooks': levelOf(['/Runbooks/Deploy', '/Runbooks/Rollback'])
 }
 
+export function largeLevels(): Record<string, WikiLevel> {
+  const sections = Array.from({ length: 5 }, (_, index) => `/Section ${index + 1}`)
+  const chaptersOf = (section: string) => Array.from({ length: 19 }, (_, index) => `${section}/Chapter ${index + 1}`)
+  const levels: Record<string, WikiLevel> = { '/': levelOf(sections, {}, sections) }
+  for (const section of sections) {
+    const chapters = chaptersOf(section)
+    levels[section] = levelOf(chapters, {}, chapters)
+    for (const chapter of chapters) levels[chapter] = levelOf(Array.from({ length: 20 }, (_, index) => `${chapter}/Page ${index + 1}`))
+  }
+  return levels
+}
+
 export const PAGE_CONTENT = '# Deploy\n\nRun the **release** pipeline, then check the dashboard.'
 
 export function pageOf(path: string, over: Partial<WikiPage> = {}): WikiPage {

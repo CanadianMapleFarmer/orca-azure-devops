@@ -1,11 +1,11 @@
 import type { TreeItem } from 'orca'
-import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import { SEARCH_TOO_SHORT } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from '../../shared/wiki'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type MountOptions, type TestHost } from '../test-support'
-import { CODE_WIKI, draftOf, LEVELS, levelOf, MINE_DIFF, NOW, nodeOf, OPEN_PAGE, pageOf, PAGE_CONTENT, PROJECT_WIKI, refOf, ROOT_PAGES, THEIRS_DIFF, WIKIS } from './fixtures'
-import { MAX_TREE_ITEMS, search, TREE_BYTES, treeItems } from './state'
+import { CODE_WIKI, draftOf, largeLevels, LEVELS, levelOf, MINE_DIFF, NOW, nodeOf, OPEN_PAGE, pageOf, PAGE_CONTENT, PROJECT_WIKI, refOf, ROOT_PAGES, THEIRS_DIFF, WIKIS } from './fixtures'
+import { MAX_EXPAND_LOADS, MAX_REMEMBERED_FOLDERS, MAX_TREE_ITEMS, search, TREE_BYTES, treeItems } from './state'
 
 let panel: TestPanel
 
@@ -62,7 +62,47 @@ const keysOf = (items: readonly TreeItem[]) => items.map(item => item.key)
 
 const countItems = (items: readonly TreeItem[]): number => items.reduce((total, item) => total + 1 + countItems(item.children ?? []), 0)
 
-const childrenOf = (key: string) => keysOf(treeOf().find(item => item.key === key)?.children ?? [])
+const findItem = (items: readonly TreeItem[], key: string): TreeItem | undefined => {
+  for (const item of items) {
+    const found = item.key === key ? item : findItem(item.children ?? [], key)
+    if (found) return found
+  }
+  return undefined
+}
+
+const itemOf = (key: string) => findItem(treeOf(), key)
+
+const childrenOf = (key: string) => keysOf(itemOf(key)?.children ?? [])
+
+const walkNodes = (node: TreeSnapshot | string | null): TreeSnapshot[] => (node === null || typeof node === 'string' ? [] : [node, ...(node.children ?? []).flatMap(walkNodes)])
+
+const searchRow = (): TreeSnapshot => {
+  const holdsSearch = (node: TreeSnapshot) => walkNodes(node).some(inner => inner.type === 'Input' && inner.props?.label === 'Search the wiki')
+  const row = walkNodes(panel.tree()).filter(node => node.type === 'Row' && (node.children ?? []).some(child => typeof child !== 'string' && holdsSearch(child))).at(-1)
+  assert.ok(row, 'the search row is drawn')
+  return row
+}
+
+const WIKI_KEY = 'contoso|wiki-project'
+
+const rememberedAt = (key = WIKI_KEY) => (panel.persisted.plugin.wikiExpanded as Record<string, string[]> | undefined)?.[key]
+
+const folderPath = (index: number) => `/Folder ${String(index).padStart(3, '0')}`
+
+function folderLevels(count: number, nested = false): Record<string, WikiLevel> {
+  const folders = Array.from({ length: count }, (_, index) => folderPath(index))
+  const levels: Record<string, WikiLevel> = { '/': levelOf(folders, {}, folders) }
+  for (const folder of folders) levels[folder] = levelOf([`${folder}/One`, `${folder}/Two`])
+  if (nested) {
+    levels[folderPath(0)] = levelOf([`${folderPath(0)}/Sub`, `${folderPath(0)}/Two`], {}, [`${folderPath(0)}/Sub`])
+    levels[`${folderPath(0)}/Sub`] = levelOf([`${folderPath(0)}/Sub/Deep`])
+  }
+  return levels
+}
+
+const pagesFrom = (levels: Record<string, WikiLevel>) => (input: WikiPageRef) => levels[input.path] ?? levelOf([])
+
+const readsOf = (host: TestHost) => inputsTo(host, 'wiki.pages').map(input => (input as WikiPageRef).path)
 
 const button = (text: string, scope?: TestElement) => {
   const found = panel.findAll({ type: 'Button', text }).filter(item => scope === undefined || item.path.startsWith(`${scope.path}/`))
@@ -133,7 +173,7 @@ test('the Wiki tab lists the wikis and the root pages', async () => {
   assert.deepEqual(keysOf(treeOf()), ROOT_PAGES)
   assert.deepEqual(
     treeOf().map(item => [item.label, item.icon, item.hasChildren === true]),
-    [['Home', 'file-text', false], ['Runbooks', 'file-text', true], ['Release notes', 'file-text', false]]
+    [['Home', 'file-text', false], ['Runbooks', 'folder', true], ['Release notes', 'file-text', false]]
   )
 })
 
@@ -556,6 +596,7 @@ test('Refresh pages reloads the root and the expanded folders', async () => {
   generation = 1
   const refresh = panel.find({ type: 'IconButton', label: 'Refresh pages' })
   assert.equal(refresh?.props.icon, 'refresh')
+  assert.equal((searchRow().children as TreeSnapshot[]).at(-1)?.props?.label, 'Refresh pages')
   await panel.press({ type: 'IconButton', label: 'Refresh pages' })
   assert.deepEqual(
     inputsTo(host, 'wiki.pages').slice(2).map(input => (input as WikiPageRef).path).sort(),
@@ -609,7 +650,355 @@ test('Refresh pages collapses a folder that is gone and keeps the tree when the 
   await panel.press({ type: 'IconButton', label: 'Refresh pages' })
   assert.equal(panel.find({ type: 'Callout' })?.text, 'This page was moved or deleted in Azure DevOps.')
   assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), [])
   assert.deepEqual(keysOf(treeOf()), ROOT_PAGES)
+})
+
+test('folders show a folder icon and their page count once loaded; pages show a page icon', async () => {
+  await open()
+  assert.deepEqual(
+    treeOf().map(item => [item.label, item.icon, item.description ?? null]),
+    [['Home', 'file-text', null], ['Runbooks', 'folder', null], ['Release notes', 'file-text', null]]
+  )
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual([itemOf('/Runbooks')?.icon, itemOf('/Runbooks')?.description], ['folder', '2 pages'])
+  assert.deepEqual(
+    (itemOf('/Runbooks')?.children ?? []).map(item => [item.label, item.icon, item.description ?? null, item.hasChildren === true]),
+    [['Deploy', 'file-text', null, false], ['Rollback', 'file-text', null, false]]
+  )
+})
+
+test('a folder with one page says 1 page, and a capped level counts all of its pages', async () => {
+  const levels = {
+    '/': levelOf(['/One', '/Many'], {}, ['/One', '/Many']),
+    '/One': levelOf(['/One/Only']),
+    '/Many': levelOf(['/Many/A', '/Many/B'], { total: 340 })
+  }
+  await open({ 'wiki.pages': pagesFrom(levels) })
+  await panel.expand(TREE, '/One')
+  await panel.expand(TREE, '/Many')
+  assert.deepEqual([itemOf('/One')?.description, itemOf('/Many')?.description], ['1 page', '340 pages'])
+})
+
+test("a folder's count never reads ahead: an unexpanded folder has no description and costs no request", async () => {
+  const host = await open()
+  assert.equal(itemOf('/Runbooks')?.hasChildren, true)
+  assert.equal('description' in (itemOf('/Runbooks') ?? {}), false)
+  assert.deepEqual(readsOf(host), ['/'])
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+  await panel.collapse(TREE, '/Runbooks')
+  assert.equal(itemOf('/Runbooks')?.description, '2 pages')
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+})
+
+test('the search row holds Collapse all, Expand all and Refresh pages', async () => {
+  await open()
+  const row = searchRow()
+  assert.deepEqual([row.props?.gap, row.props?.align], ['xs', 'center'])
+  const [search, ...buttons] = (row.children ?? []) as TreeSnapshot[]
+  assert.equal(search.type, 'Box')
+  assert.deepEqual([search.props?.grow, search.props?.shrink, search.props?.minWidth], [true, true, 0])
+  assert.deepEqual(walkNodes(search).filter(node => node.type === 'Input').map(node => node.props?.label), ['Search the wiki'])
+  assert.deepEqual(
+    buttons.map(node => [node.type, node.props?.label, node.props?.icon, node.props?.variant, node.props?.size]),
+    [
+      ['IconButton', 'Collapse all', 'collapse', 'ghost', 'sm'],
+      ['IconButton', 'Expand all', 'expand', 'ghost', 'sm'],
+      ['IconButton', 'Refresh pages', 'refresh', 'ghost', 'sm']
+    ]
+  )
+  assert.equal(panel.findAll({ type: 'IconButton', label: 'Refresh pages' }).length, 1)
+  assert.equal(panel.findAll({ type: 'Row' }).filter(item => item.text === '' && item.props.justify === 'end').length, 0)
+})
+
+test('the search row buttons are disabled until the tree has loaded', async () => {
+  const root = held<WikiLevel>()
+  let calls = 0
+  await open({
+    'wiki.pages': () => {
+      calls += 1
+      if (calls === 1) throw hostError('action_failed', "That wiki no longer exists, or you can't see it.")
+      return root.promise
+    }
+  })
+  const states = () => ['Collapse all', 'Expand all', 'Refresh pages'].map(label => panel.find({ type: 'IconButton', label })?.disabled)
+  assert.deepEqual(states(), [true, true, true])
+  const retrying = panel.press({ type: 'Button', text: 'Try again' })
+  await until(() => panel.find({ type: 'Skeleton', label: 'Loading pages' }))
+  assert.deepEqual(states(), [true, true, true])
+  root.release(LEVELS['/'])
+  await retrying
+  assert.deepEqual(states(), [false, false, false])
+})
+
+test('Collapse all closes every folder; Expand all opens the visible ones, loading at most 25 levels a press', async () => {
+  const levels = folderLevels(30, true)
+  const host = await open({ 'wiki.pages': pagesFrom(levels) })
+  const sub = `${folderPath(0)}/Sub`
+  const first25 = Array.from({ length: 25 }, (_, index) => folderPath(index))
+  assert.equal(readsOf(host).length, 1)
+
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(readsOf(host).length, 1 + MAX_EXPAND_LOADS)
+  assert.deepEqual([...panel.expandedOf(TREE)].sort(), first25)
+  assert.deepEqual(childrenOf(folderPath(0)), [sub, `${folderPath(0)}/Two`])
+  assert.deepEqual(rememberedAt()?.slice().sort(), first25)
+
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(readsOf(host).length, 1 + MAX_EXPAND_LOADS + 6)
+  assert.equal(panel.expandedOf(TREE).length, 31)
+  assert.ok(panel.expandedOf(TREE).includes(sub))
+  assert.deepEqual(childrenOf(sub), [`${sub}/Deep`])
+
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(readsOf(host).length, 1 + MAX_EXPAND_LOADS + 6)
+
+  await panel.press({ type: 'IconButton', label: 'Collapse all' })
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.equal(treeOf().length, 30)
+  assert.equal(treeOf().every(item => item.children === undefined), true)
+  assert.deepEqual(rememberedAt(), [])
+  assert.equal(readsOf(host).length, 1 + MAX_EXPAND_LOADS + 6)
+
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.equal(panel.expandedOf(TREE).length, 30)
+  assert.equal(panel.expandedOf(TREE).includes(sub), false)
+  assert.equal(readsOf(host).length, 1 + MAX_EXPAND_LOADS + 6)
+  assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
+test('Expand all keeps a folder closed when its level fails to load, and says why', async () => {
+  const levels = folderLevels(3)
+  await open({
+    'wiki.pages': input => {
+      if (input.path === folderPath(1)) throw hostError('action_failed', 'This page was moved or deleted in Azure DevOps.')
+      return pagesFrom(levels)(input)
+    }
+  })
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.deepEqual([...panel.expandedOf(TREE)].sort(), [folderPath(0), folderPath(2)])
+  assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', 'This page was moved or deleted in Azure DevOps.']])
+  assert.deepEqual(rememberedAt()?.slice().sort(), [folderPath(0), folderPath(2)])
+})
+
+test('Collapse all stops an Expand all that is still loading', async () => {
+  const slow = held<WikiLevel>()
+  const levels = folderLevels(3)
+  const host = await open({ 'wiki.pages': input => (input.path === folderPath(1) ? slow.promise : pagesFrom(levels)(input)) })
+  const expanding = panel.press({ type: 'IconButton', label: 'Expand all' })
+  await until(() => requestsTo(host, 'wiki.pages').length === 4)
+  const collapsing = panel.press({ type: 'IconButton', label: 'Collapse all' })
+  await pause(20)
+  slow.release(levels[folderPath(1)])
+  await Promise.all([expanding, collapsing])
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), [])
+})
+
+test('expanded folders are remembered per wiki and reopen after a reload', async () => {
+  const requests = { 'wiki.list': WIKIS }
+  await open(requests)
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-project')
+  assert.equal(rememberedAt(), undefined)
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+  assert.equal(rememberedAt('contoso|wiki-code'), undefined)
+
+  const stored = { plugin: panel.persisted.plugin, workspace: panel.persisted.workspace }
+  await closeCleanly(panel)
+  const host = await open(requests, { persisted: stored })
+  assert.equal(panel.valueOf({ type: 'Select', label: 'Wiki' }), 'wiki-project')
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  assert.deepEqual(childrenOf('/Runbooks'), ['/Runbooks/Deploy', '/Runbooks/Rollback'])
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-code')
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-project')
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+
+  await panel.collapse(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), [])
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+  await panel.press({ type: 'IconButton', label: 'Collapse all' })
+  assert.deepEqual(rememberedAt(), [])
+  assert.deepEqual(panel.expandedOf(TREE), [])
+})
+
+test('collapsing a folder by hand forgets only that folder, and expanding it again makes it the newest', async () => {
+  const levels = folderLevels(3)
+  await open({ 'wiki.pages': pagesFrom(levels) })
+  await panel.expand(TREE, folderPath(0))
+  await panel.expand(TREE, folderPath(1))
+  await panel.expand(TREE, folderPath(2))
+  assert.deepEqual(rememberedAt(), [folderPath(0), folderPath(1), folderPath(2)])
+  await panel.collapse(TREE, folderPath(0))
+  assert.deepEqual(rememberedAt(), [folderPath(1), folderPath(2)])
+  await panel.expand(TREE, folderPath(0))
+  assert.deepEqual(rememberedAt(), [folderPath(1), folderPath(2), folderPath(0)])
+  await panel.expand(TREE, folderPath(0))
+  assert.deepEqual(rememberedAt(), [folderPath(1), folderPath(2), folderPath(0)])
+})
+
+test('a reload with 200 remembered folders sends the root and at most 25 folder reads, and keeps the rest remembered', async () => {
+  const levels = folderLevels(201)
+  const remembered = Array.from({ length: MAX_REMEMBERED_FOLDERS }, (_, index) => folderPath(index))
+  const host = await open({ 'wiki.pages': pagesFrom(levels) }, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: remembered } } } })
+  const reads = readsOf(host)
+  assert.equal(reads[0], '/')
+  assert.equal(reads.length, 1 + MAX_EXPAND_LOADS)
+  const newest = remembered.slice(-MAX_EXPAND_LOADS)
+  assert.deepEqual(reads.slice(1).sort(), newest)
+  assert.deepEqual([...panel.expandedOf(TREE)].sort(), newest)
+  assert.deepEqual(rememberedAt(), remembered)
+
+  const closed = folderPath(0)
+  await panel.expand(TREE, closed)
+  assert.deepEqual(readsOf(host).slice(-1), [closed])
+  assert.deepEqual(childrenOf(closed), [`${closed}/One`, `${closed}/Two`])
+  assert.deepEqual(rememberedAt(), [...remembered.slice(1), closed])
+
+  const extra = folderPath(200)
+  await panel.expand(TREE, extra)
+  assert.equal(rememberedAt()?.length, MAX_REMEMBERED_FOLDERS)
+  assert.deepEqual(rememberedAt()?.slice(-2), [closed, extra])
+  assert.equal(rememberedAt()?.includes(folderPath(1)), false)
+})
+
+test('a remembered folder reloads only after its parent has', async () => {
+  const slow = held<WikiLevel>()
+  const levels = {
+    '/': levelOf(['/A'], {}, ['/A']),
+    '/A': levelOf(['/A/B'], {}, ['/A/B']),
+    '/A/B': levelOf(['/A/B/C'], {}, ['/A/B/C']),
+    '/A/B/C': levelOf(['/A/B/C/D'])
+  }
+  let failing = true
+  const host = await open(
+    {
+      'wiki.pages': input => {
+        if (input.path === '/' && failing) throw hostError('action_failed', 'Azure DevOps is not answering.')
+        return input.path === '/A' ? slow.promise : pagesFrom(levels)(input)
+      }
+    },
+    { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/A/B/C', '/A/B', '/A'] } } } }
+  )
+  failing = false
+  const retrying = panel.press({ type: 'Button', text: 'Try again' })
+  await until(() => readsOf(host).includes('/A'))
+  await pause(30)
+  assert.deepEqual(readsOf(host), ['/', '/', '/A'])
+  slow.release(levels['/A'])
+  await retrying
+  assert.deepEqual(readsOf(host), ['/', '/', '/A', '/A/B', '/A/B/C'])
+  assert.deepEqual([...panel.expandedOf(TREE)].sort(), ['/A', '/A/B', '/A/B/C'])
+})
+
+test('a remembered folder whose parent no longer lists it is forgotten, and so are its subfolders', async () => {
+  const host = await open(
+    { 'wiki.pages': pagesFrom(LEVELS) },
+    { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/Gone/Child', '/Runbooks', '/Gone', '/Home'] } } } }
+  )
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+})
+
+test('a remembered folder that fails to load stays closed, is forgotten and says why', async () => {
+  const host = await open(
+    {
+      'wiki.pages': input => {
+        if (input.path === '/Runbooks') throw hostError('action_failed', 'This page was moved or deleted in Azure DevOps.')
+        return LEVELS[input.path] ?? levelOf([])
+      }
+    },
+    { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: ['/Runbooks'] } } } }
+  )
+  assert.deepEqual(readsOf(host), ['/', '/Runbooks'])
+  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', 'This page was moved or deleted in Azure DevOps.']])
+  assert.deepEqual(rememberedAt(), [])
+})
+
+test('a remembered folder too deep for the tree is not read', async () => {
+  const chain = Array.from({ length: 18 }, (_, index) => `/${Array.from({ length: index + 1 }, (_, part) => `d${part}`).join('/')}`)
+  const below = (path: string) => (path === '/' ? chain[0] : chain[chain.indexOf(path) + 1])
+  const host = await open(
+    { 'wiki.pages': input => (below(input.path) === undefined ? levelOf([]) : levelOf([below(input.path)], {}, [below(input.path)])) },
+    { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: chain } } } }
+  )
+  assert.deepEqual(readsOf(host), ['/', ...chain.slice(0, 15)])
+  assert.equal(panel.expandedOf(TREE).length, 15)
+  assert.equal(countItems(treeOf()), 16)
+  assert.deepEqual(rememberedAt(), chain)
+})
+
+test('a remembered list that is not a list of paths is read as empty', async () => {
+  const host = await open({}, { persisted: { plugin: { wikiExpanded: { [WIKI_KEY]: 'nonsense', other: [3, null, '/Runbooks'] } } } })
+  assert.deepEqual(readsOf(host), ['/'])
+  await panel.expand(TREE, '/Runbooks')
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+})
+
+test('going back from a page shows it selected with its folders expanded', async () => {
+  const first = await open({}, { persisted: { workspace: { wikiPage: OPEN_PAGE } } })
+  assert.equal(heading(), 'Deploy')
+  assert.equal(requestsTo(first, 'wiki.pages').length, 0)
+  await panel.press(BACK)
+  assert.deepEqual(readsOf(first), ['/', '/Runbooks'])
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  assert.deepEqual(childrenOf('/Runbooks'), ['/Runbooks/Deploy', '/Runbooks/Rollback'])
+  assert.equal(panel.find(TREE)?.props.selected, '/Runbooks/Deploy')
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+
+  await panel.selectItem(TREE, '/Runbooks/Rollback')
+  assert.equal(heading(), 'Rollback')
+  await panel.press(BACK)
+  assert.equal(panel.find(TREE)?.props.selected, '/Runbooks/Rollback')
+  assert.deepEqual(readsOf(first), ['/', '/Runbooks'])
+})
+
+test('going back to a page found by search loads and opens its folders, parents first', async () => {
+  const levels = {
+    '/': levelOf(['/A'], {}, ['/A']),
+    '/A': levelOf(['/A/B'], {}, ['/A/B']),
+    '/A/B': levelOf(['/A/B/Page', '/A/B/Other'])
+  }
+  const host = await open({
+    'wiki.pages': pagesFrom(levels),
+    'wiki.search': { hits: [{ path: '/A/B/Page', title: 'Page', snippet: 'found it' }], total: 1 }
+  })
+  assert.deepEqual(readsOf(host), ['/'])
+  await panel.type(SEARCH_BOX, 'found', { submit: true })
+  await panel.press({ type: 'ListItem', label: 'Page' })
+  assert.equal(heading(), 'Page')
+  await panel.press(BACK)
+  await until(() => readsOf(host).length === 3)
+  assert.deepEqual(readsOf(host), ['/', '/A', '/A/B'])
+  await panel.press({ type: 'Button', text: 'Clear search' })
+  assert.deepEqual(panel.expandedOf(TREE), ['/A', '/A/B'])
+  assert.equal(panel.find(TREE)?.props.selected, '/A/B/Page')
+  assert.deepEqual(childrenOf('/A'), ['/A/B'])
+})
+
+test('a page that is not in the tree is not marked selected, and another wiki has no selection', async () => {
+  await open({ 'wiki.list': WIKIS, 'wiki.search': { hits: [{ path: '/Elsewhere', title: 'Elsewhere', snippet: 'x' }], total: 1 } })
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-project')
+  await panel.selectItem(TREE, '/Home')
+  await panel.press(BACK)
+  assert.equal(panel.find(TREE)?.props.selected, '/Home')
+  assert.equal(rememberedAt(), undefined)
+  await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-code')
+  assert.equal(panel.find(TREE)?.props.selected, undefined)
+  await panel.type(SEARCH_BOX, 'else', { submit: true })
+  await panel.press({ type: 'ListItem', label: 'Elsewhere' })
+  await panel.press(BACK)
+  await panel.press({ type: 'Button', text: 'Clear search' })
+  assert.equal(panel.find(TREE)?.props.selected, undefined)
 })
 
 test('drafts show a skeleton while loading and the message if they fail', async () => {
@@ -996,12 +1385,19 @@ test('switching org resets the tab but keeps the chosen wiki per org', async () 
   assert.deepEqual(inputsTo(host, 'wiki.pages').at(-1), { org: 'fabrikam', projectId: 'proj-web', wikiId: 'wiki-fabrikam', path: '/' })
   assert.deepEqual(panel.persisted.plugin.wikiChoice, { contoso: 'wiki-project' })
 
+  assert.deepEqual(rememberedAt(), ['/Runbooks'])
+  assert.equal(rememberedAt('fabrikam|wiki-fabrikam'), undefined)
+
   await panel.select({ type: 'Select', label: 'Organization' }, 'contoso')
   assert.equal(panel.valueOf({ type: 'Select', label: 'Wiki' }), 'wiki-project')
-  assert.deepEqual(panel.expandedOf(TREE), [])
+  assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
+  assert.deepEqual(childrenOf('/Runbooks'), ['/Runbooks/Deploy', '/Runbooks/Rollback'])
   assert.equal(panel.valueOf(SEARCH_BOX), '')
   assert.deepEqual(cardTitles(), ['Deploy'])
-  assert.deepEqual(inputsTo(host, 'wiki.pages').at(-1), { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/' })
+  assert.deepEqual(inputsTo(host, 'wiki.pages').slice(-2), [
+    { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/' },
+    { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/Runbooks' }
+  ])
 })
 
 test('an org that expires and reconnects keeps the tree, the search and the results', async () => {
@@ -1079,7 +1475,7 @@ test('an open page survives a panel reload', async () => {
 
   const stored = { plugin: panel.persisted.plugin, workspace: panel.persisted.workspace }
   await closeCleanly(panel)
-  const second = await mountPanel([org('contoso'), org('fabrikam')], { 'wiki.list': [PROJECT_WIKI], 'wiki.pages': LEVELS['/'], 'wiki.page': input => pageOf(input.path) }, { persisted: stored })
+  const second = await mountPanel([org('contoso'), org('fabrikam')], { 'wiki.list': [PROJECT_WIKI], 'wiki.pages': pagesFrom(LEVELS), 'wiki.page': input => pageOf(input.path) }, { persisted: stored })
   panel = second.panel
   await panel.settled()
   assert.equal(heading(), 'Deploy')
@@ -1157,11 +1553,11 @@ test('the pure tree builder nests loaded folders and leaves the rest to load on 
   const shown = treeItems(levels, ['/A', '/B'])
   assert.deepEqual(shown.capped, false)
   assert.deepEqual(shown.items, [
-    { key: '/A', label: 'A', icon: 'file-text', hasChildren: true, children: [
+    { key: '/A', label: 'A', icon: 'folder', description: '2 pages', hasChildren: true, children: [
       { key: '/A/1', label: '1', icon: 'file-text', hasChildren: false },
       { key: '/A/2', label: '2', icon: 'file-text', hasChildren: false }
     ] },
-    { key: '/B', label: 'B', icon: 'file-text', hasChildren: true }
+    { key: '/B', label: 'B', icon: 'folder', hasChildren: true }
   ])
   assert.deepEqual(treeItems(levels, []).items.map(item => item.children), [undefined, undefined])
   assert.deepEqual(treeItems(new Map(), ['/A']), { items: [], capped: false })
@@ -1330,4 +1726,27 @@ test('about 150-character page paths still leave room for a conflict under 450 K
   await pressIn('Page 0', 'Publish')
   assert.equal(diffsIn('Page 0').length, 2)
   measure('long paths with a conflict open')
+})
+
+test("a 2,000-page wiki stays within Orca's limits", async () => {
+  const levels = largeLevels()
+  assert.equal(Object.values(levels).reduce((total, level) => total + level.pages.length, 0), 2_000)
+  const host = await open({ 'wiki.pages': pagesFrom(levels) })
+  for (let press = 0; press < 6; press += 1) {
+    const before = readsOf(host).length
+    await panel.press({ type: 'IconButton', label: 'Expand all' })
+    assert.ok(readsOf(host).length - before <= MAX_EXPAND_LOADS)
+  }
+  assert.equal(countItems(treeOf()), MAX_TREE_ITEMS)
+  assert.equal(panel.find({ type: 'Text', text: 'Some pages are hidden. Collapse a folder to see others.' })?.props.muted, true)
+  assert.equal(treeOf().every(item => item.description === '19 pages'), true)
+  measure('2,000 pages')
+  assert.equal(panel.expandedOf(TREE).every(path => rememberedAt()?.includes(path)), true)
+  assert.ok((rememberedAt()?.length ?? 0) <= MAX_REMEMBERED_FOLDERS)
+
+  await panel.press({ type: 'IconButton', label: 'Collapse all' })
+  assert.equal(countItems(treeOf()), 5)
+  assert.equal(panel.find({ type: 'Text', text: 'Some pages are hidden. Collapse a folder to see others.' }), null)
+  assert.deepEqual(rememberedAt(), [])
+  measure('2,000 pages collapsed')
 })
