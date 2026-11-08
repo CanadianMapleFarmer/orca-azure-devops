@@ -19,6 +19,7 @@ export type TestHost = ReturnType<typeof mockHost>
 export interface MountOptions {
   visible?: boolean
   persisted?: { plugin?: Record<string, unknown>; workspace?: Record<string, unknown> }
+  module?: Parameters<typeof mount>[0]
 }
 
 export function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
@@ -55,7 +56,7 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
       ...requests
     }
   })
-  const panel = await mount(panelModule, { host, visible: options.visible, persisted: options.persisted })
+  const panel = await mount(options.module ?? panelModule, { host, visible: options.visible, persisted: options.persisted })
   return { host, panel }
 }
 
@@ -63,6 +64,17 @@ export async function closeCleanly(panel: TestPanel): Promise<void> {
   const issues = { errors: panel.errors, warnings: panel.warnings, refusals: panel.refusals }
   await panel.unmount()
   assert.deepEqual(issues, { errors: [], warnings: [], refusals: [] })
+}
+
+export async function reloadPanel(
+  previous: TestPanel,
+  orgs: OrgStatus[],
+  requests: MockRequests = {},
+  options: Pick<MountOptions, 'module' | 'visible'> = {}
+): Promise<{ host: TestHost; panel: TestPanel }> {
+  const persisted = { plugin: { ...previous.persisted.plugin }, workspace: { ...previous.persisted.workspace } }
+  await closeCleanly(previous)
+  return mountPanel(orgs, requests, { ...options, persisted })
 }
 
 export const requestsTo = (host: TestHost, name: string) =>
