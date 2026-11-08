@@ -1,6 +1,6 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
+import { NO_FAMILIES, type WorkItemSummary, type WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
@@ -86,6 +86,7 @@ const workSnapshot: WorkSnapshot = {
     item(201, { type: 'Task', title: 'Update the runbook', state: 'New', column: null, targets: { columns: [], states: ['Active', 'Closed'] } })
   ],
   nudges: [{ itemId: 101, prId: 55, branch: 'main', toColumn: 'Done' }],
+  families: NO_FAMILIES,
   updatedAt: NOW,
   stale: false
 }

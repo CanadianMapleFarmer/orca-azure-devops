@@ -1,6 +1,6 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import type { WorkSnapshot } from '../shared/work'
+import { NO_FAMILIES, type WorkSnapshot } from '../shared/work'
 import { closeCleanly, mountPanel, optionValuesOf, org, PROJECTS, requestsTo, SETTINGS } from './test-support'
 
 let panel: TestPanel
@@ -46,6 +46,7 @@ function snapshotFor(name: string, teamId = OPS.teamId): WorkSnapshot {
     mine: [],
     other: [],
     nudges: [],
+    families: NO_FAMILIES,
     updatedAt: 0,
     stale: false
   }

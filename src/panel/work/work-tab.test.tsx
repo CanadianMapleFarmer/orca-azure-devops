@@ -1,6 +1,6 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestPanel } from 'orca/testing'
 import type { OrgStatus } from '../../shared/types'
-import type { BoardConfig, PrChip, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../shared/work'
+import { NO_FAMILIES, type BoardConfig, type PrChip, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../shared/work'
 import { closeCleanly, mountPanel, org as orgStatus, requestsTo, type TestHost } from '../test-support'
 
 const NOW = 1_700_000_000_000
@@ -74,7 +74,7 @@ function pr(prId: number, over: Partial<PrChip> = {}): PrChip {
 }
 
 function snapshotOf(over: Partial<WorkSnapshot> = {}): WorkSnapshot {
-  return { org: 'contoso', board: board(), mine: [], other: [], nudges: [], updatedAt: NOW, stale: false, ...over }
+  return { org: 'contoso', board: board(), mine: [], other: [], nudges: [], families: NO_FAMILIES, updatedAt: NOW, stale: false, ...over }
 }
 
 function detailsOf(over: Partial<WorkItemDetails> = {}): WorkItemDetails {

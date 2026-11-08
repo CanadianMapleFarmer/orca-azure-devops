@@ -2,6 +2,7 @@ import { assert, mockHost, mount, type MockRequests, type TestPanel, type TreeSn
 import { APPROVAL_TEMPLATE } from '../shared/share/approval-items'
 import { PR_TEMPLATE } from '../shared/share/template'
 import type { OrgStatus } from '../shared/types'
+import { NO_FAMILIES } from '../shared/work'
 import * as panelModule from './panel'
 import { runsSnapshotOf } from './pipelines/fixtures'
 import { snapshotOf } from './prs/fixtures'
@@ -41,7 +42,7 @@ export async function mountPanel(orgs: OrgStatus[], requests: MockRequests = {},
     requests: {
       'orgs.list': orgs,
       'ui.visibility': { ok: true },
-      'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], updatedAt: 0, stale: false }),
+      'work.snapshot': input => ({ org: input.org, board: null, mine: [], other: [], nudges: [], families: NO_FAMILIES, updatedAt: 0, stale: false }),
       'prs.snapshot': input => snapshotOf({ org: input.org, updatedAt: 0 }),
       'reviews.open': input => reviewOf({ key: input }),
       'runs.snapshot': input => runsSnapshotOf({ org: input.org, updatedAt: 0 }),

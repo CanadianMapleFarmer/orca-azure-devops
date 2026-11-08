@@ -90,6 +90,30 @@ test('loads the board named by boardId without the backlog configuration or the 
   assert.equal(requested.some(url => url.endsWith('/_apis/work/boards?api-version=7.1')), false)
 })
 
+test("the default board carries the task backlog's types; a board named by id leaves them out", async () => {
+  const byDefault = await loadBoardConfig(server().http, ARGS)
+  assert.deepEqual(byDefault.taskTypes, ['Task'])
+  const named = await loadBoardConfig(server().http, { ...ARGS, boardId: STORIES_BOARD })
+  assert.equal('taskTypes' in named, false)
+})
+
+test("bugs managed as tasks add the bug category's types to the task types, from the same read", async () => {
+  const bugs = { id: 'Microsoft.BugCategory', name: 'Bugs', workItemTypes: [{ name: 'Bug', url: 'https://dev.azure.com/contoso/_apis/wit/workItemTypes/Bug' }] }
+  const asTasks = { ...fixture('backlog-configuration'), bugsBehavior: 'asTasks', bugWorkItems: bugs }
+  const { http, requested } = server(withRoute('backlogconfiguration', asTasks))
+  assert.deepEqual((await loadBoardConfig(http, ARGS)).taskTypes, ['Task', 'Bug'])
+  assert.equal(requested.length, 6, 'the same six requests as without bugs')
+  const asRequirements = server(withRoute('backlogconfiguration', { ...asTasks, bugsBehavior: 'asRequirements' }))
+  assert.deepEqual((await loadBoardConfig(asRequirements.http, ARGS)).taskTypes, ['Task'])
+})
+
+test('a backlog configuration without a task backlog still loads the board, with no task types', async () => {
+  const { taskBacklog: _, ...withoutTasks } = fixture('backlog-configuration')
+  const config = await loadBoardConfig(server(withRoute('backlogconfiguration', withoutTasks)).http, ARGS)
+  assert.equal(config.boardId, STORIES_BOARD)
+  assert.deepEqual(config.taskTypes, [])
+})
+
 test('matches the default board by name exactly before ignoring case', async () => {
   const boards = { value: [{ id: 'lower', name: 'stories', url: '' }, { id: STORIES_BOARD, name: 'Stories', url: '' }] }
   const config = await loadBoardConfig(server(withRoute('boards', boards)).http, ARGS)

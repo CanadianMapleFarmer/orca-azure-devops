@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import type { RawWorkItem } from '../ado/workitems'
+import { CHILD_LINK, type RawWorkItem } from '../ado/workitems'
 
 export const ORG = 'contoso'
 export const ORG_URL = 'https://dev.azure.com/contoso'
@@ -88,7 +88,9 @@ export function fakeAdo() {
     }
     if (method === 'POST' && path === `/${ORG}/${PROJECT}/_apis/wit/workitemsbatch`) {
       const ids = call.body.ids as number[]
-      return json(200, { count: ids.length, value: ids.map(id => structuredClone(items.get(id)) ?? null) })
+      const fields = call.body.fields as string[] | undefined
+      const answer = (raw: RawWorkItem) => (fields ? onlyFields(raw, fields) : structuredClone(raw))
+      return json(200, { count: ids.length, value: ids.map(id => (items.has(id) ? answer(items.get(id)!) : null)) })
     }
     const pr = new RegExp(`^/${ORG}/${PROJECT}/_apis/git/pullrequests/(\\d+)$`).exec(path)
     if (method === 'GET' && pr && PULL_REQUESTS[Number(pr[1])]) return json(200, fixture(PULL_REQUESTS[Number(pr[1])]))
@@ -185,8 +187,24 @@ export function fakeAdo() {
 
 export type FakeAdo = ReturnType<typeof fakeAdo>
 
+export function addChildren(ado: FakeAdo, parentId: number, children: RawWorkItem[]): void {
+  const parent = ado.items.get(parentId)
+  if (!parent) throw new Error(`the fake holds no work item ${parentId}`)
+  for (const child of children) {
+    ado.items.set(child.id, structuredClone(child))
+    parent.relations = [...(parent.relations ?? []), { rel: CHILD_LINK, url: `${ORG_URL}/_apis/wit/workItems/${child.id}`, attributes: { name: 'Child' } }]
+  }
+}
+
+function onlyFields(raw: RawWorkItem, names: string[]): RawWorkItem {
+  const all: Record<string, unknown> = { 'System.Id': raw.id, ...raw.fields }
+  const fields = Object.fromEntries(names.filter(name => all[name] !== undefined).map(name => [name, structuredClone(all[name])]))
+  return { id: raw.id, rev: raw.rev, fields, url: raw.url }
+}
+
 export const isWiql = (call: AdoCall) => call.method === 'POST' && call.path.endsWith('/_apis/wit/wiql')
 export const isBatch = (call: AdoCall) => call.path.endsWith('/_apis/wit/workitemsbatch')
+export const isFieldsBatch = (call: AdoCall) => isBatch(call) && Array.isArray(call.body?.fields)
 export const isPatch = (call: AdoCall) => call.method === 'PATCH'
 export const isPullRequest = (call: AdoCall) => /\/_apis\/git\/pullrequests\/\d+$/.test(call.path)
 export const isTypeStates = (type: string) => (call: AdoCall) => call.path.endsWith(`/_apis/wit/workitemtypes/${type}/states`)
