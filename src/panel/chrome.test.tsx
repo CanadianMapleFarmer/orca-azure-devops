@@ -291,3 +291,47 @@ test('Chips draw one Badge per chip in its tone', async () => {
   })
   await closeCleanly(panel)
 })
+
+test('Chips with the same text twice draw both and log no error', async () => {
+  const Probe = () => (
+    <Chips
+      chips={[
+        { tone: 'neutral', text: 'Build' },
+        { tone: 'success', text: 'Build' },
+        { tone: 'danger', text: 'Deploy' },
+        { tone: 'warning', text: 'Build' }
+      ]}
+    />
+  )
+  const { panel } = await mountPanel(ORGS, {}, { module: Probe })
+
+  assert.deepEqual(panel.tree(), {
+    type: 'Row',
+    props: { gap: 'xs', wrap: true },
+    children: [
+      { type: 'Badge', key: 'Build', props: { tone: 'neutral' }, children: ['Build'] },
+      { type: 'Badge', key: 'Build#1', props: { tone: 'success' }, children: ['Build'] },
+      { type: 'Badge', key: 'Deploy', props: { tone: 'danger' }, children: ['Deploy'] },
+      { type: 'Badge', key: 'Build#2', props: { tone: 'warning' }, children: ['Build'] }
+    ]
+  })
+  await closeCleanly(panel)
+})
+
+test('Chips keep every key unique when a text already looks like a repeat key', async () => {
+  const Probe = () => (
+    <Chips
+      chips={[
+        { tone: 'neutral', text: 'Build' },
+        { tone: 'neutral', text: 'Build' },
+        { tone: 'neutral', text: 'Build#1' }
+      ]}
+    />
+  )
+  const { panel } = await mountPanel(ORGS, {}, { module: Probe })
+
+  const keys = (panel.tree() as TreeSnapshot).children?.map(child => (typeof child === 'object' ? child.key : child))
+  assert.equal(new Set(keys).size, 3)
+  assert.equal(countNodes(panel.tree()), 7)
+  await closeCleanly(panel)
+})
