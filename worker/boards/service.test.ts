@@ -1434,3 +1434,12 @@ test('a moved task shows its new state after the next poll while ADO still retur
   assert.deepEqual([list?.total, list?.done], [3, 2])
   assert.deepEqual(h.posts.at(-1), polled)
 })
+
+test('the children read asks for at most 1,000 ids, 200 a request', async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, Array.from({ length: 1001 }, (_, index) => task(20_000 + index, 1204)))
+  const list = listOf(await h.service.refresh(ORG), 1204)
+  assert.deepEqual(h.ado.calls.filter(isFieldsBatch).map(call => call.body.ids.length), [200, 200, 200, 200, 200])
+  assert.equal(h.ado.calls.filter(isFieldsBatch).flatMap(call => call.body.ids).includes(21_000), false, 'the 1,001st child is not read')
+  assert.deepEqual([list?.tasks.length, list?.total], [20, 1000])
+})
