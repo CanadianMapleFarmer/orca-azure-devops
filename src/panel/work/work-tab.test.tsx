@@ -100,7 +100,6 @@ const calloutTitled = (title: string) => panel.findAll({ type: 'Callout' }).find
 
 const shapeOf = (node: TreeSnapshot | string): unknown => (typeof node === 'string' ? node : [node.type, ...(node.children ?? []).map(shapeOf)])
 
-
 function withinLimits(): void {
   const nodes = countNodes(panel.tree())
   const bytes = new TextEncoder().encode(JSON.stringify(panel.tree())).length
@@ -999,6 +998,10 @@ test("150 items with 300 tasks, all expanded, stay within Orca's limits and say 
   const note = panel.find({ type: 'Text', text: SOME_HIDDEN })
   assert.deepEqual([note?.props.size, note?.props.muted], ['sm', true])
   assert.equal(cardsIn('New').length, 25)
+  const showMoreIn = (title: string) => inside(groupOf(title), { type: 'Button', text: /^Show \d+ more$/ })
+  assert.equal(showMoreIn('Active').length, 1)
+  assert.deepEqual(groups().find(([title]) => title === 'Done'), ['Done', '28 items'])
+  assert.equal(showMoreIn('Done').length, 0)
   assert.ok(panel.findAll({ type: 'Link', text: /^#\d+ Review the copy/ }).length > 0)
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
