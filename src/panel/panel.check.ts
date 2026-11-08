@@ -90,8 +90,19 @@ const workSnapshot: WorkSnapshot = {
   stale: false
 }
 
+const WEB_API = { repoId: 'repo-api', repoName: 'fabrikam-api' }
+const TOOLS_APP = { projectId: 'proj-tools', projectName: 'Contoso Tools', repoId: 'repo-tools-app', repoName: 'web-app' }
+const GRACE = { id: 'u-grace', name: 'Grace Hopper' }
+
 const prsSnapshot = snapshotOf({
   sets: [
+    setOf(
+      [
+        summaryOf(70, { target: 'develop', checks: { build: 'running', policies: 'pending' } }),
+        summaryOf(71, { ...TOOLS_APP, target: 'develop', reviewers: [reviewerOf('Grace Hopper', 0, { isRequired: true })] })
+      ],
+      { title: 'Rename the tenant setting in every project', sources: ['feature/tenant-setting'] }
+    ),
     setOf(
       [
         summaryOf(55, {
@@ -101,19 +112,26 @@ const prsSnapshot = snapshotOf({
           reviewers: [reviewerOf('Grace Hopper', 10), reviewerOf('Edsger Dijkstra', 0, { isRequired: true })]
         }),
         summaryOf(56, { target: 'qa', mergeStatus: 'conflicts', checks: { build: 'failed', policies: 'rejected' } }),
-        summaryOf(57, { target: 'main', status: 'completed', closedAt: NOW - 3_600_000 })
+        summaryOf(57, { target: 'main', status: 'completed', closedAt: NOW - 3_600_000 }),
+        summaryOf(58, { ...WEB_API, source: 'feature/login-api', target: 'develop', checks: { build: 'running', policies: 'pending' } })
       ],
-      { title: 'Fix the sign-in redirect that sends people to the wrong page', sources: ['feature/login'] }
+      { title: 'Fix the sign-in redirect that sends people to the wrong page', sources: ['feature/login', 'feature/login-api'] }
     ),
-    setOf([summaryOf(60, { title: 'Add CSV export', repoName: 'api', isDraft: true, checks: { build: 'running', policies: 'pending' } })])
+    setOf([summaryOf(60, { ...WEB_API, title: 'Add CSV export', isDraft: true, checks: { build: 'running', policies: 'pending' } })]),
+    setOf([summaryOf(61, { title: 'Tidy the footer links', status: 'completed', closedAt: NOW - 600_000 }), summaryOf(62, { title: 'Tidy the footer links' })]),
+    setOf([summaryOf(65, { ...TOOLS_APP, title: 'Pin the build image', autoComplete: true, checks: { build: 'succeeded', policies: 'approved' } })])
   ],
-  toReview: [summaryOf(80, { title: 'Cache the lookups', repoName: 'api', createdBy: { id: 'u-grace', name: 'Grace Hopper' } })],
-  toReviewCount: 1,
+  toReview: [
+    summaryOf(80, { ...WEB_API, title: 'Cache the lookups', createdBy: GRACE }),
+    summaryOf(82, { ...TOOLS_APP, title: 'Speed up the nightly export', createdBy: GRACE }),
+    summaryOf(83, { title: 'Tighten the cookie settings', createdBy: GRACE })
+  ],
+  toReviewCount: 3,
   reviewed: [
     summaryOf(81, {
+      ...WEB_API,
       title: 'Add the health endpoint',
-      repoName: 'api',
-      createdBy: { id: 'u-grace', name: 'Grace Hopper' },
+      createdBy: GRACE,
       reviewers: [reviewerOf('Ada Lovelace', 5, { id: 'u-contoso' })]
     })
   ],
@@ -172,6 +190,14 @@ export default defineCheck({
   },
   prs: {
     persisted: { workspace: { tab: 'prs' } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'prs.snapshot': prsSnapshot
+    }
+  },
+  prsToReview: {
+    persisted: { plugin: { prsPrefs: { contoso: { project: null, repo: null, view: 'review' } } }, workspace: { tab: 'prs' } },
     requests: {
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },

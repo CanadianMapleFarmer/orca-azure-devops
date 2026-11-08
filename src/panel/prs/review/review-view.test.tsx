@@ -44,6 +44,8 @@ const button = (text: string) => panel.find({ type: 'Button', text })
 
 const callouts = () => panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text])
 
+const showToReview = () => panel.press({ type: 'Button', text: /^To review/ })
+
 function held<T>() {
   let release: (value: T) => void = () => {}
   const promise = new Promise<T>(resolve => {
@@ -121,7 +123,7 @@ test('Back returns to the list', async () => {
   assert.equal(panel.find({ type: 'Collapsible' }), null)
   await panel.press({ type: 'IconButton', label: 'Back' })
   assert.equal(heading(), undefined)
-  assert.ok(panel.find({ type: 'Collapsible', label: 'To review (1)' }))
+  assert.ok(panel.find({ type: 'Button', text: 'To review · 1' }))
   assert.equal(panel.persisted.workspace.openReview ?? null, null)
   assert.equal(requestsTo(host, 'reviews.open').length, 1)
 })
@@ -327,7 +329,7 @@ test('the armed instructions belong to their review', async () => {
   await panel.press({ type: 'Button', text: 'Check out in Orca' })
   assert.equal(panel.find({ type: 'Callout' })?.props.title, 'Create the workspace in Orca')
   await panel.press({ type: 'IconButton', label: 'Back' })
-  await panel.toggle({ type: 'Collapsible' })
+  await showToReview()
   await panel.press({ type: 'ListItem', label: 'Add the health endpoint' })
   assert.equal(heading(), 'Add the health endpoint')
   assert.equal(panel.find({ type: 'Callout' }), null)
@@ -343,7 +345,7 @@ test('the armed instructions show only while the posted arm is this pull request
   const shown = () => panel.findAll({ type: 'Callout' }).some(callout => callout.props.title === 'Create the workspace in Orca')
   const reopen = async (title: string) => {
     await panel.press({ type: 'IconButton', label: 'Back' })
-    if (panel.find({ type: 'Collapsible' })?.props.open !== true) await panel.toggle({ type: 'Collapsible' })
+    await showToReview()
     await panel.press({ type: 'ListItem', label: title })
     assert.equal(heading(), title)
   }
@@ -476,7 +478,7 @@ test('Back leaves a review that failed to load', async () => {
     }
   })
   await panel.press({ type: 'IconButton', label: 'Back' })
-  assert.ok(panel.find({ type: 'Collapsible', label: 'To review (1)' }))
+  assert.ok(panel.find({ type: 'Button', text: 'To review · 1' }))
   assert.equal(panel.persisted.workspace.openReview ?? null, null)
 })
 
@@ -486,7 +488,7 @@ test('the review shows its title and a skeleton while it loads', async () => {
     'prs.snapshot': snapshotOf({ toReview: [prOf(4110, { title: REVIEW_TITLE })], toReviewCount: 1 }),
     'reviews.open': () => loading.promise
   }, { persisted: { openReview: null } })
-  await panel.toggle({ type: 'Collapsible' })
+  await showToReview()
   const pressing = panel.press({ type: 'ListItem', label: REVIEW_TITLE })
   await pause(10)
   assert.ok(panel.find({ type: 'Skeleton', label: 'Loading the pull request' }))
@@ -572,7 +574,7 @@ test('switching org closes the review', async () => {
   assert.equal(heading(), REVIEW_TITLE)
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.equal(heading(), undefined)
-  assert.ok(panel.find({ type: 'Collapsible', label: 'To review (1)' }))
+  assert.ok(panel.find({ type: 'Button', text: 'To review · 1' }))
   assert.equal(panel.persisted.workspace.openReview ?? null, null)
   assert.equal(requestsTo(host, 'reviews.open').length, 1)
 })
@@ -1198,7 +1200,7 @@ test('closing the review forgets the selected file and the drafts', async () => 
   await panel.type(FILE_BOX, 'Draft.')
   await panel.type({ type: 'Input', label: 'Filter files' }, 'redirect')
   await panel.press({ type: 'IconButton', label: 'Back' })
-  await panel.toggle({ type: 'Collapsible' })
+  await showToReview()
   await panel.press({ type: 'ListItem', label: REVIEW_TITLE })
   await showSection('files')
   assert.equal(panel.valueOf({ type: 'Input', label: 'Filter files' }), '')

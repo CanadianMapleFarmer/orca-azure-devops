@@ -22,6 +22,14 @@ export function scopeIn(all: Record<string, Partial<Scope>>, org: string): Scope
   return { project: idOrNull(entry.project), repo: idOrNull(entry.repo) }
 }
 
+export function prsViewIn(all: Record<string, unknown> | null | undefined, org: string): PrsView {
+  return entryIn(all, org).view === 'review' ? 'review' : 'mine'
+}
+
+export function choosePrsView(org: string, view: PrsView): void {
+  update(prsPrefs, all => ({ ...all, [org]: { ...entryIn(all, org), view } as Scope & { view: PrsView } }))
+}
+
 export function chooseProject<S extends Scope>(prefs: Atom<Record<string, S>>, org: string, project: string | null): void {
   update(prefs, all => ({ ...all, [org]: { ...entryIn(all, org), project, repo: null } as S }))
 }
