@@ -53,24 +53,23 @@ function fitting<T>(draw: Draw, items: readonly T[], nodes: number): T[] {
   return kept
 }
 
-function Toolbar({ org, boards, current, view }: { org: string; boards: BoardsTarget; current: WorkSnapshot; view: WorkView }): OrcaNode {
+function Toolbar({ org, boards, viewKey, current, view }: { org: string; boards: BoardsTarget; viewKey: string; current: WorkSnapshot; view: WorkView }): OrcaNode {
   const actions: ToolAction[] = [
     ...foldActions(org, 'work'),
     { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
     { icon: 'open-external', label: 'Open board', onPress: () => openBoard(org) }
   ]
-  const key = workViewKey(org, boards)
-  const choose = (next: WorkView) => (view === next ? 'solid' : 'ghost')
+  const variantOf = (next: WorkView) => (view === next ? 'solid' : 'ghost')
   return (
     <TabToolbar
       left={
         <>
           {current.board ? <Badge>{cutLabel(`${boards.teamName} · ${current.board.boardName}`)}</Badge> : null}
           <Row gap="xs">
-            <Button size="sm" variant={choose('columns')} onPress={() => chooseWorkView(key, 'columns')}>
+            <Button size="sm" variant={variantOf('columns')} onPress={() => chooseWorkView(viewKey, 'columns')}>
               Columns
             </Button>
-            <Button size="sm" variant={choose('lanes')} onPress={() => chooseWorkView(key, 'lanes')}>
+            <Button size="sm" variant={variantOf('lanes')} onPress={() => chooseWorkView(viewKey, 'lanes')}>
               Lanes
             </Button>
           </Row>
@@ -243,10 +242,11 @@ export function WorkTab({ org }: { org: OrgStatus }): OrcaNode {
     return <LoadFailure message={status.message} onRetry={retryLoad} />
   }
   const shown = read(notice)
-  const view = workViewIn(read(workViews), workViewKey(org.org, org.boards))
+  const viewKey = workViewKey(org.org, org.boards)
+  const view = workViewIn(read(workViews), viewKey)
   return (
     <Stack gap="md">
-      <Toolbar org={org.org} boards={org.boards} current={current} view={view} />
+      <Toolbar org={org.org} boards={org.boards} viewKey={viewKey} current={current} view={view} />
       {shown ? <Callout tone={shown.tone}>{shown.text}</Callout> : null}
       <Nudges org={org.org} current={current} />
       <Groups org={org.org} current={current} view={view} />

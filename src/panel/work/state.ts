@@ -2,6 +2,7 @@ import { atom, plugin, read, set, update } from 'orca'
 import { messageOf } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
 import type { MoveTarget, Nudge, WorkSnapshot } from '../../shared/work'
+import { workViewKey } from '../prefs'
 import { tab } from '../state'
 import { hostIsVisible, surfaceVisibility } from '../visibility'
 import { GROUP_PAGE } from './plan'
@@ -52,7 +53,7 @@ function align(wanted: Source | null, visibleOrg: string | null): void {
 export function syncWork(org: OrgStatus | null, onScreen: boolean): void {
   const connected = org?.state === 'connected' ? org : null
   const wanted = connected?.boards
-    ? { org: connected.org, key: `${connected.org}/${connected.boards.projectId}/${connected.boards.teamId}` }
+    ? { org: connected.org, key: workViewKey(connected.org, connected.boards) }
     : null
   const visibleOrg = connected && onScreen && hostIsVisible() && read(tab) === 'work' ? connected.org : null
   void Promise.resolve().then(() => align(wanted, visibleOrg))

@@ -1277,6 +1277,21 @@ test('a long group shows 25 cards and Show N more reveals the next ones', async 
   assert.equal(panel.find({ type: 'Text', text: SOME_HIDDEN }), null)
 })
 
+test('in Lanes, Show more pages one lane and column without touching the same column in another lane', async () => {
+  const many = (from: number, count: number, lane: string | null) => Array.from({ length: count }, (_, index) => item(from + index, { column: 'Active', lane }))
+  await open(snapshotOf({ board: laneBoard(), mine: [...many(1000, 30, null), ...many(2000, 30, 'Expedite')] }), {}, { persisted: IN_LANES })
+  const showIn = (lane: string) => inside(columnIn(lane, 'Active'), { type: 'Button', text: /^Show \d+ more$/ })
+  const storyIds = (lane: string) => cardsAt(lane, 'Active').map(title => title?.replace('Story ', ''))
+  assert.deepEqual([cardsAt('Default lane', 'Active').length, cardsAt('Expedite', 'Active').length], [25, 25])
+  assert.deepEqual([showIn('Default lane')[0]?.text, showIn('Expedite')[0]?.text], ['Show 5 more', 'Show 5 more'])
+
+  await panel.press(showIn('Expedite')[0]!)
+  assert.deepEqual(storyIds('Expedite'), Array.from({ length: 30 }, (_, index) => String(2000 + index)))
+  assert.equal(showIn('Expedite').length, 0)
+  assert.deepEqual(storyIds('Default lane'), Array.from({ length: 25 }, (_, index) => String(1000 + index)))
+  assert.equal(showIn('Default lane')[0]?.text, 'Show 5 more')
+})
+
 test("150 items with 300 tasks, all expanded, stay within Orca's limits and say when some are hidden", async () => {
   const large = largeWork()
   assert.deepEqual(

@@ -175,17 +175,17 @@ function Toolbar({ view, shown }: { view: View; shown: PrsView }): OrcaNode {
     { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
     { icon: 'settings', label: 'Teams channels', onPress: () => openChannels('prs') }
   ]
-  const choose = (next: PrsView) => (shown === next ? 'solid' : 'ghost')
+  const variantOf = (next: PrsView) => (shown === next ? 'solid' : 'ghost')
   return (
     <TabToolbar
       left={
         <>
           <ScopePickers org={org} choices={choices} prefs={prsPrefs} />
           <Row gap="xs">
-            <Button size="sm" variant={choose('mine')} onPress={() => choosePrsView(org, 'mine')}>
+            <Button size="sm" variant={variantOf('mine')} onPress={() => choosePrsView(org, 'mine')}>
               Mine
             </Button>
-            <Button size="sm" variant={choose('review')} onPress={() => choosePrsView(org, 'review')}>
+            <Button size="sm" variant={variantOf('review')} onPress={() => choosePrsView(org, 'review')}>
               {reviewLabel(view)}
             </Button>
           </Row>
