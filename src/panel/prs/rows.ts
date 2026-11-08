@@ -2,6 +2,8 @@ import type { PrReviewer, PrSummary, ReleaseSet } from '../../shared/prs'
 import type { Chip } from '../chips'
 import type { Place } from '../grouping'
 
+export type PlaceChip = 'repo' | 'project' | null
+
 export const MERGED_SHOWN = 2
 export const MIN_BRANCH_PREFIX = 4
 
@@ -46,13 +48,13 @@ function statusChip(pr: PrSummary): Chip | null {
   return { tone: check?.tone ?? (pr.autoComplete ? 'accent' : 'neutral'), text: parts.join(' · ') }
 }
 
-function placeChip(pr: PrSummary, place: 'repo' | 'project' | null): Chip | null {
+function placeChip(pr: PrSummary, place: PlaceChip): Chip | null {
   if (place === 'repo') return { tone: 'neutral', text: pr.repoName }
   if (place === 'project') return { tone: 'neutral', text: `${pr.projectName} / ${pr.repoName}` }
   return null
 }
 
-export function prChips(pr: PrSummary, place: 'repo' | 'project' | null): Chip[] {
+export function prChips(pr: PrSummary, place: PlaceChip): Chip[] {
   return [placeChip(pr, place), statusChip(pr)].filter(chip => chip !== null)
 }
 

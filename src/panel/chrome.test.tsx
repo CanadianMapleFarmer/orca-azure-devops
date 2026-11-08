@@ -1,7 +1,9 @@
 import { Stack, Text, type OrcaNode } from 'orca'
 import { assert, test, type TreeSnapshot } from 'orca/testing'
 import { Chips } from './chips'
-import { Group } from './group'
+import { CHOOSE_ALL } from './copy'
+import { Group, ScopedEmpty } from './group'
+import type { Choices } from './grouping'
 import { cutLabel, MAX_LABEL_BYTES, utf8Length } from './label'
 import { foldActions, TabToolbar, type ToolAction } from './toolbar'
 import { closeCleanly, countNodes, mountPanel, org, reloadPanel } from './test-support'
@@ -266,6 +268,30 @@ test('a group title and hint over 1 KiB are cut to the label limit', async () =>
   assert.ok(title.endsWith('…') && description.endsWith('…'))
   assert.ok(description.startsWith('2 PRs · é'))
   await closeCleanly(panel)
+})
+
+const CHOICES: Choices = { projects: [{ id: 'p1', name: 'Contoso Tools' }], repos: [], scope: { project: null, repo: null } }
+
+const emptyOf = async (choices: Choices) => {
+  const Probe = () => <ScopedEmpty choices={choices} title="Nothing yet" description="Things show up here." />
+  const { panel } = await mountPanel(ORGS, {}, { module: Probe })
+  const empty = panel.find({ type: 'EmptyState' })
+  const shown = [empty?.props.title, empty?.props.description]
+  await closeCleanly(panel)
+  return shown
+}
+
+test('a scoped empty state names the chosen project and points to All projects, else shows its own copy', async () => {
+  assert.deepEqual(await emptyOf(CHOICES), ['Nothing yet', 'Things show up here.'])
+  assert.deepEqual(await emptyOf({ ...CHOICES, scope: { project: 'p1', repo: null } }), ['Nothing here for Contoso Tools', CHOOSE_ALL])
+  assert.deepEqual(await emptyOf({ ...CHOICES, scope: { project: 'gone', repo: null } }), ['Nothing yet', 'Things show up here.'])
+})
+
+test('a scoped empty state cuts a long project name to the label limit', async () => {
+  const long = 'é'.repeat(2_000)
+  const title = (await emptyOf({ projects: [{ id: 'p1', name: long }], repos: [], scope: { project: 'p1', repo: null } }))[0] as string
+  assert.ok(utf8Length(title) <= MAX_LABEL_BYTES)
+  assert.ok(title.startsWith('Nothing here for é') && title.endsWith('…'))
 })
 
 test('Chips draw one Badge per chip in its tone', async () => {

@@ -6,10 +6,8 @@ import type { Identity } from '../../shared/types'
 import { Chips } from '../chips'
 import { cutLabel } from '../label'
 import { openComposer } from '../share/state'
-import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, prChips, waitingOn } from './rows'
+import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, prChips, waitingOn, type PlaceChip } from './rows'
 import { act, isActing, isMergedShown, outcomeOf, toggleMerged, type Outcome } from './state'
-
-export type PlaceChip = 'repo' | 'project' | null
 
 const optionsLine = (options: AutoCompleteOptions): string =>
   `Auto-complete uses ${MERGE_STRATEGY_LABELS[options.mergeStrategy]}, ${options.deleteSourceBranch ? 'deletes' : 'keeps'} the source branch, ${options.transitionWorkItems ? 'completes linked work items' : 'leaves work items alone'}. Change this in Settings → Azure DevOps.`

@@ -1,11 +1,10 @@
-import { Button, Callout, EmptyState, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Button, Callout, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import { failedRuns, isActive, needsMe, runCounts, runsFor } from '../../shared/runs'
 import type { OrgStatus } from '../../shared/types'
-import { ACROSS_PROJECTS, ACROSS_REPOS, CHOOSE_ALL, counted, needYouHint, nothingIn } from '../copy'
-import { Group, projectTitle } from '../group'
+import { ACROSS_PROJECTS, ACROSS_REPOS, counted, needYouHint } from '../copy'
+import { Group, projectTitle, ScopedEmpty } from '../group'
 import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Choices, type ProjectGroup } from '../grouping'
-import { cutLabel } from '../label'
 import { runsPrefs, scopeIn } from '../prefs'
 import { Channels, openChannels } from '../share/channels'
 import { Composer } from '../share/composer'
@@ -133,11 +132,7 @@ function ProjectRuns({ view, project }: { view: View; project: ProjectGroup<RunS
 
 function Runs({ view, current, choices, now }: { view: View; current: RunsSnapshot; choices: Choices; now: number }): OrcaNode {
   const runs = inScope(runsFor(view.filter, current.runs, now), runPlaces, choices.scope)
-  if (runs.length === 0) {
-    const project = choices.projects.find(each => each.id === choices.scope.project)
-    if (project) return <EmptyState title={cutLabel(nothingIn(project.name))} description={CHOOSE_ALL} />
-    return <EmptyState title={EMPTY[view.filter].title} description={EMPTY[view.filter].description} />
-  }
+  if (runs.length === 0) return <ScopedEmpty choices={choices} title={EMPTY[view.filter].title} description={EMPTY[view.filter].description} />
   const shown = runs.slice(0, MAX_RUNS)
   const grouped = groupByPlace(shown, runPlaces)
   return (

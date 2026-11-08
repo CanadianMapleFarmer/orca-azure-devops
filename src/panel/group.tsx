@@ -1,7 +1,7 @@
-import { Collapsible, type OrcaNode } from 'orca'
-import { repoCount } from './copy'
+import { Collapsible, EmptyState, type OrcaNode } from 'orca'
+import { CHOOSE_ALL, nothingIn, repoCount } from './copy'
 import { isFoldOpen, setFoldOpen, type FoldTab } from './folds'
-import type { ProjectGroup } from './grouping'
+import type { Choices, ProjectGroup } from './grouping'
 import { cutLabel } from './label'
 
 export function projectTitle(project: Pick<ProjectGroup<unknown>, 'projectName' | 'repoName' | 'repoCount'>): string {
@@ -32,4 +32,10 @@ export function Group({ org, tab, foldKey, title, count, hint, natural = true, c
       {open ? children : null}
     </Collapsible>
   )
+}
+
+export function ScopedEmpty({ choices, title, description }: { choices: Choices; title: string; description: string }): OrcaNode {
+  const project = choices.projects.find(each => each.id === choices.scope.project)
+  if (project) return <EmptyState title={cutLabel(nothingIn(project.name))} description={CHOOSE_ALL} />
+  return <EmptyState title={title} description={description} />
 }

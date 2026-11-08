@@ -1,9 +1,9 @@
-import { Button, Callout, EmptyState, List, ListItem, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Button, Callout, List, ListItem, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { PrSnapshot, PrSummary, ReleaseSet } from '../../shared/prs'
 import { votePhrase } from '../../shared/reviews'
 import type { OrgStatus } from '../../shared/types'
-import { ACROSS_PROJECTS, ACROSS_REPOS, CHOOSE_ALL, counted, needYouHint, nothingIn } from '../copy'
-import { Group, projectTitle } from '../group'
+import { ACROSS_PROJECTS, ACROSS_REPOS, counted, needYouHint } from '../copy'
+import { Group, projectTitle, ScopedEmpty } from '../group'
 import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Choices, type Grouped, type Place } from '../grouping'
 import { cutLabel } from '../label'
 import { choosePrsView, prsPrefs, prsViewIn, scopeIn, type PrsView } from '../prefs'
@@ -12,10 +12,10 @@ import { Composer } from '../share/composer'
 import { shareView } from '../share/state'
 import { LoadFailure } from '../snapshot-parts'
 import { foldActions, ScopePickers, TabToolbar, type ToolAction } from '../toolbar'
-import { ReleaseSetCard, type PlaceChip } from './release-set'
+import { ReleaseSetCard } from './release-set'
 import { ReviewView } from './review/review-view'
 import { openReview, showReview } from './review/state'
-import { myVoteOn, needsYou, prPlace, setPlaces } from './rows'
+import { myVoteOn, needsYou, prPlace, setPlaces, type PlaceChip } from './rows'
 import { load, notice, refresh, refreshing, retryLoad, snapshot } from './state'
 
 const MAX_SETS = 30
@@ -66,12 +66,6 @@ function Groups<T>({ org, grouped, layout }: { org: string; grouped: Grouped<T>;
   )
 }
 
-function Empty({ choices, title, description }: { choices: Choices; title: string; description: string }): OrcaNode {
-  const project = choices.projects.find(each => each.id === choices.scope.project)
-  if (project) return <EmptyState title={cutLabel(nothingIn(project.name))} description={CHOOSE_ALL} />
-  return <EmptyState title={title} description={description} />
-}
-
 interface Shown {
   set: ReleaseSet
   limit: number
@@ -92,7 +86,7 @@ function setsToShow(sets: readonly ReleaseSet[]): Shown[] {
 function Mine({ org, current, choices }: View): OrcaNode {
   const sets = inScope(current.sets, setPlaces, choices.scope)
   if (sets.length === 0) {
-    return <Empty choices={choices} title="No open pull requests of yours" description="Pull requests you create in this organization's code projects show up here." />
+    return <ScopedEmpty choices={choices} title="No open pull requests of yours" description="Pull requests you create in this organization's code projects show up here." />
   }
   const shown = setsToShow(sets)
   const layout: Layout<Shown> = {
@@ -127,7 +121,7 @@ function ToReview({ org, current, choices }: View): OrcaNode {
   const reviewed = inScope(current.reviewed, prPlaces, choices.scope).slice(0, MAX_REVIEWED)
   const total = choices.scope.project === null ? current.toReviewCount : waiting.length
   if (total === 0 && waiting.length === 0 && reviewed.length === 0) {
-    return <Empty choices={choices} title="Nothing to review" description="Pull requests that name you as a reviewer show up here until you vote." />
+    return <ScopedEmpty choices={choices} title="Nothing to review" description="Pull requests that name you as a reviewer show up here until you vote." />
   }
   const shown = waiting.slice(0, MAX_TO_REVIEW)
   const layout: Layout<PrSummary> = {
