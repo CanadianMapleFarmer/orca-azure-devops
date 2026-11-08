@@ -577,6 +577,7 @@ A code wiki is a folder of a repository published as a wiki. Its pages are read-
 **Open in tab** shows the page full width in Orca's own Markdown view, where tables have room and Mermaid diagrams are drawn. It needs a local workspace in focus. Without one it says `Open a local workspace first; wiki pages open in a tab there.` This hasn't been checked live yet (see Live checks still pending).
 
 - The tab shows a read-only copy of the page: `<workspace>/.orca-ado/wiki-read/<organisation>/<wiki>/<page path>.md`. It is the `.orca-ado/` folder the board, run tab and drafts use, and its `.gitignore` containing `*` keeps git out. File names are cleaned like a draft's.
+- The copy holds the same cleaned Markdown as the sidebar: images are links, only `http`, `https` and `mailto` links are kept, and `[[_TOC_]]` is dropped.
 - The copy's first line says it is read-only and where to change the page: **Edit in Orca** on a project wiki, the repository on a code wiki. The file itself is read-only, so a save in the tab fails with Orca's own error and leaves it as it was. The tab still looks editable.
 - Both Mermaid forms are drawn, because the copy writes a `::: mermaid` block as a fenced `mermaid` block. Orca's **Table of Contents** button in the tab's header lists the page's headings. If your Orca opens Markdown as source, switch the tab to the rich view to see diagrams.
 - Pressing **Open in tab** again reads the page again and rewrites the copy when it changed.
@@ -645,7 +646,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 
 ## Polling
 
-- My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise. Each load also reads the parents of your tasks and the child tasks of your items.
+- My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise. Each load also reads the parents of your tasks and the child tasks of your items and of those parents.
 - An open board: every 30 seconds while visible.
 - PR chip status: cached for 2 minutes, or an hour once the pull request is merged or abandoned.
 - PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list, for the status bar and review notifications). Opening the tab shows data under a minute old without asking again.
@@ -788,7 +789,7 @@ Panel overhaul:
 - Swimlanes: **Columns** and **Lanes** on a board with swimlanes and **Lanes** on one without, each card in the lane Azure DevOps puts it in, and the unnamed lane as **Default lane**.
 - A reload: the Work view and open groups survive a reload, and so do the PRs view and the open wiki folders.
 - Wiki: folders look different from pages and show their page counts.
-- Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens with both Mermaid forms drawn and a wide table readable, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and Refresh while the tab is open rewrites the copy. A page over 600 KiB opens cut, with its note.
+- Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens with both Mermaid forms drawn and a wide table readable, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and pressing **Open in tab** again while the tab is open rewrites the copy and the open tab shows the new text. A page over 600 KiB opens cut, with its note.
 - Mermaid in both forms: `::: mermaid` with and without a space, a fenced `mermaid` block, a front matter block, and the diagram kinds Azure DevOps lists.
 - Stage chips on every run card.
 

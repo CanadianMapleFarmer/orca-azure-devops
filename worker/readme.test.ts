@@ -397,3 +397,16 @@ test('the pending live checks list each done-means check of the overhaul', async
     assert.match(pending, check)
   }
 })
+
+test("the README says the Open in tab copy is the sidebar's cleaned Markdown that only Open in tab rewrites, and what child tasks a Work load reads", async () => {
+  const text = await readme()
+  const reading = subsection(section(text, 'The Wiki tab'), 'Open in tab')
+  assert.match(reading, /same cleaned Markdown as the sidebar: images are links/)
+  const pending = text.slice(text.indexOf('\nPanel overhaul:\n'), text.indexOf('\n## License'))
+  assert.match(pending, /pressing \*\*Open in tab\*\* again while the tab is open rewrites the copy and the open tab shows the new text/)
+  assert.ok(!pending.includes('Refresh while the tab is open'), "the page's Refresh reloads only the sidebar page")
+  const work = section(text, 'Polling')
+    .split('\n')
+    .find(line => line.startsWith('- My work:'))
+  assert.match(work ?? '', /the parents of your tasks and the child tasks of your items and of those parents\./)
+})
