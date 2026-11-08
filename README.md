@@ -26,18 +26,18 @@ This is a preview for testers. It isn't in Orca's plugin catalog yet.
 | Sign in with Microsoft, and proxy and certificate settings for restricted networks |
 | Choosing each org's boards project, team and code projects |
 | An always-on worker and an `ADO` status bar item |
-| A Work tab with your items, grouped by board column |
+| A Work tab with your items and their tasks, by board column or swimlane, with Collapse all and Expand all |
 | A full-tab team board with drag-and-drop |
 | Starting a workspace or an agent from a work item |
-| A PRs tab with your pull requests in release sets, plus Approve all and Auto-complete all |
+| A PRs tab with your pull requests in release sets grouped by project, with a Mine and To review switch, Approve and Auto-complete |
 | Sharing pull requests to the clipboard, a Teams channel, a Teams chat and reviewers |
 | PR reviews: the description, reviewers, votes, numbered file diffs, comment threads and Check out in Orca |
-| A Pipelines tab with your runs, their stages and the approvals waiting on them |
+| A Pipelines tab with your runs grouped by project, their stages and the approvals waiting on them |
 | A full-tab run view with a live log tail, search, errors only and an error summary |
 | Approving or rejecting an environment approval, rerunning a failed stage and cancelling a run |
 | Sharing an approval to the clipboard, a Teams channel, a Teams chat or email |
 | Desktop notifications for failed runs, watched runs, approvals, review requests and new comments on your pull requests |
-| Wiki: a page tree, search and rendered pages, with Edit in Orca and Publish that handles conflicts |
+| Wiki: a page tree that tells folders from pages, search and rendered pages, Open in tab with Mermaid diagrams drawn, and Edit in Orca and Publish that handles conflicts |
 | `ADO · N failed · N approvals · N to review` on the status bar |
 
 ## Requirements
@@ -70,7 +70,7 @@ What exists so far is expected to work with:
 - **Project and team: Read** (`vso.project`) for the project and team lists.
 - **Work Items: Read & write** (`vso.work_write`) for the Work tab and board, moves, comments and links.
 - **Code: Read** (`vso.code`) for pull request chips, the PRs tab and linking a pull request. Without it, chips are off for that organisation and the Work and PRs tabs say so.
-- **Code: Read & write** (`vso.code_write`) for Approve all, Auto-complete all and adding reviewers. It also covers the votes and comments in a pull request review.
+- **Code: Read & write** (`vso.code_write`) for Approve, Auto-complete and adding reviewers. It also covers the votes and comments in a pull request review.
 - **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message, email or add as reviewers.
 - **Build: Read & execute** (`vso.build_execute`) for the Pipelines tab and the run tab: runs, logs, rerun, cancel and approvals. Without Build access the tab says so and pauses for 10 minutes. Approvals may need a scope this list doesn't name yet. Without access to them the runs still load, and the tab says Needs me may be incomplete.
 - **Wiki: Read & write** (`vso.wiki_write`) for the Wiki tab: reading pages and publishing edits. Search may need a further scope this list doesn't name yet.
@@ -156,11 +156,47 @@ A change to any of them is picked up when you save it. A change to the certifica
 
 Open the Azure DevOps panel and choose **Work**. It needs a boards project and team for the organisation (see its settings).
 
-- **My work** lists the items assigned to you, grouped by board column. Finished items are left out. Items of a type the board doesn't show, and items of a board type that aren't in a board column, are grouped under **Other** and move by state.
+The toolbar has the board's label, a **Columns** and **Lanes** switch, and four icon buttons: **Collapse all**, **Expand all**, **Refresh** and **Open board**. The label is the team and the board, such as `Platform · Stories`. It is a label, not a picker: the board comes from the organisation's settings. `Updated …` sits under the toolbar in muted text. **Open board** opens the full-tab board (see The board).
+
+### My work
+
+My work lists the items assigned to you. Finished items are left out.
+
+- **Columns** is the default view. It has one group for each board column, in board order, with the number of items in it. A column with nothing in it isn't shown.
+- **Lanes** follows the board's own swimlanes. It has one group for each lane, in board order and empty lanes included, and inside it one group for each column that holds items. The board's unnamed lane is called **Default lane**. A board with no swimlanes shows the columns instead, under the note `This board has no swimlanes, so Lanes shows the columns.`
+- **Not on this board** holds your items that move by state, not by column: Features and Epics, bugs the board doesn't show, and board items that have no column. It has one group for each type, and **Move** changes an item's state.
+- **No parent** holds your tasks that have no parent, and nothing else.
+
+### An item card
+
+A card has two lines. The first is the title: press it to open the item's details. The second has the type's icon (it opens the details too), `#id`, the chips for linked pull requests, **Tasks n/m** when the item has tasks and a compact **Move** box.
+
 - Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `● build` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
-- **Move to** on a card moves the item to another column. Moving into a split column puts the item in Doing. A move is refused when someone else changed the item first: the item is refreshed and you try again.
-- **Details** shows the description, acceptance criteria, comments, parent and links, with each linked pull request's state. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
-- **Open board** (the icon in the header) opens the full-tab board.
+- **Move** moves the item to another column. Moving into a split column puts the item in Doing. A move is refused when someone else changed the item first: the item is refreshed and you try again.
+- The details show the description, acceptance criteria, comments, parent and links, with each linked pull request's state. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
+
+### Tasks under their parent
+
+A task sits under its parent, whatever type the parent is. **Tasks n/m** on a parent shows how many of its tasks are done, and opens or closes the list.
+
+- The board's backlog settings say which types count as tasks: the task level's types, and bugs too when the team handles bugs as tasks.
+- The list holds every child task of the parent, whoever it is assigned to and finished ones included, up to 20 tasks. A longer list ends with `+ N more`.
+- A row has the task's `#id` and title, its state and, when the task isn't yours, the assignee's name or `Unassigned`. Press a title to open the details. Finished tasks are muted and don't open. Your own tasks have **Move** too.
+- A list starts open when it holds a task of yours that isn't done or its parent is dimmed, and closed otherwise.
+- A parent that isn't assigned to you but has a task of yours shows dimmed, in the column (and lane) it is in. A parent that isn't on the board goes in **Not on this board**, under its type.
+- A task that has tasks of its own is listed in **Not on this board** under its type, with its tasks nested under it. It still shows as a row under its own parent.
+- A parent you can't read shows as `#id` under **Unknown type**, in **Not on this board**, with its tasks.
+
+The same load reads the parents of your tasks and the child tasks in batches, never one request per item. When the child tasks can't be read (a refusal on another project, throttling or a timeout), the tab still lists every item, without task lists, and says `Couldn't load the tasks under your items. They show after the next refresh.`
+
+### Collapse all and Expand all
+
+**Collapse all** closes every group, lane and task list in the tab. **Expand all** opens them all. You can still open or close any one afterwards.
+
+- Which groups and task lists are open is remembered for each organisation, and survives a reload and a switch of tab.
+- The view, **Columns** or **Lanes**, is remembered for each board.
+- A group shows 25 items and ends with **Show N more**. That isn't remembered.
+- On a very large board the tab stops drawing before it reaches Orca's panel limits, and says `Some items are hidden. Collapse a group to see others.`
 
 ### Suggest moves
 
@@ -188,7 +224,28 @@ These use the workspace and agent permissions Orca asks you to approve.
 
 ## The PRs tab
 
-Open the Azure DevOps panel and choose **PRs**. It lists the pull requests you created in the organisation's code projects, grouped into release sets, and the ones waiting for your review or that you have already voted on.
+Open the Azure DevOps panel and choose **PRs**. It lists the pull requests you created in the organisation's code projects, grouped into release sets, and the ones waiting for your review or that you have already voted on. Both lists are grouped by project.
+
+The toolbar has the pickers (see Projects and repositories), the **Mine** and **To review** switch and four icon buttons: **Collapse all**, **Expand all**, **Refresh** and **Teams channels**. **Refresh** reloads now. `Updated …` sits under the toolbar in muted text.
+
+- **Mine** shows your release sets. It is the default.
+- **To review** shows the pull requests waiting for you (see To review). Its label carries the count: `To review · 12`. With a project chosen it reads `To review · 3 of 12`: three in that project, twelve in all.
+
+The switch is remembered for each organisation.
+
+### Projects and repositories
+
+Each project is a collapsible group, in name order. Its header has the project's name, a muted count such as `3 sets` and, on **Mine**, a hint such as `1 needs you` when something does. A hint counts the sets that have a pull request with conflicts, a failed build, a rejected policy, or a Rejected or Waiting for author vote.
+
+- A project whose pull requests all come from one repository stays flat, and its header names the repository: `Fabrikam · fabrikam-web`.
+- A project with pull requests from more than one repository reads `Fabrikam · 2 repos`, with one sub-group for each repository, in name order.
+- A release set whose pull requests are in more than one repository of a project goes in an **Across repos** sub-group at the top of that project. Each of its rows has a chip with the repository's name.
+- A release set whose pull requests are in more than one project goes in one **Across projects** group at the top of the list. Sets join through shared work items across the organisation. A set is never copied under each project. Each of its rows has a `project / repo` chip.
+- The **Project** picker (**All projects** by default) filters the list. A set shows under a chosen project when any of its pull requests is in it. When the chosen project has more than one repository, a **Repository** picker (**All repos**) appears next to it.
+
+The pickers are remembered for each organisation. When the remembered project is no longer in the data (its last pull request merged, say), the tab shows **All projects**, hides nothing, and brings the choice back when the project returns. When the project you chose has nothing in the list you are on, the tab says `Nothing here for <project>` and suggests **All projects**.
+
+**Collapse all** closes every group and **Expand all** opens them. You can still open or close any one. Which are open is remembered for each organisation, and survives a reload.
 
 ### Release sets
 
@@ -197,27 +254,32 @@ A release set is a group of your pull requests that ship together. Pull requests
 - have the same source branch in the same repository, or
 - are linked to the same work item.
 
-The links chain: if one pull request shares a branch with a second, and the second shares a work item with a third, all three are one set. A set holds your active pull requests and the ones you completed in the last 14 days, shown as `merged ✓`. A set with no active pull request left disappears. Its title is the title of its lowest-numbered pull request, and the newest sets come first. Without enough access to read linked work items, sets form by source branch only and the tab says so.
+The links chain: if one pull request shares a branch with a second, and the second shares a work item with a third, all three are one set. A set holds your active pull requests and the ones you completed in the last 14 days, shown as `merged`. A set with no active pull request left disappears, and the newest sets come first. Without enough access to read linked work items, sets form by source branch only and the tab says so.
 
-Each row shows `Pull Request N` as a link, its target branch and chips:
+A set is one card:
 
-- `draft`, `conflicts` and `merged ✓`.
-- Build: `● build` while running, `✓ build`, `✗ build`.
-- Policies: `✗ policies`, and `· policies` while some are pending.
-- Votes: `N approved`, `N rejected`, `N waiting for author` for reviewers who voted Waiting for author, and `waiting for …` for required reviewers who haven't voted or declined.
-- `auto-complete` when it is set.
+- Its title is the title of its lowest-numbered pull request. A muted line under it gives the source branch. When the set's pull requests have different source branches that share a prefix of at least 4 characters, the line shows the prefix and `*`, such as `feature/login-*`. Otherwise it reads `3 branches`.
+- Each pull request is a row: `!N` as a link, `→ target`, the place chip when the group needs one (see Projects and repositories) and one status chip.
+- A set shows every row that isn't merged and the first 2 merged pull requests. The others fold into `+ N merged · show`. Press it to see them, and **Hide merged** to fold them again.
+- The buttons are **Share…** first, then **Approve** and **Auto-complete**. These two show only when a pull request in the set still needs them.
 
-The tab shows the 30 newest sets and up to 150 rows, and says when it leaves some out. **Refresh** (the icon in the header) reloads now.
+The status chip carries the meaning in its colour:
 
-### Approve all
+- A merged pull request shows only `merged`, and an abandoned one `abandoned`, because votes and checks no longer matter.
+- An active one shows the worst of its checks first: `conflicts`, `✗ build`, `✗ policies`, `rejected` (a Rejected vote), `waiting for author`, `● build` while a build runs, `· policies` while some are pending, and `✓ build` when the build succeeded or the policies are approved. `draft` and `auto-complete` join the same chip when they apply, as in `draft · ✗ build`. A pull request with nothing to say has no chip.
+- Beside the chip, `waiting for …` names the required reviewers who haven't voted or declined.
 
-**Approve all** votes Approved, as you, on every active pull request in the set. It skips completed, abandoned and draft pull requests, and ones you have already approved. Any other vote of yours on the rest (waiting for the author, rejected, approved with suggestions) is replaced.
+The tab shows the 30 newest sets and up to 150 rows, and says when it leaves some out.
+
+### Approve
+
+**Approve** votes Approved, as you, on every active pull request in the set. It shows only when a pull request in the set is active, isn't a draft and isn't already approved by you. It skips completed, abandoned and draft pull requests, and ones you have already approved. Any other vote of yours on the rest (waiting for the author, rejected, approved with suggestions) is replaced.
 
 Each row reports its own result. When Azure DevOps refuses one, the others still go through and that row shows the error.
 
-### Auto-complete all
+### Auto-complete
 
-**Auto-complete all** sets auto-complete, as you, on every active pull request in the set. It uses the three auto-complete settings (merge type, delete the source branch, complete linked work items) and never bypasses policies. It skips completed, abandoned and draft pull requests, and leaves one that is already set to auto-complete as it is.
+**Auto-complete** sets auto-complete, as you, on every active pull request in the set. It shows only when a pull request in the set is active, isn't a draft and hasn't auto-complete set already. It uses the three auto-complete settings (merge type, delete the source branch, complete linked work items) and never bypasses policies. It skips completed, abandoned and draft pull requests, and leaves one that is already set to auto-complete as it is. The button's tooltip says which settings apply: `Auto-complete uses Merge (no fast-forward), keeps the source branch, leaves work items alone. Change this in Settings → Azure DevOps.`
 
 Pull requests in a set often share one source branch. With "delete the source branch" on, the first one to merge would delete the branch the others still need. So when another active pull request in the same repository uses the same source branch, auto-complete is set with the branch kept, and the row says which pull request also uses it.
 
@@ -226,11 +288,11 @@ Pull requests in a set often share one source branch. With "delete the source br
 
 ### To review
 
-Below the sets, a collapsed **To review (N)** list shows the active pull requests waiting for you. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. The count shows on the status bar (see The status bar).
+**To review** lists the active pull requests waiting for you, under the same project groups and repository sub-groups as Mine. You are named as a reviewer yourself and haven't voted or declined, you didn't create it and it isn't a draft. A pull request that reaches you only through a group isn't listed or counted. The count shows on the status bar (see The status bar).
 
-**Reviewed by you**, inside the same fold, lists the active pull requests you have voted on: active, not a draft, not created by you, you voted and haven't declined. Each row shows your vote. It holds up to 50, and it isn't part of the count. The lists refresh after you vote.
+Its rows are compact, not set cards: the title, then `!N · author`. Press a row to open the review (see Reviewing a pull request). The tab shows up to 50 rows and says when it leaves some out.
 
-Click a row in either list to open the review in the tab (see Reviewing a pull request).
+**Reviewed by you** is a group under them. It lists the active pull requests you have voted on: active, not a draft, not created by you, you voted and haven't declined. Each row shows your vote. It holds up to 50, and it isn't part of the count. The lists refresh after you vote.
 
 ## Sharing
 
@@ -277,7 +339,7 @@ On Linux you need `wl-clipboard` (Wayland) or `xclip` (X11). A Wayland session n
 ### Setting up a Teams channel
 
 1. In Teams, open the channel's ⋯ menu → **Workflows** → "Send webhook alerts to a channel". Finish the setup and copy the URL it gives you. Posts come from the Workflows bot.
-2. In Orca, open the PRs tab and choose **Teams channels** (the settings icon in the header), or choose **Manage channels** in the composer.
+2. In Orca, open the PRs tab and choose **Teams channels** (the settings icon in the toolbar), or choose **Manage channels** in the composer.
 3. Enter a channel name and paste the URL, then press **Add channel**. The URL must be https. Names are unique and up to 100 characters, and you can add up to 20 channels.
 4. **Test** posts a test message. **Replace URL** swaps in a new webhook when the workflow changes. **Remove** asks you to confirm.
 
@@ -361,7 +423,19 @@ The arm works like this:
 
 ## The Pipelines tab
 
-Open the Azure DevOps panel and choose **Pipelines**. It lists pipeline runs in the organisation's code projects, the same projects the PRs tab reads, and the approvals waiting on them. Runs that haven't finished come first, newest first. Finished runs follow, newest finish first. **Refresh** (the icon in the header) reloads now.
+Open the Azure DevOps panel and choose **Pipelines**. It lists pipeline runs in the organisation's code projects, the same projects the PRs tab reads, and the approvals waiting on them. Runs that haven't finished come first, newest first. Finished runs follow, newest finish first.
+
+The toolbar has the pickers, the filters (see Filters) and four icon buttons: **Collapse all**, **Expand all**, **Refresh** and **Teams channels**. **Refresh** reloads now. `Updated …` sits under the toolbar in muted text.
+
+### Projects and repositories
+
+Runs are grouped like pull requests (see The PRs tab).
+
+- Each project is a collapsible group with its name, a muted count such as `4 runs` and one hint: `1 needs you`, else `2 failed`, else `1 running`.
+- A project whose runs all come from one repository stays flat, and its header names the repository: `Fabrikam · fabrikam-api`. A project with runs from more than one repository reads `Fabrikam · 2 repos` and has one sub-group for each. A run with no repository sits under the project, outside the sub-groups.
+- A run belongs to one project, so there is no **Across projects** group here.
+- The **Project** picker (**All projects** by default) and, when the chosen project has more than one repository, the **Repository** picker filter the list. They are remembered for each organisation, apart from the PRs tab's. A remembered project with no runs in the data falls back to **All projects**, hides nothing, and comes back when it has runs again.
+- **Collapse all**, **Expand all** and each group's state are remembered for each organisation, as in the PRs tab.
 
 ### Which runs show
 
@@ -376,7 +450,7 @@ A run is yours when Azure DevOps names you as who it was requested for. The tab 
 
 ### Filters
 
-The filter you pick is remembered. The counts on **Needs me** and **Failed** are this organisation's share of the numbers on the status bar.
+The filter you pick is remembered. The filters sit in the toolbar. The counts on **Needs me** and **Failed** are this organisation's share of the numbers on the status bar.
 
 - **Mine:** your runs from the last 7 days.
 - **Running:** every run that hasn't finished, whoever started it: queued, running, waiting for approval or cancelling.
@@ -385,15 +459,24 @@ The filter you pick is remembered. The counts on **Needs me** and **Failed** are
 
 ### A run card
 
-Each card shows the pipeline, the run number, the branch, `PR N` when a pull request started it, and who requested it. A badge gives its state: queued, running, waiting for approval, cancelling, succeeded, partially succeeded, failed or canceled. It also says when the run was queued, started or finished.
+A card has these rows:
 
+- The state badge (queued, running, waiting for approval, cancelling, succeeded, partially succeeded, failed or canceled), the pipeline's name and, at the right, the run's age: when it finished, else when it started, else when it was queued.
+- A muted line with the run number, the branch (or `PR !N` when a pull request started it) and who requested it. The name is left out on **Mine**, because it's you.
+- The stage chips.
+- One warning line for each approval the run waits on (see Approvals).
+- A row of buttons.
+
+The buttons:
+
+- **Share for approval** shows while the run waits for an approval (see Share for approval).
 - **Open run** opens the run tab (see The run tab).
-- **Open in Azure DevOps** opens the run on the website.
 - **Watch** (the bell) is described next.
+- **Open in Azure DevOps** opens the run on the website.
 
-The stage bar has one segment per stage, coloured by its state, and a line below it with the stage names: `Build ✓ · Image ✓ · Deploy production ⏸`. The marks are ✓ succeeded, ✗ failed, ● running, ⏸ waiting for approval, ! succeeded with issues, ⊘ canceled, – skipped and ○ not started. Up to 12 stages show.
+The stage chips are one small chip for each stage, with its name and a mark: `Build ✓`, `Image ✓`, `Deploy production ⏸`. A chip's colour follows the stage's state. The marks are ✓ succeeded, ✗ failed, ● running, ⏸ waiting for approval, ! succeeded with issues, ⊘ canceled, – skipped and ○ not started. Up to 12 stages show.
 
-The stages come from each run's timeline. A load reads them for up to 8 runs in progress and up to 8 finished runs it hasn't read yet, and keeps what it read, so a long list fills in over the next loads. Until then a run has no bar.
+The stages come from each run's timeline. A load reads them for up to 8 runs in progress and up to 8 finished runs it hasn't read yet, and keeps what it read, so a long list fills in over the next loads. Until then a run has no chips.
 
 ### Watching a run
 
@@ -401,9 +484,9 @@ The stages come from each run's timeline. A load reads them for up to 8 runs in 
 
 ### Approvals
 
-A run waiting at an environment check shows a **Waiting for approval** box. It says where the run waits (the environment, else the stage), how long it has waited, and who can approve. People are listed by name and groups as `(group)`, with `· needs N` when more than one approval is required. Instructions the approval carries show too, cut at 500 characters.
+A run waiting at an environment check shows one warning line for each approval. It says where the run waits (the environment, else the stage), who can approve and how long it has waited: `Production needs Release Approvers (group) · waiting 4d`. People are listed by name and groups as `(group)`, with `needs 2 of …` when more than one approval is required.
 
-**Approve…** and **Reject…** show only when Azure DevOps says you can decide: you hold the approval permission, or the approval is assigned to you. Pressing one opens an optional comment (up to 1,000 characters). A second press on **Approve** or **Reject** sends it. The plugin never decides for you.
+**Approve…** and **Reject…** show only when Azure DevOps says you can decide: you hold the approval permission, or the approval is assigned to you. Then the instructions the approval carries show too, cut at 500 characters. Pressing one opens an optional comment (up to 1,000 characters). A second press on **Approve** or **Reject** sends it. The plugin never decides for you.
 
 - It reads the approval again just before sending. If it is no longer pending, the result says so and nothing is sent.
 - It sends one request and never retries.
@@ -412,15 +495,15 @@ A run waiting at an environment check shows a **Waiting for approval** box. It s
 
 ### Share for approval
 
-**Share for approval** opens the composer with one line for that approval. Add an intro, check the preview and tick where it goes. Each destination reports its own result. Destinations and people are remembered per organisation, apart from the ones you use for pull requests.
+**Share for approval** opens the composer with one line for each approval the run waits on, all ticked. Add an intro, check the preview, untick any line you don't want and tick where it goes. Each destination reports its own result. Destinations and people are remembered per organisation, apart from the ones you use for pull requests.
 
-- **Copy as rich text**, **Post to a Teams channel** and **Message in Teams** work as described under Sharing, with the same channels. **Teams channels** in the tab's header manages them.
+- **Copy as rich text**, **Post to a Teams channel** and **Message in Teams** work as described under Sharing, with the same channels. **Teams channels** in the tab's toolbar manages them.
 - **Email** opens a draft in your mail app. The subject is `Approval needed: <pipeline> <run>` and the body is the message. Pick people with **Find people to email**. A link over 2,000 characters isn't opened, and the composer suggests Copy.
 - The approvers who are people, apart from you, show as suggestions in both people lists. Groups aren't suggested, and neither is anyone Azure DevOps lists without a sign-in name, since a link can't reach them.
 - Orca opens one link per press. With Teams chat and email both chosen, the chat opens first and **Open email** opens the draft.
 - There is no **Add as reviewers** for approvals.
 
-The message has one line, built from the `approvalShareTemplate` setting. The default is `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`.
+The message has one line for each approval, built from the `approvalShareTemplate` setting. The default is `Approval needed for {environment}: [{pipeline} {run}]({url}) on {branch}`.
 
 - Placeholders: `{pipeline}`, `{run}`, `{url}`, `{environment}`, `{stage}`, `{branch}`, `{requestedBy}` and `{project}`. `{url}` is the run's address in Azure DevOps.
 - `{environment}` falls back to the stage name when the environment couldn't be read.
@@ -478,19 +561,33 @@ Open the Azure DevOps panel and choose **Wiki**. It lists the project wikis and 
 
 ### Reading
 
-- The page tree loads a level at a time: expanding a folder reads its pages. A level shows up to 200 pages, in Azure DevOps's order and then by title. The tree draws up to 1,000 rows and says when it hides some. **Refresh pages** reloads the tree. **Refresh** on an open page reloads only that page.
+- The search row sits above the tree. The search box fills the row, with **Collapse all**, **Expand all** and **Refresh pages** as icon buttons at its end.
+- The page tree loads a level at a time: expanding a folder reads its pages. A level shows up to 200 pages, in Azure DevOps's order and then by title. The tree draws up to 1,000 rows and says when it hides some. **Refresh pages** reloads the tree.
+- A page with sub-pages has a folder icon, and a page without sub-pages has a page icon. Once a folder's level has loaded, its description counts the pages in it, such as `17 pages`. The tab never reads ahead to count.
+- The tab remembers the folders you open, for each organisation and wiki. When it loads, it reopens up to 25 of them, the most recent first. The rest stay closed until you open them. **Collapse all** closes every folder and forgets them. **Expand all** opens the folders in view, reading up to 25 of them at a press. Press it again to go a level deeper. Back from a page, the tree opens the page's parents and selects the page.
 - **Search the wiki** needs at least 2 characters. Press Enter to search. It shows up to 25 results, each with a snippet, and says how many pages match. **Clear search** returns to the tree. When the organisation has no wiki search, the tab says so.
 - A page is shown as Markdown. Images appear as links, not as pictures, named `Image: <name>`; a reference-style image (`![text][ref]`) keeps its own text. An image at a web address links to that image; an attachment image links to the page in Azure DevOps, where it shows. Links to other wiki pages open that page in Azure DevOps. Only `http`, `https` and `mailto` links are kept, `[[_TOC_]]` is dropped, and a page over 60,000 bytes is cut with a note.
-- **Open in Azure DevOps** opens the page on the website.
+- A page starts with a back link above its title: `‹ All pages`, or the page's parent path such as `‹ Guides / Setup`. Under the title is one row of actions: **Open in tab**, **Edit in Orca** (project wikis only), **Open in Azure DevOps** and **Refresh** (an icon), which reloads only that page.
+- A Mermaid diagram (a `::: mermaid` block, with or without a space after the colons, or a fenced `mermaid` block) shows as a `Diagram · <kind>` card, such as `Diagram · sequence diagram`, with **Open in tab**. A table with 4 or more columns, or whose widest cells add up to more than 48 characters, shows as a `Table · 5 columns` card with the column names and **Open in tab**. The rest of the page stays Markdown in the sidebar.
 
 A code wiki is a folder of a repository published as a wiki. Its pages are read-only here: the page says so and has no **Edit in Orca**. Edit its files in the repository. Search finds only pages inside the published folder.
+
+### Open in tab
+
+**Open in tab** shows the page full width in Orca's own Markdown view, where tables have room and Mermaid diagrams are drawn. It needs a local workspace in focus. Without one it says `Open a local workspace first; wiki pages open in a tab there.` This hasn't been checked live yet (see Live checks still pending).
+
+- The tab shows a read-only copy of the page: `<workspace>/.orca-ado/wiki-read/<organisation>/<wiki>/<page path>.md`. It is the `.orca-ado/` folder the board, run tab and drafts use, and its `.gitignore` containing `*` keeps git out. File names are cleaned like a draft's.
+- The copy's first line says it is read-only and where to change the page: **Edit in Orca** on a project wiki, the repository on a code wiki. The file itself is read-only, so a save in the tab fails with Orca's own error and leaves it as it was. The tab still looks editable.
+- Both Mermaid forms are drawn, because the copy writes a `::: mermaid` block as a fenced `mermaid` block. Orca's **Table of Contents** button in the tab's header lists the page's headings. If your Orca opens Markdown as source, switch the tab to the rich view to see diagrams.
+- Pressing **Open in tab** again reads the page again and rewrites the copy when it changed.
+- A copy over 600 KiB is cut at a line and ends with "This page is too long to show here in full. Open it in Azure DevOps to read the rest." Orca opens a larger Markdown file as source, with no diagrams drawn.
 
 ### Edit in Orca
 
 **Edit in Orca** on a project wiki page opens the page as a Markdown file in Orca's own editor. It needs a local workspace in focus.
 
 - The file is `<workspace>/.orca-ado/wiki/<organisation>/<wiki>/<page path>.md`. It is a draft. The `.orca-ado/` folder is the one the board and run tabs use, and its `.gitignore` containing `*` keeps git out. File names are cleaned so they are valid on every OS, and a very long one is cut and gets a short hash. A copy of the page as you started it is kept under `.orca-ado/wiki/.base/`.
-- Save your changes in the editor, then press **Publish** in the Wiki tab. Publish, **Open** and **Discard** are on the draft's card under **Drafts (N)**, above the page tree. On a page, press **Back** to reach them. Publish sends what is saved in the file, not edits you haven't saved.
+- Save your changes in the editor, then press **Publish** in the Wiki tab. Publish, **Open** and **Discard** are on the draft's card under **Drafts (N)**, above the page tree. On a page, press the back link above its title to reach them. Publish sends what is saved in the file, not edits you haven't saved.
 - **Drafts (N)** lists your drafts with their page, wiki, workspace and file, and whether they hold saved changes that aren't published. That status is as of the last time the list loaded; Publish always reads the saved file. You can keep up to 50 drafts across all organisations. A draft stays after you publish it, so you can keep editing. **Discard…** asks first, then deletes the draft's files. It sends nothing to Azure DevOps.
 - **Edit in Orca** on a page that has a draft opens that draft again. When you haven't changed it, it is first brought up to the page's current version.
 - A draft belongs to the workspace it was made in. When that workspace is gone, discard the draft to edit the page again. A page over 1 MiB can't be edited or published here.
@@ -548,7 +645,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 
 ## Polling
 
-- My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise.
+- My work: every 60 seconds while the Work tab is visible, every 5 minutes otherwise. Each load also reads the parents of your tasks and the child tasks of your items.
 - An open board: every 30 seconds while visible.
 - PR chip status: cached for 2 minutes, or an hour once the pull request is merged or abandoned.
 - PRs tab: every 60 seconds while it is visible (your active and recently completed pull requests and your To review list, for each code project), every 5 minutes otherwise (the To review list, for the status bar and review notifications). Opening the tab shows data under a minute old without asking again.
@@ -559,7 +656,7 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - Pipelines in the background: every 5 minutes, your runs and the pending approvals only. There is no running list and no stage bar. This feeds the status bar and the notifications.
 - Watched runs: every 30 seconds while one hasn't finished.
 - An open run tab: every 5 seconds while the run is active and every minute once it has finished. A refresh reads the run and its timeline, its list of logs while a step runs, and the approval while a stage waits. Log lines are read only for the step you have selected, when its log has grown.
-- Reviews and the Wiki tab: never in the background (comment notifications read threads on their own, as above). A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
+- Reviews and the Wiki tab: never in the background (comment notifications read threads on their own, as above). A review is read when you open it, after you vote, comment, reply or resolve, and on Refresh. The Wiki tab reads the wiki list when it opens and keeps it for 10 minutes, a folder when you expand it, a page when you open it, again on Refresh, again when you press Open in tab and again when a Publish of it succeeds while it is open, and search when you press Enter. It reads the drafts when it opens.
 - Slow-down: when Azure DevOps answers any request for an organisation with `Retry-After` or `X-RateLimit-Delay`, whether for work items, pull requests or pipelines, that organisation's pipeline polling drops to the background pace for 5 minutes. The Pipelines tab then polls every 5 minutes, watched runs every 2 minutes and an open run tab every 30 seconds.
 - Pipelines limits: a load makes at most 4 requests at a time for an organisation. When Azure DevOps refuses to let the plugin read builds, runs for that organisation pause for 10 minutes and the tab says why. When it refuses approvals only, approvals turn off for 10 minutes while runs keep loading, and the tab says Needs me may be incomplete.
 - When Azure DevOps rate-limits the plugin, polling pauses and the last data stays on screen.
@@ -572,7 +669,7 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 - `defaultAgent` (Default agent): the agent **Start an agent** launches, such as `claude` or `codex`. Defaults to `claude`.
 - `agentContext` (Add work item context to agent prompts): off by default.
 - `branchTemplate` (Branch name template): defaults to `feature/{id}-{slug}`. `{id}` is the work item id. `{slug}` is its title in lower case, with other characters turned into hyphens, cut to 40 characters.
-- `autoCompleteMergeStrategy` (Auto-complete merge type): how **Auto-complete all** merges. One of Merge (no fast-forward), Squash commit, Rebase and fast-forward, or Semi-linear merge. Defaults to Merge (no fast-forward).
+- `autoCompleteMergeStrategy` (Auto-complete merge type): how **Auto-complete** merges. One of Merge (no fast-forward), Squash commit, Rebase and fast-forward, or Semi-linear merge. Defaults to Merge (no fast-forward).
 - `autoCompleteDeleteSourceBranch` (Auto-complete: delete the source branch): off by default. A branch that another active pull request still uses is kept either way.
 - `autoCompleteTransitionWorkItems` (Auto-complete: complete linked work items): off by default.
 - `shareTemplate` (Pull request share line): one line per pull request in a share. Defaults to `[Pull Request {id}]({url}): {title}`. See Sharing for the placeholders.
@@ -592,11 +689,11 @@ In Orca, open Settings and find **Azure DevOps** in the list of plugins.
 
 Orca asks you to approve these when the plugin first loads. The plugin runs in a trusted worker, a separate Node.js process with your user account's access to the computer. `orca plugin inspect` lists the same grants.
 
-- `storage:own`: the plugin's own storage keeps your connected organisations and their pinned accounts, each board's nudge rules and dismissed nudges, the runs you watch, your share choices and Teams channel names, the links between work items and workspaces, and the list of wiki drafts.
+- `storage:own`: the plugin's own storage keeps your connected organisations and their pinned accounts, each board's nudge rules and dismissed nudges, the runs you watch, your share choices and Teams channel names, the links between work items and workspaces, the list of wiki drafts, and the panel choices you set: open groups and folders, the Columns or Lanes view, the PRs and Pipelines pickers, and Mine or To review.
 - `secrets:own`: Orca's encrypted secrets keep personal access tokens, the Microsoft refresh token for each organisation and each Teams webhook URL (see Where credentials live).
 - `settings:own`: reads the settings under Settings and notices when you change one.
-- `workspace:read`: finds your focused workspace and lists your workspaces, for Start an agent, opening a board, a run or a wiki draft, Open in Orca, and finding the workspace that holds a pull request's repository in Check out in Orca.
-- `workspace:write`: shows a workspace (Check out in Orca) and opens files in an editor tab: a board, a run, a wiki draft, or a file a failing step names.
+- `workspace:read`: finds your focused workspace and lists your workspaces, for Start an agent, opening a board, a run, a wiki draft or a wiki page, Open in Orca, and finding the workspace that holds a pull request's repository in Check out in Orca.
+- `workspace:write`: shows a workspace (Check out in Orca) and opens files in an editor tab: a board, a run, a wiki draft, the read-only copy of a wiki page, or a file a failing step names.
 - `agent:read`: lets the plugin hear `agent.status.changed`. It reads nothing else about agents.
 - `agent:launch`: Start an agent launches your default agent in a workspace with the item's prompt.
 - `notifications:show`: shows the desktop notifications for failed runs, watched runs, approvals, review requests and new comments on your pull requests (see Notifications).
@@ -632,14 +729,14 @@ Boards:
 
 Pull requests and sharing:
 
-- Three pull requests from one branch form one set. Approve all and Auto-complete all work, the branch is kept, the merge type applies, and a "limit merge types" policy shows its message on its row.
+- Three pull requests from one branch form one set. Approve and Auto-complete work, the branch is kept, the merge type applies, and a "limit merge types" policy shows its message on its row.
 - The pull request list returns `autoCompleteSetBy` and `completionOptions`, which is how a pull request that will delete a shared branch is spotted.
 - Copy as rich text pasted into Teams desktop, Outlook and Slack makes only "Pull Request N" a link. This includes the macOS write to the real clipboard and the Windows and Linux routes.
 - A Workflows webhook posts a card whose links open the pull request, Test and Replace work, and the intro's line breaks show on the card.
 - The Teams chat link: desktop app or browser, prefilled line breaks, `tenantId` picking the right account, a two-person group chat, the real length limit, and how often Orca asks before opening it.
 - Adding reviewers (a person and a group, required and optional) notifies them and leaves an existing reviewer's vote untouched.
 - On the client organisation, read-only: `X-RateLimit-*` headroom after a refresh, whether `reviewerId` returns pull requests assigned to your groups, and whether the organisation-wide repository list works.
-- The PRs tab and composer at 360 px in both themes, Orca's To review fold and the first press of Share and Open Teams chat.
+- The PRs tab and composer at 360 px in both themes, the Mine and To review switch and the first press of Share and Open Teams chat.
 - The Markdown preview of a title that holds a bare URL.
 
 Pipelines and notifications:
@@ -682,6 +779,15 @@ Microsoft sign-in and network:
 - A proxy, only on a network that has one.
 - On the client organisation, read-only: Sign in with Microsoft with the client tenant's app, when one exists.
 - Screenshots of the Work, PRs and Pipelines views in both themes, taken with Orca minimised.
+
+Panel overhaul:
+
+- Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens drawn, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and Refresh while the tab is open rewrites the copy. A page over 600 KiB opens cut, with its note.
+- Mermaid in both forms: `::: mermaid` with and without a space, a fenced `mermaid` block, a front matter block, and the diagram kinds Azure DevOps lists.
+- Child tasks on a real board: every task of yours sits under its parent or in **No parent**, a parent that isn't yours is dimmed in its column, a task under a task, a parent you can't read, whether a bug counts as a task on a team that handles bugs as tasks, and the message when the child read fails.
+- Swimlanes: Lanes on a board with swimlanes and on one without, each card in the lane Azure DevOps puts it in, and the unnamed lane as Default lane.
+- Each of the four tabs at 360 px in light and dark, with real data: every card's project is visible without opening it, a project with several repositories splits and one with a single repository stays flat, and the pickers, the open groups, the view and the open wiki folders survive a reload.
+- Stage chips on every run card.
 
 ## License
 

@@ -2,18 +2,23 @@ import * as fs from 'node:fs/promises'
 import { assert, test } from 'orca/testing'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { MAX_COMMENTS_SHOWN, MAX_FILE_ROWS, MAX_THREAD_CARDS } from '../src/panel/prs/review/fit'
+import { MERGED_SHOWN } from '../src/panel/prs/rows'
+import { GROUP_PAGE } from '../src/panel/work/plan'
 import { MAX_DIFF_BYTES } from '../src/shared/diff'
 import { MAX_STAGE_CHIPS } from '../src/shared/pipelines'
 import { MAX_REVIEW_COMMENT } from '../src/shared/reviews'
 import { APPROVAL_TEMPLATE, APPROVAL_VARS } from '../src/shared/share/approval-items'
 import { MAX_DRAFTS, MIN_SEARCH_CHARS } from '../src/shared/wiki'
+import { WIDE_TABLE_CHARS, WIDE_TABLE_COLUMNS } from '../src/shared/wiki-blocks'
+import { MAX_CHILD_TASKS } from '../src/shared/work'
 import { ADO_RESOURCE } from './ado/org'
 import { ENTRA_SIGN_IN_TIMEOUT_MS } from './auth/entra-provider'
-import { ENTRA, entraFailed, NETWORK, REDIRECT_PAGE } from './messages'
+import { ENTRA, entraFailed, NETWORK, NO_LOCAL_WORKSPACE_WIKI, READER_CUT_NOTE, REDIRECT_PAGE, TASKS_NOT_LOADED } from './messages'
 import { LOOPBACK_NO_PROXY, MAX_CA_FILE_BYTES } from './net/network'
 import { MAX_EDITS, MAX_SIDE_LINES } from './reviews/diff'
 import { MAX_COMMENT_BYTES, MAX_COMMENTS_PER_THREAD, MAX_THREADS } from './reviews/threads'
 import { MAX_PUBLISH_BYTES } from './wiki/publish'
+import { MAX_READER_BYTES } from './wiki/reader'
 import { createArm } from './workspace/arm'
 
 const STATUS_BAR = 'ADO · N failed · N approvals · N to review'
@@ -108,7 +113,7 @@ test('the README says where Publish is, how a draft status ages, where an image 
   const text = await readme()
   const wiki = section(text, 'The Wiki tab')
   assert.match(wiki, /Publish, \*\*Open\*\* and \*\*Discard\*\* are on the draft's card under \*\*Drafts \(N\)\*\*, above the page tree/)
-  assert.match(wiki, /On a page, press \*\*Back\*\* to reach them/)
+  assert.match(wiki, /On a page, press the back link above its title to reach them/)
   assert.match(wiki, /status is as of the last time the list loaded; Publish always reads the saved file/)
   assert.match(wiki, /an attachment image links to the page in Azure DevOps, where it shows/)
   assert.match(section(text, 'Reviewing a pull request'), /Pushing from `<source>-2` creates a new branch on the remote; it does not update the pull request/)
@@ -306,6 +311,57 @@ test('the pending Microsoft checks name the sign-in details, Reconnect and the c
   assert.ok(start >= 0, 'the pending live checks have a Microsoft sign-in and network list')
   const pending = text.slice(start, text.indexOf('\n## License'))
   for (const topic of [/`signed in as <account>`/, /browser tab/, /Reconnect[^\n]*needs the browser again/, /client organisation[^\n]*Sign in with Microsoft/]) {
+    assert.match(pending, topic)
+  }
+})
+
+test('the README describes the grouped tabs, Columns and Lanes, tasks under their parent and Open in tab', async () => {
+  const text = await readme()
+  const expected: Record<string, string[]> = {
+    'The PRs tab': ['Across repos', 'Across projects', '**Mine**', '**To review**', '`To review · 3 of 12`', '`+ N merged · show`', '\n### Approve\n', '\n### Auto-complete\n'],
+    'The Pipelines tab': ['**All projects**'],
+    'The Work tab': ['**Columns**', '**Lanes**', '**Not on this board**', '**No parent**', 'Collapse all', 'Expand all', '`+ N more`'],
+    'The Wiki tab': ['**Open in tab**']
+  }
+  const missing = Object.entries(expected).flatMap(([title, phrases]) => {
+    const body = section(text, title)
+    return phrases.filter(phrase => !body.includes(phrase)).map(phrase => `${title}: ${phrase}`)
+  })
+  assert.deepEqual(missing, [])
+  for (const stale of ['Approve all', 'Auto-complete all', '**Other**', '**To review (N)**', 'Waiting for approval** box']) {
+    assert.ok(!text.includes(stale), `${stale} no longer describes the panel`)
+  }
+})
+
+test('the README states the task, group, merged row, wide table and reader limits the code enforces', async () => {
+  const text = await readme()
+  const work = section(text, 'The Work tab')
+  assert.ok(work.includes(`up to ${MAX_CHILD_TASKS} tasks`), 'the child task cap is stated')
+  assert.ok(work.includes(`A group shows ${GROUP_PAGE} items`), 'the group page size is stated')
+  assert.ok(work.includes(`\`${TASKS_NOT_LOADED}\``), 'the failed child read message is quoted')
+  assert.ok(section(text, 'The PRs tab').includes(`the first ${MERGED_SHOWN} merged pull requests`), 'the merged rows kept in view are stated')
+  const wiki = section(text, 'The Wiki tab')
+  assert.ok(wiki.includes(`${WIDE_TABLE_COLUMNS} or more columns`), 'the wide table column count is stated')
+  assert.ok(wiki.includes(`more than ${WIDE_TABLE_CHARS} characters`), 'the wide table width is stated')
+  assert.ok(wiki.includes(`over ${MAX_READER_BYTES / 1024} KiB`), 'the size a copy is cut at is stated')
+})
+
+test('the Wiki tab says where the Open in tab copy lives, that it is read-only and what a page cut for length gets', async () => {
+  const wiki = section(await readme(), 'The Wiki tab')
+  const reading = subsection(wiki, 'Open in tab')
+  assert.match(reading, /\.orca-ado\/wiki-read\//)
+  assert.match(reading, /read-only/)
+  assert.match(reading, /Table of Contents/)
+  assert.ok(reading.includes(`"${READER_CUT_NOTE}"`), 'the cut note is quoted')
+  assert.ok(reading.includes(`\`${NO_LOCAL_WORKSPACE_WIKI}\``), 'the no-workspace refusal is quoted')
+})
+
+test('the pending live checks name the panel overhaul checks', async () => {
+  const text = await readme()
+  const start = text.indexOf('\nPanel overhaul:\n')
+  assert.ok(start >= 0, 'the pending live checks have a Panel overhaul list')
+  const pending = text.slice(start, text.indexOf('\n## License'))
+  for (const topic of [/Open in tab/, /Mermaid[^\n]*both forms/, /child tasks[^\n]*real board/i, /swimlanes/, /360 px[^\n]*light and dark/]) {
     assert.match(pending, topic)
   }
 })
