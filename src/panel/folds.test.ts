@@ -1,5 +1,6 @@
 import { assert, mount, test } from 'orca/testing'
 import { foldedAfter, isFoldOpen, isOpenIn, MAX_OVERRIDES, override, setAllFolds, setFoldOpen, type Folds } from './folds'
+import { closeCleanly } from './test-support'
 
 const keys = (count: number, from = 0) => Array.from({ length: count }, (_, index) => `g${from + index}`)
 
@@ -80,13 +81,13 @@ test('folds are remembered per organisation and tab and survive a panel reload',
   })
 
   const plugin = panel.persisted.plugin
-  await panel.unmount()
+  await closeCleanly(panel)
   const reloaded = await mount(() => null, { persisted: { plugin } })
   assert.equal(isFoldOpen('contoso', 'work', 'tasks:1204'), false)
   assert.equal(isFoldOpen('contoso', 'prs', 'mine/project:p1', false), true)
   assert.equal(isFoldOpen('fabrikam', 'pipelines', 'project:p1'), false)
   assert.equal(isFoldOpen('fabrikam', 'prs', 'project:p1'), true)
-  await reloaded.unmount()
+  await closeCleanly(reloaded)
 })
 
 test('a malformed remembered fold entry reads as natural and is rewritten whole', async () => {
@@ -97,7 +98,7 @@ test('a malformed remembered fold entry reads as natural and is rewritten whole'
   setFoldOpen('contoso', 'prs', 'g', false)
   await panel.settled()
   assert.deepEqual(panel.persisted.plugin.folds, { 'contoso|prs': { all: null, open: [], closed: ['g'] } })
-  await panel.unmount()
+  await closeCleanly(panel)
 })
 
 test('foldedAfter still adds a closed fold once and removes it when opened', () => {

@@ -17,6 +17,7 @@ import {
 } from './copy'
 import { ACROSS_PROJECTS_KEY, choicesOf, groupByPlace, inScope, type Grouped, type Place } from './grouping'
 import { chooseProject, chooseRepo, prsPrefs, runsPrefs, scopeIn } from './prefs'
+import { closeCleanly } from './test-support'
 
 interface Item {
   id: string
@@ -214,7 +215,7 @@ test('a remembered project or repo that is no longer in the data falls back to A
 
   const back = [...items, item('c', place('p9', 'Fabrikam Mobile', 'r9', 'web-app')), item('d', place('p9', 'Fabrikam Mobile', 'r8', 'fabrikam-api'))]
   assert.deepEqual(choicesOf(back, at, stored).scope, { project: 'p9', repo: 'r9' })
-  await panel.unmount()
+  await closeCleanly(panel)
 })
 
 test('inScope keeps a set when any of its pull requests is in the chosen project', () => {
@@ -251,13 +252,13 @@ test('choosing a project or repository keeps the remembered Mine/To review view'
   assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'p1', repo: 'r1' } })
 
   const plugin = panel.persisted.plugin
-  await panel.unmount()
+  await closeCleanly(panel)
   const reloaded = await mount(() => null, { persisted: { plugin } })
   assert.deepEqual(scopeIn(read(prsPrefs), 'contoso'), { project: 'p2', repo: null })
   assert.deepEqual(scopeIn(read(prsPrefs), 'fabrikam'), { project: 'p2', repo: null })
   assert.deepEqual(scopeIn(read(runsPrefs), 'contoso'), { project: 'p1', repo: 'r1' })
   assert.deepEqual(scopeIn(read(runsPrefs), 'fabrikam'), { project: null, repo: null })
-  await reloaded.unmount()
+  await closeCleanly(reloaded)
 })
 
 test('scopeIn reads a missing or malformed remembered entry as All', () => {
