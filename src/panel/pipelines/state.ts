@@ -1,5 +1,5 @@
-import { atom, plugin, read, set, update } from 'orca'
-import { messageOf } from '../../shared/messages'
+import { atom, plugin, read, set, shell, update } from 'orca'
+import { messageOf, OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
 import type { ApprovalSummary, RunActionResult, RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import type { OrgStatus } from '../../shared/types'
 import type { Place } from '../grouping'
@@ -132,6 +132,20 @@ export function openRun(org: string, run: RunSummary): Promise<void> {
       if (read(source) === org) setNote(run.buildId, messageOf(error))
     }
   })
+}
+
+export function openInAzureDevOps(org: string, run: RunSummary): void {
+  const opening = shell.openExternal(run.url)
+  setNote(run.buildId, null)
+  const show = (text: string): void => {
+    if (read(source) === org) setNote(run.buildId, text)
+  }
+  opening.then(
+    result => {
+      if (!result.opened && result.reason === 'consent-unavailable') show(OPEN_LINK_UNAVAILABLE)
+    },
+    error => show(messageOf(error))
+  )
 }
 
 export function toggleWatch(org: string, run: RunSummary): Promise<void> {
