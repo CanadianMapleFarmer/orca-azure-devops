@@ -1,7 +1,6 @@
 import { Box, Button, Callout, CodeView, IconButton, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { DiffText } from '../../shared/diff'
 import type { DraftSummary } from '../../shared/wiki'
-import type { FoldTab } from '../folds'
 import { Group } from '../group'
 import { cutLabel } from '../label'
 import { LoadFailure } from '../snapshot-parts'
@@ -25,7 +24,6 @@ import {
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
 
-const WIKI_FOLDS = 'wiki' as unknown as FoldTab
 
 const TONE: Record<Exclude<Outcome['status'], 'conflict'>, Tone> = {
   published: 'success',
@@ -142,7 +140,7 @@ function Status({ draft }: { draft: DraftSummary }): OrcaNode {
 function Actions({ draft }: { draft: DraftSummary }): OrcaNode {
   const busy = isRunning(draft.key)
   return (
-    <Row gap="none" align="center">
+    <Box direction="row" gap="none" align="center" shrink={false}>
       <Button size="xs" variant="outline" disabled={busy} onPress={() => publish(draft.key)}>
         Publish
       </Button>
@@ -156,7 +154,7 @@ function Actions({ draft }: { draft: DraftSummary }): OrcaNode {
         onPress={() => edit(draft)}
       />
       <IconButton icon="delete" label="Discard…" size="xs" variant="ghost" tone="danger" disabled={busy} onPress={() => ask(draft.key, 'discard')} />
-    </Row>
+    </Box>
   )
 }
 
@@ -198,7 +196,7 @@ export function Drafts({ org }: { org: string }): OrcaNode {
   return (
     <Stack gap="sm">
       {failure}
-      <Group org={org} tab={WIKI_FOLDS} foldKey="drafts" title="Drafts" count={String(list.length)}>
+      <Group org={org} tab="wiki" foldKey="drafts" title="Drafts" count={String(list.length)}>
         <Stack gap="xs">
           {list.map(draft => (
             <DraftRow key={draft.key} draft={draft} showWiki={showWiki} />

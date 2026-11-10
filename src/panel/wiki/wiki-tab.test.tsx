@@ -391,7 +391,7 @@ test('choosing a page shows it rendered, and Open in Azure DevOps opens its link
   await panel.selectItem(TREE, '/Home')
   assert.deepEqual(inputsTo(host, 'wiki.page'), [refOf('/Home')])
   assert.equal(panel.find(TREE), null)
-  assert.equal(panel.find({ type: 'Heading' })?.props.level, 2)
+  assert.equal(panel.find({ type: 'Heading' })?.props.level, 1)
   assert.equal(heading(), 'Home')
   assert.equal(panel.find({ type: 'Text', text: '/Home' }), null, 'the muted path line is gone')
   assert.equal(panel.find({ type: 'IconButton', label: 'Back' }), null, 'so is the close button')
@@ -1544,9 +1544,11 @@ test('Drafts shows each draft as one compact row with Publish, Open and Discard'
     [row.props?.border, row.props?.radius, row.props?.padding, row.props?.direction, row.props?.justify, row.props?.align],
     [true, 'md', 'xs', 'row', 'between', 'center']
   )
-  assert.deepEqual(typesOf(row), ['Box', 'Row'], 'the text on the left, the actions on the right')
+  assert.deepEqual(typesOf(row), ['Box', 'Box'], 'the text on the left, the actions on the right')
   const left = row.children?.[0] as TreeSnapshot
   assert.deepEqual([left.props?.grow, left.props?.minWidth], [true, 0])
+  const right = row.children?.[1] as TreeSnapshot
+  assert.deepEqual([right.props?.direction, right.props?.shrink], ['row', false], 'the actions keep their width so a long status truncates instead')
   assert.deepEqual(typesOf(left), ['Text', 'Text'], 'the name and the status, no path line')
 
   const deploy = draftBoxOf(DEPLOY)

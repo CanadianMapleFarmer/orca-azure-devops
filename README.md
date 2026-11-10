@@ -171,7 +171,7 @@ My work lists the items assigned to you. Finished items are left out.
 
 A card has two lines. The first is the title: press it to open the item's details. The second has the type's icon (it opens the details too), `#id`, the chips for linked pull requests, **Tasks n/m** when the item has tasks and a compact **Move** box.
 
-- Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `● build` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
+- Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `build …` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
 - **Move** moves the item to another column. Moving into a split column puts the item in Doing. A move is refused when someone else changed the item first: the item is refreshed and you try again.
 - The details show the description, acceptance criteria, comments, parent and links, with each linked pull request's state. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
 
@@ -266,7 +266,7 @@ A set is one card:
 The status chip carries the meaning in its colour:
 
 - A merged pull request shows only `merged`, and an abandoned one `abandoned`, because votes and checks no longer matter.
-- An active one shows the worst of its checks first: `conflicts`, `✗ build`, `✗ policies`, `rejected` (a Rejected vote), `waiting for author`, `● build` while a build runs, `· policies` while some are pending, and `✓ build` when the build succeeded or the policies are approved. `draft` and `auto-complete` join the same chip when they apply, as in `draft · ✗ build`. A pull request with nothing to say has no chip.
+- An active one shows the worst of its checks first: `conflicts`, `✗ build`, `✗ policies`, `rejected` (a Rejected vote), `waiting for author`, `build …` while a build runs, `· policies` while some are pending, and `✓ build` when the build succeeded or the policies are approved. `draft` and `auto-complete` join the same chip when they apply, as in `draft · ✗ build`. A pull request with nothing to say has no chip.
 - Beside the chip, `waiting for …` names the required reviewers who haven't voted or declined.
 
 The tab shows the 30 newest sets and up to 150 rows, and says when it leaves some out.

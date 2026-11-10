@@ -201,7 +201,7 @@ test('chips show merge and build state', async () => {
   )
   assert.deepEqual(chips(/main|release|dev|hotfix|next|old/), [
     { text: 'main ✓', tone: 'success' },
-    { text: 'release ● build', tone: 'warning' },
+    { text: 'release build …', tone: 'warning' },
     { text: 'dev ✗ build', tone: 'danger' },
     { text: 'hotfix ·', tone: 'neutral' },
     { text: 'next ·', tone: 'neutral' },
@@ -229,7 +229,7 @@ test('a card shows at most four chips and counts the rest', async () => {
   )
   assert.deepEqual(chips(/./).filter(chip => chip.text !== 'Web Team · Stories' && chip.text !== 'Connected'), [
     { text: 'main ✓', tone: 'success' },
-    { text: 'release ● build', tone: 'warning' },
+    { text: 'release build …', tone: 'warning' },
     { text: 'dev ✗ build', tone: 'danger' },
     { text: 'next ·', tone: 'neutral' },
     { text: '+2', tone: 'neutral' },
@@ -422,7 +422,7 @@ test('a card is a pressable title, then the type, id, chips, Tasks n/m and a com
   assert.deepEqual(shapeOf(drawn!), [
     'Box',
     ['List', ['ListItem']],
-    ['Box', ['Row', ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release ● build'], ['Button', 'Tasks 1/3']], ['Box', ['Select']]]]
+    ['Box', ['Row', ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release build …'], ['Button', 'Tasks 1/3']], ['Box', ['Select']]]]
   ])
   const [list, meta] = drawn!.children as TreeSnapshot[]
   const [row] = meta!.children as TreeSnapshot[]
@@ -557,7 +557,7 @@ test("Tasks n/m opens the tasks inside the card, one line each, with state and o
   assert.deepEqual(taskLines('Checkout revamp'), [])
 })
 
-test('your task under a story has its Move in place of the state, and your done task shows its state', async () => {
+test('your task under a story shows its state as its Move, and your done task shows its state', async () => {
   const sent: unknown[] = []
   await open(
     snapshotOf({
@@ -597,6 +597,11 @@ test('your task under a story has its Move in place of the state, and your done 
   )
   const moves = panel.findAll({ type: 'Select', label: 'Move' })
   assert.equal(moves.length, 2)
+  assert.deepEqual(
+    moves.map(move => move.props.placeholder),
+    ['Move', 'Active'],
+    "the card's Move says Move; your task's Move shows the task's state"
+  )
   assert.deepEqual(
     (moves[1]?.props.options as { value: string }[]).map(option => option.value),
     ['New', 'Closed']

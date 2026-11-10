@@ -14,7 +14,7 @@ export function moveTargets(item: WorkItemSummary): string[] {
   return (byColumn ? item.targets.columns : item.targets.states).filter(value => value !== current)
 }
 
-export function CompactMove({ org, item }: { org: string; item: WorkItemSummary }): OrcaNode {
+export function CompactMove({ org, item, placeholder = 'Move' }: { org: string; item: WorkItemSummary; placeholder?: string }): OrcaNode {
   const targets = moveTargets(item)
   if (targets.length === 0) return null
   const byColumn = movesByColumn(item)
@@ -24,7 +24,7 @@ export function CompactMove({ org, item }: { org: string; item: WorkItemSummary 
         key={`move-${read(moveResets)}`}
         label="Move"
         labelHidden
-        placeholder="Move"
+        placeholder={placeholder}
         options={targets.map(value => ({ value, label: value }))}
         onChange={value => move(org, item.id, item.rev, byColumn ? { column: value } : { state: value })}
       />

@@ -1,6 +1,6 @@
 import { atom, read, update } from 'orca'
 
-export type FoldTab = 'work' | 'prs' | 'pipelines'
+export type FoldTab = 'work' | 'prs' | 'pipelines' | 'wiki'
 export interface Folds {
   all: 'open' | 'closed' | null
   open: string[]

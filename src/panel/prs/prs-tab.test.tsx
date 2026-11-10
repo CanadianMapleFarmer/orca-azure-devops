@@ -215,13 +215,13 @@ test('a set card shows the branch pattern and one row per pull request with its 
   assert.equal(rowText(55), '!55 → develop ✓ build · auto-complete waiting for Edsger Dijkstra')
   assert.equal(rowText(56), '!56 → qa draft · conflicts')
   assert.equal(rowText(57), '!57 → main merged')
-  assert.equal(rowText(58), '!58 → develop ● build')
+  assert.equal(rowText(58), '!58 → develop build …')
   assert.equal(rowText(59), '!59 → release abandoned')
   assert.deepEqual(badgesIn('Fix the sign-in redirect'), [
     ['✓ build · auto-complete', 'success'],
     ['draft · conflicts', 'danger'],
     ['merged', 'success'],
-    ['● build', 'warning'],
+    ['build …', 'warning'],
     ['abandoned', 'neutral']
   ])
   const waiting = panel.findAll({ type: 'Text', text: /^waiting for/ })

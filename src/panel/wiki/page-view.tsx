@@ -14,7 +14,7 @@ function Title({ title, path }: { title: string; path: string }): OrcaNode {
       <Row>
         <Link onPress={closePage}>{backLabel(path)}</Link>
       </Row>
-      <Heading level={2}>{title}</Heading>
+      <Heading level={1}>{title}</Heading>
     </Stack>
   )
 }

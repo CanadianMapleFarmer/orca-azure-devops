@@ -19,7 +19,7 @@ function TaskLine({ org, row }: { org: string; row: TaskRow }): OrcaNode {
         </Text>
       </Box>
       {movable ? (
-        <CompactMove org={org} item={movable} />
+        <CompactMove org={org} item={movable} placeholder={row.state} />
       ) : (
         <Box shrink={false}>
           <Badge tone={row.done ? 'success' : 'neutral'}>{row.state}</Badge>
