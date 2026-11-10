@@ -778,12 +778,26 @@ test('a set that fits shows no pull request note', async () => {
   assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
 })
 
-function assertInReviewHeader(callout: { path: string } | null): void {
-  const link = panel.find({ type: 'Link', text: 'Open in Azure DevOps' })
-  assert.ok(callout && link, 'the notice and the header link are drawn')
-  const slash = link.path.lastIndexOf('/')
-  const next = Number(link.path.slice(slash + 2)) + 1
-  assert.equal(callout.path, `${link.path.slice(0, slash)}/#${next}`, 'the notice is the first thing after the header link')
+const OPEN_IN_ADO = { type: 'IconButton', label: 'Open in Azure DevOps' }
+
+const labelsIn = (node: TreeSnapshot | string): unknown[] =>
+  typeof node === 'string' ? [] : [...(typeof node.props?.label === 'string' ? [node.props.label] : []), ...(node.children ?? []).flatMap(labelsIn)]
+
+function assertInReviewHeader(message: string): void {
+  let header: TreeSnapshot | undefined
+  walk(node => {
+    if (node.type === 'Stack' && node.children?.some(child => typeof child !== 'string' && child.type === 'Heading')) header = node
+    return false
+  })
+  assert.ok(header, 'the review header is drawn')
+  const [top, ...rest] = header.children ?? []
+  assert.ok(labelsIn(top).includes(OPEN_IN_ADO.label), 'Open in Azure DevOps is in the header row')
+  const kindOf = (node: TreeSnapshot | string) => (typeof node === 'string' ? node : node.type === 'Callout' ? `Callout: ${textOf(node)}` : node.type)
+  assert.deepEqual(
+    rest.slice(0, 4).map(kindOf),
+    ['Heading', 'Text', 'Text', `Callout: ${message}`],
+    'the notice is the first thing after the header lines'
+  )
 }
 
 async function pressReview(answer: unknown) {
@@ -794,7 +808,7 @@ async function pressReview(answer: unknown) {
   host.respond('shell.openExternal', answer)
   await showToReview()
   await panel.press({ type: 'ListItem', label: 'Cache the lookups' })
-  await panel.press({ type: 'Link', text: 'Open in Azure DevOps' })
+  await panel.press(OPEN_IN_ADO)
   return host
 }
 
@@ -804,9 +818,9 @@ test('a link Orca refuses to open shows the error message and the next press cle
   })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, 'Orca could not open the link.')
-  assertInReviewHeader(panel.find({ type: 'Callout' }))
+  assertInReviewHeader('Orca could not open the link.')
   host.respond('shell.openExternal', { opened: true })
-  await panel.press({ type: 'Link', text: 'Open in Azure DevOps' })
+  await panel.press(OPEN_IN_ADO)
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.equal(host.callsOf('shell.openExternal').length, 2)
   assert.deepEqual(host.callsOf('shell.openExternal')[0], { url: prOf(80).url })
@@ -816,7 +830,7 @@ test('a link Orca could not ask about shows a fixed message', async () => {
   await pressReview({ opened: false, reason: 'consent-unavailable' })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, OPEN_UNAVAILABLE)
-  assertInReviewHeader(panel.find({ type: 'Callout' }))
+  assertInReviewHeader(OPEN_UNAVAILABLE)
 })
 
 test('a link the person declined to open stays silent', async () => {

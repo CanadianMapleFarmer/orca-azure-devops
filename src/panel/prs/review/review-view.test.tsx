@@ -1,4 +1,4 @@
-import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery } from 'orca/testing'
+import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import { BAD_LINE } from '../../../shared/messages'
 import {
   VOTE_BUTTON,
@@ -44,6 +44,23 @@ const button = (text: string) => panel.find({ type: 'Button', text })
 
 const callouts = () => panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text])
 
+const inside = (scope: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${scope.path}/`))
+
+const labelOf = (node: TreeSnapshot | string | undefined) => (typeof node === 'object' ? node.props?.label : undefined)
+
+function nodeWhere(match: (node: TreeSnapshot) => boolean): TreeSnapshot | undefined {
+  const visit = (node: TreeSnapshot | string | null): TreeSnapshot | undefined => {
+    if (node === null || typeof node === 'string') return undefined
+    if (match(node)) return node
+    for (const child of node.children ?? []) {
+      const found = visit(child)
+      if (found) return found
+    }
+    return undefined
+  }
+  return visit(panel.tree())
+}
+
 const showToReview = () => panel.press({ type: 'Button', text: /^To review/ })
 
 function held<T>() {
@@ -62,7 +79,7 @@ function sectionLabels(): (string | undefined)[] {
   return panel.findAll({ type: 'Tab' }).filter(item => item.path.startsWith(`${tabs.path}/`)).map(item => item.label)
 }
 
-test('the header shows the title, both lines, the badges and the link', async () => {
+test('the header shows Back, Refresh and Open in Azure DevOps, the title, both lines and the badges', async () => {
   await open({
     'reviews.open': input =>
       reviewOf({
@@ -80,11 +97,11 @@ test('the header shows the title, both lines, the badges and the link', async ()
       })
   })
   assert.equal(heading(), REVIEW_TITLE)
-  assert.equal(panel.find({ type: 'Heading' })?.props.level, 3)
+  assert.equal(panel.find({ type: 'Heading' })?.props.level, 2)
   const lines = panel.findAll({ type: 'Text', text: /^(Pull Request|Grace Hopper)/ })
   assert.deepEqual(
     lines.map(line => [line.props.muted, line.props.size]),
-    [[true, 'sm'], [true, 'sm']]
+    [[true, 'xs'], [true, 'xs']]
   )
   assert.equal(lines[0].text, 'Pull Request 4110 · web-app · hotfix/1211-login-redirect → main')
   assert.match(lines[1].text, /^Grace Hopper · opened .+ · loaded .+$/)
@@ -96,9 +113,28 @@ test('the header shows the title, both lines, the badges and the link', async ()
     panel.findAll({ type: 'Badge' }).map(badge => [badge.text, badge.props.tone]),
     [['Connected', 'success'], ['draft', 'neutral'], ['conflicts', 'danger'], ['You: Approved with suggestions', 'success']]
   )
-  assert.ok(panel.find({ type: 'IconButton', label: 'Back' }))
-  assert.ok(panel.find({ type: 'IconButton', label: 'Refresh' }))
-  assert.ok(panel.find({ type: 'Link', text: 'Open in Azure DevOps' }))
+  const top = nodeWhere(node => node.type === 'Row' && labelOf(node.children?.[0]) === 'Back')
+  assert.ok(top, 'Back is the first thing in the header row')
+  assert.deepEqual([top.props?.justify, top.props?.align], ['between', 'center'])
+  const shape = (node: TreeSnapshot | string): unknown => (typeof node === 'string' ? node : node.type === 'IconButton' ? labelOf(node) : [node.type, ...(node.children ?? []).map(shape)])
+  assert.deepEqual(shape(top), ['Row', 'Back', ['Row', 'Refresh', 'Open in Azure DevOps']])
+  assert.deepEqual(
+    ['Back', 'Refresh', 'Open in Azure DevOps'].map(label => panel.find({ type: 'IconButton', label })).map(item => [item?.props.icon, item?.props.variant, item?.props.size]),
+    [
+      ['close', 'ghost', 'xs'],
+      ['refresh', 'ghost', 'xs'],
+      ['open-external', 'ghost', 'xs']
+    ]
+  )
+  assert.equal(panel.find({ type: 'Link' }), null)
+})
+
+test('Open in Azure DevOps opens the pull request', async () => {
+  const host = await open()
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press({ type: 'IconButton', label: 'Open in Azure DevOps' })
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: reviewOf().pr.url }])
+  assert.deepEqual(callouts(), [])
 })
 
 test('the vote badge is success from 5 up, warning at -5 and danger at -10, and absent without a vote', async () => {
@@ -188,23 +224,34 @@ test('votes send reviews.vote, mark the current vote and show the result', async
     }
   })
   const buttons = () => VOTES.map(button)
+  const looks = [
+    ['solid', 'accent', 'xs', false],
+    ['outline', undefined, 'xs', false],
+    ['outline', undefined, 'xs', false],
+    ['outline', 'danger', 'xs', false]
+  ]
   assert.deepEqual(
     buttons().map(item => [item?.props.variant, item?.props.tone, item?.props.size, item?.disabled]),
-    [
-      ['outline', 'success', 'sm', false],
-      ['outline', 'success', 'sm', false],
-      ['outline', 'warning', 'sm', false],
-      ['outline', 'danger', 'sm', false]
-    ]
+    looks
   )
+  assert.deepEqual(
+    buttons().map(item => item?.props.icon),
+    [undefined, undefined, undefined, undefined]
+  )
+  const row = panel.find({ type: 'Row', text: VOTES.join(' ') })
+  assert.deepEqual([row?.props.gap, row?.props.wrap], ['xs', true])
   assert.deepEqual(callouts(), [])
 
   await panel.press({ type: 'Button', text: 'Approve with suggestions' })
   assert.deepEqual(inputsTo(host, 'reviews.vote'), [{ ...REVIEW_KEY, vote: 'suggestions' }])
   assert.equal(requestsTo(host, 'reviews.vote')[0]?.timeoutMs, 90000)
   assert.deepEqual(
-    buttons().map(item => item?.props.variant),
-    ['outline', 'solid', 'outline', 'outline']
+    buttons().map(item => item?.props.icon),
+    [undefined, 'check', undefined, undefined]
+  )
+  assert.deepEqual(
+    buttons().map(item => [item?.props.variant, item?.props.tone, item?.props.size, item?.disabled]),
+    looks
   )
   assert.deepEqual(callouts(), [['success', 'Voted: Approved with suggestions.']])
   assert.equal(panel.find({ type: 'Badge', text: 'You: Approved with suggestions' })?.props.tone, 'success')
@@ -251,7 +298,10 @@ test('the review reloads after a vote and stays on screen while it does', async 
   reload.release(reviewOf({ myVote: 10 }))
   await pending
   assert.equal(panel.find({ type: 'Badge', text: 'You: Approved' })?.props.tone, 'success')
-  assert.equal(button('Approve')?.props.variant, 'solid')
+  assert.deepEqual(
+    VOTES.map(text => button(text)?.props.icon),
+    ['check', undefined, undefined, undefined]
+  )
   assert.deepEqual(
     VOTES.map(text => button(text)?.disabled),
     [false, false, false, false]
@@ -280,7 +330,7 @@ test('Check out in Orca shows the armed instructions and Cancel disarms', async 
     'work.cancelWorkspace': { ok: true }
   })
   const checkout = button('Check out in Orca')
-  assert.deepEqual([checkout?.props.variant, checkout?.props.size, checkout?.props.icon], ['outline', 'sm', 'branch'])
+  assert.deepEqual([checkout?.props.variant, checkout?.props.size, checkout?.props.icon], ['outline', 'xs', 'branch'])
   assert.equal(panel.find({ type: 'Callout', label: 'Create the workspace in Orca' }), null)
 
   await panel.press({ type: 'Button', text: 'Check out in Orca' })
@@ -494,7 +544,9 @@ test('the review shows its title and a skeleton while it loads', async () => {
   assert.ok(panel.find({ type: 'Skeleton', label: 'Loading the pull request' }))
   assert.equal(panel.find({ type: 'Skeleton' })?.props.lines, 4)
   assert.equal(heading(), REVIEW_TITLE)
-  assert.ok(panel.find({ type: 'IconButton', label: 'Back' }))
+  assert.equal(panel.find({ type: 'Heading' })?.props.level, 2)
+  const back = panel.find({ type: 'IconButton', label: 'Back' })
+  assert.deepEqual([back?.props.icon, back?.props.variant, back?.props.size], ['close', 'ghost', 'xs'])
   assert.equal(panel.find({ type: 'Tabs', label: 'Pull request' }), null)
   loading.release(reviewOf())
   await pressing
@@ -649,7 +701,6 @@ const FILE_BOX = { type: 'Textarea', label: 'Comment on this file' }
 
 const showSection = (value: 'files' | 'comments') => panel.select({ type: 'Tabs', label: 'Pull request' }, value)
 
-const inside = (scope: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${scope.path}/`))
 
 const threadIdOf = (card: TestElement) => Number(card.path.slice(card.path.lastIndexOf('.') + 1))
 
