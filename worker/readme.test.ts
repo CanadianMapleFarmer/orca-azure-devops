@@ -23,20 +23,11 @@ import { createArm } from './workspace/arm'
 
 const STATUS_BAR = 'ADO · N failed · N approvals · N to review'
 
-function readme(): Promise<string> {
-  return fs.readFile(new URL('../README.md', import.meta.url), 'utf8')
-}
+const GUIDES = ['README.md', 'docs/connecting.md', 'docs/work.md', 'docs/pull-requests.md', 'docs/pipelines.md', 'docs/wiki.md', 'docs/reference.md', 'docs/development.md']
 
-function whatItDoes(text: string): string {
-  const lines = text.split('\n')
-  const header = lines.findIndex(line => /^\|\s*What it does\s*\|$/.test(line))
-  assert.ok(header >= 0, 'the status table has a What it does column')
-  const rows: string[] = []
-  for (const line of lines.slice(header + 2)) {
-    if (!line.startsWith('|')) break
-    rows.push(line.split('|')[1].trim())
-  }
-  return rows.join('\n')
+async function readme(): Promise<string> {
+  const files = await Promise.all(GUIDES.map(path => fs.readFile(new URL(`../${path}`, import.meta.url), 'utf8')))
+  return files.map((text, index) => `\n## [${GUIDES[index]}]\n${text}`).join('\n')
 }
 
 function section(text: string, title: string): string {
@@ -46,11 +37,17 @@ function section(text: string, title: string): string {
   return text.slice(start, end < 0 ? undefined : end)
 }
 
-test('the status table lists every built feature under What it does and has no Coming column', async () => {
+test('the README lists every built feature under What it does and links each guide', async () => {
   const text = await readme()
-  const works = whatItDoes(text)
+  const works = section(text, 'What it does')
   for (const feature of [/pipelines/i, /notifications/i, /PR reviews/, /wiki/i]) assert.match(works, feature)
+  for (const guide of GUIDES.slice(1)) assert.ok(works.includes(`](${guide})`) || section(text, 'Documentation').includes(`](${guide})`), `the README links ${guide}`)
   assert.ok(!/\|\s*Coming\s*\|/.test(text), 'nothing is left under Coming')
+})
+
+test('the README stays a short landing page', async () => {
+  const landing = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8')
+  assert.ok(landing.split('\n').length <= 120, 'the README is at most 120 lines; details go in docs/')
 })
 
 test('every setting the manifest declares is documented by its key', async () => {
@@ -77,7 +74,7 @@ test('the pending live checks name the Pipelines, run tab and notification check
   const text = await readme()
   const start = text.indexOf('\nPipelines and notifications:\n')
   assert.ok(start >= 0, 'the pending live checks have a Pipelines and notifications list')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const topic of [/multi-stage/i, /Docker/, /Helm/, /rerun/i, /two-approver/i, /Teams chat/, /email/i, /notification/i, /X-RateLimit/, /360 px/]) {
     assert.match(pending, topic)
   }
@@ -150,7 +147,7 @@ test('the pending live checks name the review and wiki checks', async () => {
   const text = await readme()
   const start = text.indexOf('\nReviews and wiki:\n')
   assert.ok(start >= 0, 'the pending live checks have a Reviews and wiki list')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const topic of [/unchanged rename/, /binary/, /Resolve/, /draft pull request/, /Check out in Orca/, /compare base/, /detached/, /ETag/, /git status/, /Résumé/, /typeKey/, /360 px/]) {
     assert.match(pending, topic)
   }
@@ -286,7 +283,7 @@ test('the pending live checks name the Microsoft sign-in and network checks', as
   const text = await readme()
   const start = text.indexOf('\nMicrosoft sign-in and network:\n')
   assert.ok(start >= 0, 'the pending live checks have a Microsoft sign-in and network list')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const topic of [
     /admin guide[^\n]*portal labels/,
     /consent dialog[^\n]*login\.microsoftonline\.com/,
@@ -309,7 +306,7 @@ test('the pending Microsoft checks name the sign-in details, Reconnect and the c
   const text = await readme()
   const start = text.indexOf('\nMicrosoft sign-in and network:\n')
   assert.ok(start >= 0, 'the pending live checks have a Microsoft sign-in and network list')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const topic of [/`signed in as <account>`/, /browser tab/, /Reconnect[^\n]*needs the browser again/, /client organisation[^\n]*Sign in with Microsoft/]) {
     assert.match(pending, topic)
   }
@@ -373,7 +370,7 @@ test('the pending live checks name the panel overhaul checks', async () => {
   const text = await readme()
   const start = text.indexOf('\nPanel overhaul:\n')
   assert.ok(start >= 0, 'the pending live checks have a Panel overhaul list')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const topic of [/Open in tab/, /Mermaid[^\n]*both forms/, /child tasks[^\n]*real board/i, /swimlanes/, /360 px[^\n]*light and dark/]) {
     assert.match(pending, topic)
   }
@@ -382,7 +379,7 @@ test('the pending live checks name the panel overhaul checks', async () => {
 test('the pending live checks list each done-means check of the overhaul', async () => {
   const text = await readme()
   const start = text.indexOf('\nPanel overhaul:\n')
-  const pending = text.slice(start, text.indexOf('\n## License'))
+  const pending = text.slice(start)
   for (const check of [
     /every card's project is visible without opening it/,
     /several repositories splits[^\n]*single repository stays flat/,
@@ -402,7 +399,7 @@ test("the README says the Open in tab copy is the sidebar's cleaned Markdown tha
   const text = await readme()
   const reading = subsection(section(text, 'The Wiki tab'), 'Open in tab')
   assert.match(reading, /same cleaned Markdown as the sidebar: images are links/)
-  const pending = text.slice(text.indexOf('\nPanel overhaul:\n'), text.indexOf('\n## License'))
+  const pending = text.slice(text.indexOf('\nPanel overhaul:\n'))
   assert.match(pending, /pressing \*\*Open in tab\*\* again while the tab is open rewrites the copy and the open tab shows the new text/)
   assert.ok(!pending.includes('Refresh while the tab is open'), "the page's Refresh reloads only the sidebar page")
   const work = section(text, 'Polling')
