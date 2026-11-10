@@ -1,8 +1,8 @@
 import type { TreeItem } from 'orca'
 import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
-import { SEARCH_TOO_SHORT } from '../../shared/messages'
+import { OPEN_LINK_UNAVAILABLE, SEARCH_TOO_SHORT } from '../../shared/messages'
 import type { OrgStatus } from '../../shared/types'
-import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from '../../shared/wiki'
+import { draftKey, type DraftSummary, type WikiHit, type WikiLevel, type WikiPage, type WikiPageRef, type WikiRef, type WikiResult } from '../../shared/wiki'
 import { closeCleanly, countNodes, mountPanel, org, requestsTo, type MountOptions, type TestHost } from '../test-support'
 import {
   CARDS_CONTENT,
@@ -125,41 +125,68 @@ const pagesFrom = (levels: Record<string, WikiLevel>) => (input: WikiPageRef) =>
 
 const readsOf = (host: TestHost) => inputsTo(host, 'wiki.pages').map(input => (input as WikiPageRef).path)
 
-const button = (text: string, scope?: TestElement) => {
-  const found = panel.findAll({ type: 'Button', text }).filter(item => scope === undefined || item.path.startsWith(`${scope.path}/`))
-  return found[0] ?? null
-}
+const nameOf = (item: TestElement): string => item.text || item.label || ''
 
 const inside = (scope: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${scope.path}/`))
 
+const textOf = (node: TreeSnapshot | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+
+type Scope = string | DraftSummary
+
+const cardNodes = () => walkNodes(panel.tree()).filter(node => node.type === 'Box' && node.key !== undefined && node.props?.background === 'muted')
+
+const cardParts = (node: TreeSnapshot) => (node.children ?? []).flatMap(child => (typeof child !== 'string' && child.type === 'Text' ? [textOf(child)] : []))
+
 function cardOf(title: string): TestElement {
-  const card = panel.findAll({ type: 'Card' }).find(item => item.label === title)
+  const key = cardNodes().find(node => cardParts(node)[0] === title)?.key
+  const card = key === undefined ? null : panel.find({ testId: key })
   assert.ok(card, `the card ${title} is drawn`)
   return card
 }
 
-const cardTitles = () => panel.findAll({ type: 'Card' }).map(card => card.label)
+function draftBoxOf(draft: DraftSummary): TestElement {
+  const box = panel.find({ testId: draft.key })
+  assert.ok(box, `the draft ${draft.title} is drawn`)
+  return box
+}
 
-const calloutsIn = (title: string) => inside(cardOf(title), { type: 'Callout' }).map(callout => [callout.props.tone, callout.props.title ?? null, callout.text])
+const scopeOf = (target: Scope): TestElement => (typeof target === 'string' ? cardOf(target) : draftBoxOf(target))
 
-const diffsIn = (title: string) => inside(cardOf(title), { type: 'CodeView' }).map(view => [view.props.label, view.props.code])
+const button = (name: string, scope?: TestElement) => {
+  const found = panel.findAll({ role: 'button' }).filter(item => nameOf(item) === name && (scope === undefined || item.path.startsWith(`${scope.path}/`)))
+  return found[0] ?? null
+}
 
-const pressIn = (title: string, text: string) => {
-  const found = button(text, cardOf(title))
-  assert.ok(found, `${text} is drawn in ${title}`)
+const cardTitles = () => cardNodes().map(node => cardParts(node)[0])
+
+const draftTitles = () => {
+  const group = panel.find({ type: 'Collapsible', label: /^Drafts · / })
+  return group === null ? [] : inside(group, { type: 'Text' }).filter(text => text.props.weight === 'semibold' && text.props.truncate === true).map(text => text.text)
+}
+
+const calloutsIn = (target: Scope) => inside(scopeOf(target), { type: 'Callout' }).map(callout => [callout.props.tone, callout.props.title ?? null, callout.text])
+
+const diffsIn = (target: Scope) => inside(scopeOf(target), { type: 'CodeView' }).map(view => [view.props.label, view.props.code])
+
+const pressIn = (target: Scope, text: string) => {
+  const found = button(text, scopeOf(target))
+  assert.ok(found, `${text} is drawn in ${typeof target === 'string' ? target : target.title}`)
   return panel.press(found)
 }
 
-const buttonsIn = (title: string) => inside(cardOf(title), { type: 'Button' }).map(item => item.text)
+const buttonsIn = (target: Scope) => inside(scopeOf(target), { role: 'button' }).map(nameOf)
 
 const treeBytes = () => new TextEncoder().encode(JSON.stringify(panel.tree())).length
 
 const heading = () => panel.find({ type: 'Heading' })?.text
 
-const textOf = (node: TreeSnapshot | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
-
-const actionsRow = (nodes: readonly TreeSnapshot[]) =>
+const primaryActions = (nodes: readonly TreeSnapshot[]) =>
   nodes.find(node => node.type === 'Row' && (node.children ?? []).some(child => typeof child !== 'string' && child.type === 'Button' && textOf(child) === 'Open in tab'))
+
+const actionsRow = (nodes: readonly TreeSnapshot[]) => {
+  const primary = primaryActions(nodes)
+  return nodes.find(node => node.type === 'Row' && primary !== undefined && (node.children ?? []).includes(primary))
+}
 
 const typesOf = (node?: TreeSnapshot) => (node?.children ?? []).flatMap(child => (typeof child === 'string' ? [] : [child.type]))
 
@@ -359,18 +386,20 @@ test('a capped level ends with a disabled note saying how many pages it shows', 
   assert.deepEqual([items[200].label, items[200].disabled], ['Showing 200 of 340 pages', true])
 })
 
-test('choosing a page shows it rendered with Open in Azure DevOps', async () => {
+test('choosing a page shows it rendered, and Open in Azure DevOps opens its link', async () => {
   const host = await open()
   await panel.selectItem(TREE, '/Home')
   assert.deepEqual(inputsTo(host, 'wiki.page'), [refOf('/Home')])
   assert.equal(panel.find(TREE), null)
-  assert.equal(panel.find({ type: 'Heading' })?.props.level, 3)
+  assert.equal(panel.find({ type: 'Heading' })?.props.level, 2)
   assert.equal(heading(), 'Home')
   assert.equal(panel.find({ type: 'Text', text: '/Home' }), null, 'the muted path line is gone')
   assert.equal(panel.find({ type: 'IconButton', label: 'Back' }), null, 'so is the close button')
   assert.equal(panel.find({ type: 'Markdown' })?.props.content, PAGE_CONTENT)
-  assert.equal(panel.find({ type: 'Link', text: 'Open in Azure DevOps' })?.props.href, pageOf('/Home').url)
+  assert.equal(panel.find({ type: 'Link', text: 'Open in Azure DevOps' }), null, 'the link is an icon button now')
   assert.ok(panel.find({ type: 'IconButton', label: 'Refresh' }))
+  await panel.press({ type: 'IconButton', label: 'Open in Azure DevOps' })
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: pageOf('/Home').url }])
   assert.deepEqual(panel.persisted.workspace.wikiPage, { ...refOf('/Home'), title: 'Home' })
 
   await panel.press(BACK)
@@ -389,7 +418,7 @@ test('a page shows a back link to its parent, the title and one row of actions',
   )
   assert.deepEqual(
     panel.findAll({ type: 'Link' }).map(link => link.text),
-    ['‹ Runbooks', 'Open in Azure DevOps']
+    ['‹ Runbooks']
   )
   assert.equal(heading(), 'Deploy')
   assert.deepEqual(
@@ -403,20 +432,28 @@ test('a page shows a back link to its parent, the title and one row of actions',
   assert.ok(row, 'the actions share one row')
   const header = headerOf(nodes)
   assert.deepEqual(typesOf(header), ['Stack', 'Row'], 'the title block, then the one row')
-  assert.deepEqual(typesOf(header?.children?.[0] as TreeSnapshot), ['Link', 'Heading'], 'the back link above the title')
-  assert.deepEqual([row.props?.gap, row.props?.align, row.props?.wrap], ['sm', 'center', true])
-  assert.deepEqual(partsOf(row), [
+  const title = header?.children?.[0] as TreeSnapshot
+  assert.deepEqual(typesOf(title), ['Row', 'Heading'], 'the back link above the title')
+  assert.deepEqual(typesOf(title.children?.[0] as TreeSnapshot), ['Link'], 'the back link sits in a row so it stays left')
+  assert.deepEqual([row.props?.justify, row.props?.align], ['between', 'center'])
+  assert.deepEqual(typesOf(row), ['Row', 'IconButton'], 'the actions on the left, Refresh on the right')
+  const primary = primaryActions(nodes)
+  assert.ok(primary)
+  assert.deepEqual([primary.props?.gap, primary.props?.align, primary.props?.wrap], ['xs', 'center', true])
+  assert.deepEqual(partsOf(primary), [
     ['Button', 'Open in tab'],
     ['Button', 'Edit in Orca'],
-    ['Link', 'Open in Azure DevOps'],
-    ['IconButton', 'Refresh']
+    ['IconButton', 'Open in Azure DevOps']
   ])
+  assert.deepEqual(partsOf(row).slice(1), [['IconButton', 'Refresh']])
   const openInTab = button('Open in tab')
   const edit = button('Edit in Orca')
-  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant], ['sm', 'solid'])
-  assert.deepEqual([edit?.props.size, edit?.props.variant, edit?.props.icon], ['sm', 'outline', 'edit'])
+  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.props.tone, openInTab?.props.icon], ['xs', 'solid', 'accent', 'open-external'])
+  assert.deepEqual([edit?.props.size, edit?.props.variant, edit?.props.icon], ['xs', 'outline', 'edit'])
+  const globe = panel.find({ type: 'IconButton', label: 'Open in Azure DevOps' })
+  assert.deepEqual([globe?.props.icon, globe?.props.variant, globe?.props.size], ['globe', 'ghost', 'xs'])
   const refresh = panel.find({ type: 'IconButton', label: 'Refresh' })
-  assert.deepEqual([refresh?.props.variant, refresh?.props.size], ['ghost', 'sm'])
+  assert.deepEqual([refresh?.props.variant, refresh?.props.size], ['ghost', 'xs'])
 
   await panel.press({ type: 'Button', text: 'Open in tab' })
   const tabbed = walkNodes(panel.tree())
@@ -440,7 +477,7 @@ test("a top-level page's back link says All pages, and pressing it returns to th
   await panel.selectItem(TREE, '/Home')
   assert.deepEqual(
     panel.findAll({ type: 'Link' }).map(link => link.text),
-    ['‹ All pages', 'Open in Azure DevOps']
+    ['‹ All pages']
   )
   await panel.press({ type: 'Link', text: '‹ All pages' })
   assert.deepEqual(keysOf(treeOf()), ROOT_PAGES)
@@ -510,7 +547,7 @@ test('a code wiki page offers Open in tab but not Edit in Orca, and says why', a
   )
   assert.equal(button('Edit in Orca'), null)
   const note = panel.find({ type: 'Text', text: notice })
-  assert.deepEqual([note?.props.muted, note?.props.size], [true, 'sm'])
+  assert.deepEqual([note?.props.muted, note?.props.size], [true, 'xs'])
   assert.deepEqual(typesOf(headerOf(walkNodes(panel.tree()))), ['Stack', 'Row', 'Text'], 'the notice sits under the row')
   assert.equal(requestsTo(host, 'wiki.edit').length, 0)
 })
@@ -529,7 +566,39 @@ test('a link that cannot be opened is left out', async () => {
     panel.findAll({ type: 'Link' }).map(link => link.text),
     ['‹ All pages']
   )
+  assert.equal(panel.find({ type: 'IconButton', label: 'Open in Azure DevOps' }), null)
   assert.ok(panel.find({ type: 'Markdown' }))
+})
+
+async function pressAzureDevOps(answer: unknown) {
+  const host = await open()
+  host.respond('shell.openExternal', answer)
+  await panel.selectItem(TREE, '/Home')
+  await panel.press({ type: 'IconButton', label: 'Open in Azure DevOps' })
+  return host
+}
+
+test('a link Orca refuses to open shows the error message and the next press clears it', async () => {
+  const host = await pressAzureDevOps(() => {
+    throw hostError('action_failed', 'Orca could not open the link.')
+  })
+  assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', 'Orca could not open the link.']])
+  assert.deepEqual(typesOf(headerOf(walkNodes(panel.tree()))), ['Stack', 'Row', 'Callout'], 'the notice sits under the row')
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press({ type: 'IconButton', label: 'Open in Azure DevOps' })
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: pageOf('/Home').url }, { url: pageOf('/Home').url }])
+})
+
+test('a link Orca could not ask about shows a fixed message', async () => {
+  await pressAzureDevOps({ opened: false, reason: 'consent-unavailable' })
+  assert.deepEqual(panel.findAll({ type: 'Callout' }).map(callout => [callout.props.tone, callout.text]), [['danger', OPEN_LINK_UNAVAILABLE]])
+})
+
+test('a link the person declined to open stays silent', async () => {
+  const host = await pressAzureDevOps({ opened: false, reason: 'cancelled' })
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(host.callsOf('shell.openExternal').length, 1)
 })
 
 const pageWith = (content: string) => ({ 'wiki.page': (input: WikiPageRef) => pageOf(input.path, { content }) })
@@ -546,7 +615,7 @@ test('a Mermaid block in either form becomes a Diagram card with Open in tab', a
   for (const title of diagrams) {
     assert.deepEqual(buttonsIn(title), ['Open in tab'])
     const openInTab = button('Open in tab', cardOf(title))
-    assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.disabled], ['sm', 'outline', false])
+    assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.props.icon, openInTab?.disabled], ['xs', 'outline', 'open-external', false])
   }
   assert.deepEqual(markdownOf().filter(text => /graph TD|sequenceDiagram|mermaid|:::/.test(text)), [], 'the diagram source is not drawn as text')
 
@@ -575,8 +644,8 @@ test('a page keeps its prose in order between its cards, and a link reference be
   ])
   assert.deepEqual(
     walkNodes(panel.tree())
-      .filter(node => node.type === 'Markdown' || node.type === 'Card')
-      .map(node => (node.type === 'Card' ? node.props?.title : 'Markdown')),
+      .filter(node => node.type === 'Markdown' || (node.type === 'Box' && node.props?.background === 'muted'))
+      .map(node => (node.type === 'Box' ? cardParts(node)[0] : 'Markdown')),
     ['Markdown', 'Diagram · flowchart', 'Table · 4 columns', 'Markdown', 'Diagram · sequence diagram', 'Markdown']
   )
 })
@@ -591,11 +660,11 @@ test('a wide table becomes a Table card naming its columns, and a narrow one sta
     ['Table · 4 columns', 'Table · 3 columns', 'Table · 1 column']
   )
   assert.deepEqual(
-    panel.findAll({ type: 'Card' }).map(card => card.props.description),
+    cardNodes().map(card => cardParts(card)[1]),
     ['Service · Owner · Region · Tier', 'Name · Command · Description', 'only only only only only only only only only only only']
   )
   assert.deepEqual(
-    panel.findAll({ type: 'Card' }).map(card => buttonsIn(String(card.label))),
+    cardTitles().map(title => buttonsIn(String(title))),
     [['Open in tab'], ['Open in tab'], ['Open in tab']]
   )
   const narrow = markdownOf()
@@ -611,11 +680,11 @@ test('a table with 64 long column names keeps its card description within a labe
   const names = Array.from({ length: 64 }, (_, index) => `Column ${String(index + 1).padStart(2, '0')} ${'n'.repeat(40)}`)
   await open(pageWith([`| ${names.join(' | ')} |`, `| ${names.map(() => '---').join(' | ')} |`].join('\n')))
   await panel.selectItem(TREE, '/Home')
-  const card = panel.find({ type: 'Card' })
-  assert.equal(card?.label, 'Table · 64 columns')
-  assert.ok(utf8(String(card?.props.description)) <= 1024)
-  assert.ok(String(card?.props.description).endsWith('…'))
-  assert.ok(String(card?.props.description).startsWith('Column 01'))
+  const [title, description] = cardParts(cardNodes()[0])
+  assert.equal(title, 'Table · 64 columns')
+  assert.ok(utf8(description) <= 1024)
+  assert.ok(description.endsWith('…'))
+  assert.ok(description.startsWith('Column 01'))
 })
 
 test('a 60 KiB page with twenty diagrams and tables stays under 4,000 nodes and 450 KiB', async () => {
@@ -630,7 +699,7 @@ test('a 60 KiB page with twenty diagrams and tables stays under 4,000 nodes and 
 
   await open(pageWith(content))
   await panel.selectItem(TREE, '/Home')
-  assert.equal(panel.findAll({ type: 'Card' }).length, 20)
+  assert.equal(cardNodes().length, 20)
   assert.equal(markdownOf().length, 21)
   assert.ok(markdownOf().every(text => utf8(text) < 64 * 1024))
   assert.ok(markdownOf().every(text => text.includes('[ref19]: ')), 'each stretch of prose keeps its links')
@@ -699,7 +768,7 @@ test('Open in tab sends wiki.openInTab for the page and shows a refusal', async 
     ['Open in tab', 'Edit in Orca']
   )
   const openInTab = button('Open in tab')
-  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.disabled], ['sm', 'solid', false])
+  assert.deepEqual([openInTab?.props.size, openInTab?.props.variant, openInTab?.props.tone, openInTab?.disabled], ['xs', 'solid', 'accent', false])
 
   await panel.press({ type: 'Button', text: 'Open in tab' })
   assert.deepEqual(inputsTo(host, 'wiki.openInTab'), [refOf('/Runbooks/Deploy')])
@@ -1452,41 +1521,85 @@ test('drafts show a skeleton while loading and the message if they fail', async 
   answer.release([draftOf('/Home')])
   await retrying
   assert.equal(panel.find({ type: 'Skeleton', label: 'Loading drafts' }), null)
-  assert.deepEqual(cardTitles(), ['Home'])
+  assert.deepEqual(draftTitles(), ['Home'])
   assert.equal(requestsTo(host, 'wiki.drafts').length, 2)
 })
 
 const DEPLOY = draftOf('/Runbooks/Deploy', { changed: true })
 const HOME = draftOf('/Home', { publishedAt: NOW - 60_000 })
 
-test('Drafts shows each draft with Publish, Open and Discard', async () => {
+const draftRowOf = (draft: DraftSummary) => walkNodes(panel.tree()).find(node => node.key === draft.key) as TreeSnapshot
+
+test('Drafts shows each draft as one compact row with Publish, Open and Discard', async () => {
   const host = await open({ 'wiki.drafts': [DEPLOY, HOME] })
   assert.deepEqual(inputsTo(host, 'wiki.drafts'), [{ org: 'contoso' }])
-  const drafts = panel.find({ type: 'Collapsible', label: 'Drafts (2)' })
-  assert.equal(drafts?.props.defaultOpen, true)
-  assert.deepEqual(cardTitles(), ['Deploy', 'Home'])
-  const deploy = cardOf('Deploy')
-  assert.equal(deploy.props.description, 'Fabrikam Web.wiki · in web-app')
+  const group = panel.find({ type: 'Collapsible', label: 'Drafts · 2' })
+  assert.equal(group?.props.open, true)
+  assert.equal(group?.props.description, undefined)
+  assert.deepEqual(draftTitles(), ['Deploy', 'Home'])
+
+  const row = draftRowOf(DEPLOY)
+  assert.equal(row.type, 'Box')
   assert.deepEqual(
-    inside(deploy, { type: 'Text' }).map(text => [text.text, text.props.muted, text.props.size]),
+    [row.props?.border, row.props?.radius, row.props?.padding, row.props?.direction, row.props?.justify, row.props?.align],
+    [true, 'md', 'xs', 'row', 'between', 'center']
+  )
+  assert.deepEqual(typesOf(row), ['Box', 'Row'], 'the text on the left, the actions on the right')
+  const left = row.children?.[0] as TreeSnapshot
+  assert.deepEqual([left.props?.grow, left.props?.minWidth], [true, 0])
+  assert.deepEqual(typesOf(left), ['Text', 'Text'], 'the name and the status, no path line')
+
+  const deploy = draftBoxOf(DEPLOY)
+  assert.deepEqual(
+    inside(deploy, { type: 'Text' }).map(text => [text.text, text.props.weight ?? null, text.props.muted ?? null, text.props.size, text.props.truncate]),
     [
-      ['.orca-ado/wiki/Fabrikam-Web.wiki/Runbooks/Deploy.md', true, 'sm'],
-      ['Saved changes not published yet.', true, 'sm']
+      ['Deploy', 'semibold', null, 'sm', true],
+      ['Saved changes not published yet.', null, true, 'xs', true]
     ]
   )
-  const home = inside(cardOf('Home'), { type: 'Text' })
+  const home = inside(draftBoxOf(HOME), { type: 'Text' })
   assert.match(home[1].text, /^No changes since you opened or published it\. Published /)
-  assert.equal(home[1].props.muted, true)
-  assert.deepEqual(inside(cardOf('Home'), { type: 'RelativeTime' }).map(time => time.props.at), [NOW - 60_000])
+  assert.deepEqual([home[1].props.muted, home[1].props.size, home[1].props.truncate], [true, 'xs', true])
+  assert.deepEqual(inside(draftBoxOf(HOME), { type: 'RelativeTime' }).map(time => time.props.at), [NOW - 60_000])
+
   assert.deepEqual(
-    inside(deploy, { type: 'Button' }).map(item => [item.text, item.props.size, item.props.variant ?? null, item.props.tone ?? null, item.disabled]),
+    inside(deploy, { role: 'button' }).map(item => [item.type, nameOf(item), item.props.icon ?? null, item.props.size, item.props.variant, item.props.tone ?? null, item.disabled]),
     [
-      ['Publish', 'sm', null, null, false],
-      ['Open', 'sm', 'outline', null, false],
-      ['Discard…', 'sm', 'ghost', 'danger', false]
+      ['Button', 'Publish', null, 'xs', 'outline', null, false],
+      ['IconButton', 'Open', 'file-text', 'xs', 'ghost', null, false],
+      ['IconButton', 'Discard…', 'delete', 'xs', 'ghost', 'danger', false]
     ]
   )
+  assert.equal(button('Open', deploy)?.props.tooltip, '.orca-ado/wiki/Fabrikam-Web.wiki/Runbooks/Deploy.md')
+  assert.equal(panel.find({ type: 'Text', text: /\.orca-ado/ }), null, 'the local path is only in the tooltip')
+  assert.equal(panel.find({ type: 'Text', text: /web-app/ }), null)
   assert.equal(inside(deploy, { type: 'Callout' }).length, 0)
+})
+
+test('the wiki name shows on a draft only when drafts come from more than one wiki', async () => {
+  const elsewhere = draftOf('/Guide', { ...refOf('/Guide', CODE_WIKI), key: draftKey(refOf('/Guide', CODE_WIKI)), wikiName: CODE_WIKI.name })
+  await open({ 'wiki.drafts': [DEPLOY, HOME] })
+  const group = panel.find({ type: 'Collapsible', label: 'Drafts · 2' })
+  assert.ok(group)
+  assert.deepEqual(inside(group, { type: 'Text', text: PROJECT_WIKI.name }), [])
+  await closeCleanly(panel)
+
+  await open({ 'wiki.drafts': [DEPLOY, elsewhere] })
+  const names = (draft: DraftSummary) => inside(draftBoxOf(draft), { type: 'Text' }).map(text => text.text)
+  assert.deepEqual(names(DEPLOY), ['Deploy', PROJECT_WIKI.name, 'Saved changes not published yet.'])
+  assert.deepEqual(names(elsewhere), ['Guide', CODE_WIKI.name, 'No changes since you opened or published it.'])
+  const name = panel.find({ type: 'Text', text: CODE_WIKI.name })
+  assert.deepEqual([name?.props.muted, name?.props.size, name?.props.truncate], [true, 'xs', true])
+})
+
+test('the Drafts group folds, and stays folded', async () => {
+  await open({ 'wiki.drafts': [DEPLOY, HOME] })
+  await panel.toggle({ type: 'Collapsible', label: 'Drafts · 2' })
+  assert.deepEqual(draftTitles(), [])
+  assert.equal(panel.find({ type: 'Collapsible', label: 'Drafts · 2' })?.props.open, false)
+  assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|wiki'], { all: null, open: [], closed: ['drafts'] })
+  await panel.toggle({ type: 'Collapsible', label: 'Drafts · 2' })
+  assert.deepEqual(draftTitles(), ['Deploy', 'Home'])
 })
 
 test('no drafts shows no Drafts section', async () => {
@@ -1495,11 +1608,13 @@ test('no drafts shows no Drafts section', async () => {
   assert.equal(panel.find({ type: 'Skeleton' }), null)
 })
 
-test('Open on a draft sends wiki.edit for its page and shows the message in the card', async () => {
+test('Open on a draft sends wiki.edit for its page and shows the message under its row', async () => {
   const host = await open({ 'wiki.drafts': [DEPLOY], 'wiki.edit': { opened: true, message: OPENED } })
-  await pressIn('Deploy', 'Open')
+  assert.equal(draftRowOf(DEPLOY).type, 'Box', 'a draft with nothing to say is just its row')
+  await pressIn(DEPLOY, 'Open')
   assert.deepEqual(inputsTo(host, 'wiki.edit'), [refOf('/Runbooks/Deploy')])
-  assert.deepEqual(calloutsIn('Deploy'), [['accent', null, OPENED]])
+  assert.deepEqual(calloutsIn(DEPLOY), [['accent', null, OPENED]])
+  assert.deepEqual(typesOf(draftRowOf(DEPLOY)), ['Box', 'Callout'], 'the row, then the message')
   assert.equal(requestsTo(host, 'wiki.drafts').length, 2)
 })
 
@@ -1516,8 +1631,8 @@ test('Publish sends the draft key and shows the result, and the list reloads', a
     ['danger', 'This page was moved or deleted in Azure DevOps. Your draft is kept.']
   ]
   for (const [index, [tone, message]] of expectations.entries()) {
-    await pressIn('Deploy', 'Publish')
-    assert.deepEqual(calloutsIn('Deploy'), [[tone, null, message]])
+    await pressIn(DEPLOY, 'Publish')
+    assert.deepEqual(calloutsIn(DEPLOY), [[tone, null, message]])
     assert.equal(requestsTo(host, 'wiki.drafts').length, index + 2)
   }
   assert.deepEqual(inputsTo(host, 'wiki.publish'), [{ key: DEPLOY.key }, { key: DEPLOY.key }, { key: DEPLOY.key }])
@@ -1535,11 +1650,11 @@ test('a successful Publish reloads its page when that page is open; a failed or 
   })
   const shownText = () => panel.find({ type: 'Markdown' })?.props.content
   const pageReads = () => requestsTo(host, 'wiki.page').length
-  const whileHomeIsOpen = async (card: string, text: string, result: WikiResult) => {
+  const whileHomeIsOpen = async (draft: DraftSummary, text: string, result: WikiResult) => {
     if (panel.find(BACK)) await panel.press(BACK)
     answer = held<WikiResult>()
-    const pressing = pressIn(card, text)
-    await until(() => button('Publish', cardOf(card))?.disabled)
+    const pressing = pressIn(draft, text)
+    await until(() => button('Publish', draftBoxOf(draft))?.disabled)
     const selecting = panel.selectItem(TREE, '/Home')
     await until(() => heading() === 'Home' && shownText() !== undefined)
     const opened = shownText()
@@ -1549,25 +1664,25 @@ test('a successful Publish reloads its page when that page is open; a failed or 
     return opened
   }
 
-  await whileHomeIsOpen('Home', 'Publish', { status: 'published', message: 'Published.' })
+  await whileHomeIsOpen(HOME, 'Publish', { status: 'published', message: 'Published.' })
   assert.equal(shownText(), 'after Publish published')
   assert.equal(pageReads(), 2, 'opened, then read again after the Publish')
 
-  const beforeConflict = await whileHomeIsOpen('Home', 'Publish', CONFLICT)
+  const beforeConflict = await whileHomeIsOpen(HOME, 'Publish', CONFLICT)
   assert.equal(shownText(), beforeConflict)
   assert.equal(pageReads(), 3)
 
   await panel.press(BACK)
-  await pressIn('Home', 'Publish mine…')
-  await whileHomeIsOpen('Home', 'Publish mine', { status: 'published', message: 'Published. Their changes were replaced.' })
+  await pressIn(HOME, 'Publish mine…')
+  await whileHomeIsOpen(HOME, 'Publish mine', { status: 'published', message: 'Published. Their changes were replaced.' })
   assert.equal(shownText(), 'after Publish mine published')
   assert.equal(pageReads(), 5)
 
-  const beforeFailure = await whileHomeIsOpen('Home', 'Publish', { status: 'failed', message: 'This page was moved or deleted in Azure DevOps. Your draft is kept.' })
+  const beforeFailure = await whileHomeIsOpen(HOME, 'Publish', { status: 'failed', message: 'This page was moved or deleted in Azure DevOps. Your draft is kept.' })
   assert.equal(shownText(), beforeFailure)
   assert.equal(pageReads(), 6)
 
-  const beforeOther = await whileHomeIsOpen('Deploy', 'Publish', { status: 'published', message: 'Published.' })
+  const beforeOther = await whileHomeIsOpen(DEPLOY, 'Publish', { status: 'published', message: 'Published.' })
   assert.equal(shownText(), beforeOther)
   assert.equal(pageReads(), 7, 'another page was published')
   assert.deepEqual(inputsTo(host, 'wiki.page'), Array.from({ length: 7 }, () => refOf('/Home')))
@@ -1580,8 +1695,8 @@ test('a Publish that throws shows its message in the card', async () => {
       throw hostError('action_failed', 'That draft no longer exists.')
     }
   })
-  await pressIn('Deploy', 'Publish')
-  assert.deepEqual(calloutsIn('Deploy'), [['danger', null, 'That draft no longer exists.']])
+  await pressIn(DEPLOY, 'Publish')
+  assert.deepEqual(calloutsIn(DEPLOY), [['danger', null, 'That draft no longer exists.']])
 })
 
 test('a conflict shows both diffs and the three choices; Publish mine and Take theirs ask first', async () => {
@@ -1595,55 +1710,58 @@ test('a conflict shows both diffs and the three choices; Publish mine and Take t
     'wiki.publish': CONFLICT,
     'wiki.resolve': () => resolved.shift() as WikiResult
   })
-  await pressIn('Deploy', 'Publish')
-  const [callout] = inside(cardOf('Deploy'), { type: 'Callout' })
+  await pressIn(DEPLOY, 'Publish')
+  const [callout] = inside(draftBoxOf(DEPLOY), { type: 'Callout' })
   assert.deepEqual([callout.props.tone, callout.props.title], ['warning', 'This page changed in Azure DevOps'])
   assert.ok(callout.text.includes(CONFLICT.message))
-  assert.deepEqual(diffsIn('Deploy'), [['Their changes', THEIRS_DIFF], ['Your changes', MINE_DIFF]])
-  const views = inside(cardOf('Deploy'), { type: 'CodeView' })
+  assert.deepEqual(diffsIn(DEPLOY), [['Their changes', THEIRS_DIFF], ['Your changes', MINE_DIFF]])
+  const views = inside(draftBoxOf(DEPLOY), { type: 'CodeView' })
   assert.deepEqual(views.map(view => [view.props.language, view.props.lineNumbers, view.props.maxHeight]), [['diff', false, 'md'], ['diff', false, 'md']])
   assert.deepEqual(
-    inside(cardOf('Deploy'), { type: 'Text', text: /^(Their|Your) changes$/ }).map(text => [text.text, text.props.weight]),
+    inside(draftBoxOf(DEPLOY), { type: 'Text', text: /^(Their|Your) changes$/ }).map(text => [text.text, text.props.weight]),
     [['Their changes', 'semibold'], ['Your changes', 'semibold']]
   )
-  assert.deepEqual(buttonsIn('Deploy'), ['Publish', 'Open', 'Discard…', 'Publish mine…', 'Take theirs…', 'Merge by hand'])
-  assert.equal(button('Merge by hand')?.props.variant, 'outline')
+  assert.deepEqual(buttonsIn(DEPLOY), ['Publish', 'Open', 'Discard…', 'Publish mine…', 'Take theirs…', 'Merge by hand'])
+  assert.deepEqual(
+    ['Publish mine…', 'Take theirs…', 'Merge by hand'].map(name => [button(name)?.props.size, button(name)?.props.variant]),
+    [['xs', 'outline'], ['xs', 'outline'], ['xs', 'outline']]
+  )
 
-  await pressIn('Deploy', 'Publish mine…')
+  await pressIn(DEPLOY, 'Publish mine…')
   assert.equal(requestsTo(host, 'wiki.resolve').length, 0)
-  const question = inside(cardOf('Deploy'), { type: 'Text', text: 'Publish your draft over their changes? Their changes are lost.' })
+  const question = inside(draftBoxOf(DEPLOY), { type: 'Text', text: 'Publish your draft over their changes? Their changes are lost.' })
   assert.equal(question.length, 1)
   assert.deepEqual(
-    inside(cardOf('Deploy'), { type: 'Button' }).slice(3).map(item => [item.text, item.props.variant ?? null, item.props.tone ?? null]),
-    [['Publish mine', null, 'danger'], ['Cancel', 'ghost', null]]
+    inside(draftBoxOf(DEPLOY), { type: 'Button' }).slice(1).map(item => [item.text, item.props.size, item.props.variant ?? null, item.props.tone ?? null]),
+    [['Publish mine', 'xs', 'outline', 'danger'], ['Cancel', 'xs', 'ghost', null]]
   )
-  await pressIn('Deploy', 'Cancel')
+  await pressIn(DEPLOY, 'Cancel')
   assert.equal(requestsTo(host, 'wiki.resolve').length, 0)
-  assert.deepEqual(buttonsIn('Deploy').slice(3), ['Publish mine…', 'Take theirs…', 'Merge by hand'])
+  assert.deepEqual(buttonsIn(DEPLOY).slice(3), ['Publish mine…', 'Take theirs…', 'Merge by hand'])
 
-  await pressIn('Deploy', 'Publish mine…')
-  await pressIn('Deploy', 'Publish mine')
+  await pressIn(DEPLOY, 'Publish mine…')
+  await pressIn(DEPLOY, 'Publish mine')
   assert.deepEqual(inputsTo(host, 'wiki.resolve'), [{ key: DEPLOY.key, choice: 'mine' }])
   assert.equal(requestsTo(host, 'wiki.resolve')[0]?.timeoutMs, 90_000)
-  assert.deepEqual(calloutsIn('Deploy'), [['success', null, 'Published. Their changes were replaced.']])
-  assert.deepEqual(diffsIn('Deploy'), [])
+  assert.deepEqual(calloutsIn(DEPLOY), [['success', null, 'Published. Their changes were replaced.']])
+  assert.deepEqual(diffsIn(DEPLOY), [])
 
-  await pressIn('Deploy', 'Publish')
-  await pressIn('Deploy', 'Take theirs…')
-  assert.ok(inside(cardOf('Deploy'), { type: 'Text', text: 'Replace your draft with their version? Your changes are lost.' }).length === 1)
+  await pressIn(DEPLOY, 'Publish')
+  await pressIn(DEPLOY, 'Take theirs…')
+  assert.ok(inside(draftBoxOf(DEPLOY), { type: 'Text', text: 'Replace your draft with their version? Your changes are lost.' }).length === 1)
   assert.deepEqual(
-    inside(cardOf('Deploy'), { type: 'Button' }).slice(3).map(item => [item.text, item.props.variant ?? null, item.props.tone ?? null]),
-    [['Take theirs', null, 'danger'], ['Cancel', 'ghost', null]]
+    inside(draftBoxOf(DEPLOY), { type: 'Button' }).slice(1).map(item => [item.text, item.props.size, item.props.variant ?? null, item.props.tone ?? null]),
+    [['Take theirs', 'xs', 'outline', 'danger'], ['Cancel', 'xs', 'ghost', null]]
   )
-  await pressIn('Deploy', 'Take theirs')
+  await pressIn(DEPLOY, 'Take theirs')
   assert.deepEqual(inputsTo(host, 'wiki.resolve').at(-1), { key: DEPLOY.key, choice: 'theirs' })
-  assert.deepEqual(calloutsIn('Deploy'), [['success', null, 'Your draft now holds their version.']])
+  assert.deepEqual(calloutsIn(DEPLOY), [['success', null, 'Your draft now holds their version.']])
 
-  await pressIn('Deploy', 'Publish')
-  await pressIn('Deploy', 'Merge by hand')
+  await pressIn(DEPLOY, 'Publish')
+  await pressIn(DEPLOY, 'Merge by hand')
   assert.deepEqual(inputsTo(host, 'wiki.resolve').at(-1), { key: DEPLOY.key, choice: 'merge' })
   assert.equal(requestsTo(host, 'wiki.resolve').length, 3)
-  assert.equal(calloutsIn('Deploy')[0][0], 'success')
+  assert.equal(calloutsIn(DEPLOY)[0][0], 'success')
 })
 
 test('a version without text shows its message instead of a diff', async () => {
@@ -1656,10 +1774,10 @@ test('a version without text shows its message instead of a diff', async () => {
       mine: { text: MINE_DIFF, message: 'Showing the first 60 KiB of the changes.' }
     }
   })
-  await pressIn('Deploy', 'Publish')
-  assert.deepEqual(diffsIn('Deploy'), [['Your changes', MINE_DIFF]])
+  await pressIn(DEPLOY, 'Publish')
+  assert.deepEqual(diffsIn(DEPLOY), [['Your changes', MINE_DIFF]])
   assert.deepEqual(
-    inside(cardOf('Deploy'), { type: 'Text', text: /^(Their version|Showing)/ }).map(text => [text.text, text.props.muted]),
+    inside(draftBoxOf(DEPLOY), { type: 'Text', text: /^(Their version|Showing)/ }).map(text => [text.text, text.props.muted]),
     [['Their version is too large to compare here.', true], ['Showing the first 60 KiB of the changes.', true]]
   )
 })
@@ -1667,26 +1785,28 @@ test('a version without text shows its message instead of a diff', async () => {
 test('Discard asks first', async () => {
   let list = [DEPLOY, HOME]
   const host = await open({ 'wiki.drafts': () => list, 'wiki.discard': () => ({ ok: true as const, message: 'Draft discarded.' }) })
-  await pressIn('Deploy', 'Discard…')
+  await pressIn(DEPLOY, 'Discard…')
   assert.equal(requestsTo(host, 'wiki.discard').length, 0)
-  const question = inside(cardOf('Deploy'), { type: 'Text', text: "Discard this draft? Changes you haven't published are lost." })
+  const question = inside(draftBoxOf(DEPLOY), { type: 'Text', text: "Discard this draft? Changes you haven't published are lost." })
   assert.equal(question.length, 1)
   assert.deepEqual(
-    inside(cardOf('Deploy'), { type: 'Button' }).map(item => [item.text, item.props.variant ?? null, item.props.tone ?? null]),
-    [['Discard', null, 'danger'], ['Keep', 'ghost', null]]
+    inside(draftBoxOf(DEPLOY), { role: 'button' }).map(item => [nameOf(item), item.props.size, item.props.variant ?? null, item.props.tone ?? null]),
+    [['Discard', 'xs', 'outline', 'danger'], ['Keep', 'xs', 'ghost', null]],
+    'the row gives up its actions while the question is open'
   )
-  assert.deepEqual(buttonsIn('Home'), ['Publish', 'Open', 'Discard…'])
-  await pressIn('Deploy', 'Keep')
+  assert.deepEqual(typesOf(draftRowOf(DEPLOY)), ['Box', 'Stack'], 'the row, then the question under it')
+  assert.deepEqual(buttonsIn(HOME), ['Publish', 'Open', 'Discard…'])
+  await pressIn(DEPLOY, 'Keep')
   assert.equal(requestsTo(host, 'wiki.discard').length, 0)
-  assert.deepEqual(buttonsIn('Deploy'), ['Publish', 'Open', 'Discard…'])
+  assert.deepEqual(buttonsIn(DEPLOY), ['Publish', 'Open', 'Discard…'])
 
-  await pressIn('Deploy', 'Discard…')
+  await pressIn(DEPLOY, 'Discard…')
   list = [HOME]
-  await pressIn('Deploy', 'Discard')
+  await pressIn(DEPLOY, 'Discard')
   assert.deepEqual(inputsTo(host, 'wiki.discard'), [{ key: DEPLOY.key }])
   assert.equal(requestsTo(host, 'wiki.discard')[0]?.timeoutMs, 90_000)
-  assert.deepEqual(cardTitles(), ['Home'])
-  assert.ok(panel.find({ type: 'Collapsible', label: 'Drafts (1)' }))
+  assert.deepEqual(draftTitles(), ['Home'])
+  assert.ok(panel.find({ type: 'Collapsible', label: 'Drafts · 1' }))
   assert.equal(requestsTo(host, 'wiki.drafts').length, 2)
 })
 
@@ -1697,10 +1817,10 @@ test('a Discard that fails keeps the draft and shows why', async () => {
       throw hostError('action_failed', 'The wiki draft folder leads outside this workspace, so nothing was written.')
     }
   })
-  await pressIn('Deploy', 'Discard…')
-  await pressIn('Deploy', 'Discard')
-  assert.deepEqual(calloutsIn('Deploy'), [['danger', null, 'The wiki draft folder leads outside this workspace, so nothing was written.']])
-  assert.deepEqual(buttonsIn('Deploy'), ['Publish', 'Open', 'Discard…'])
+  await pressIn(DEPLOY, 'Discard…')
+  await pressIn(DEPLOY, 'Discard')
+  assert.deepEqual(calloutsIn(DEPLOY), [['danger', null, 'The wiki draft folder leads outside this workspace, so nothing was written.']])
+  assert.deepEqual(buttonsIn(DEPLOY), ['Publish', 'Open', 'Discard…'])
 })
 
 test('results stay with their draft', async () => {
@@ -1710,32 +1830,32 @@ test('results stay with their draft', async () => {
     'wiki.publish': { status: 'published', message: 'Published.' },
     'wiki.edit': { opened: true, message: OPENED }
   })
-  await pressIn('Deploy', 'Publish')
-  assert.deepEqual(calloutsIn('Deploy'), [['success', null, 'Published.']])
-  assert.deepEqual(calloutsIn('Home'), [])
+  await pressIn(DEPLOY, 'Publish')
+  assert.deepEqual(calloutsIn(DEPLOY), [['success', null, 'Published.']])
+  assert.deepEqual(calloutsIn(HOME), [])
   list = [HOME, DEPLOY]
-  await pressIn('Home', 'Open')
-  assert.deepEqual(cardTitles(), ['Home', 'Deploy'])
-  assert.deepEqual(calloutsIn('Deploy'), [['success', null, 'Published.']])
-  assert.deepEqual(calloutsIn('Home'), [['accent', null, OPENED]])
+  await pressIn(HOME, 'Open')
+  assert.deepEqual(draftTitles(), ['Home', 'Deploy'])
+  assert.deepEqual(calloutsIn(DEPLOY), [['success', null, 'Published.']])
+  assert.deepEqual(calloutsIn(HOME), [['accent', null, OPENED]])
   assert.equal(requestsTo(host, 'wiki.drafts').length, 3)
 })
 
 test('a second Publish press before the buttons redraw sends nothing', async () => {
   const answer = held<WikiResult>()
   const host = await open({ 'wiki.drafts': [DEPLOY, HOME], 'wiki.publish': () => answer.promise, 'wiki.edit': { opened: true, message: OPENED }, 'wiki.discard': { ok: true as const, message: 'Draft discarded.' } })
-  const publish = button('Publish', cardOf('Deploy'))
-  const opener = button('Open', cardOf('Deploy'))
-  const discarder = button('Discard…', cardOf('Deploy'))
+  const publish = button('Publish', draftBoxOf(DEPLOY))
+  const opener = button('Open', draftBoxOf(DEPLOY))
+  const discarder = button('Discard…', draftBoxOf(DEPLOY))
   assert.ok(publish && opener && discarder)
   const presses = [panel.press(publish), panel.press(publish), panel.press(opener), panel.press(discarder)]
-  await until(() => button('Publish', cardOf('Deploy'))?.disabled)
+  await until(() => button('Publish', draftBoxOf(DEPLOY))?.disabled)
   assert.deepEqual(
-    buttonsIn('Deploy').map(text => button(text, cardOf('Deploy'))?.disabled),
+    buttonsIn(DEPLOY).map(text => button(text, draftBoxOf(DEPLOY))?.disabled),
     [true, true, true]
   )
   assert.deepEqual(
-    buttonsIn('Home').map(text => button(text, cardOf('Home'))?.disabled),
+    buttonsIn(HOME).map(text => button(text, draftBoxOf(HOME))?.disabled),
     [false, false, false]
   )
   answer.release({ status: 'published', message: 'Published.' })
@@ -1744,7 +1864,7 @@ test('a second Publish press before the buttons redraw sends nothing', async () 
   assert.equal(requestsTo(host, 'wiki.edit').length, 0)
   assert.equal(requestsTo(host, 'wiki.discard').length, 0)
   assert.deepEqual(
-    buttonsIn('Deploy').map(text => button(text, cardOf('Deploy'))?.disabled),
+    buttonsIn(DEPLOY).map(text => button(text, draftBoxOf(DEPLOY))?.disabled),
     [false, false, false]
   )
 })
@@ -1752,39 +1872,39 @@ test('a second Publish press before the buttons redraw sends nothing', async () 
 test('every button in a conflict is disabled while its draft runs, and a second press sends nothing', async () => {
   const answer = held<WikiResult>()
   const host = await open({ 'wiki.drafts': [DEPLOY], 'wiki.publish': CONFLICT, 'wiki.resolve': () => answer.promise })
-  await pressIn('Deploy', 'Publish')
-  const merge = button('Merge by hand', cardOf('Deploy'))
+  await pressIn(DEPLOY, 'Publish')
+  const merge = button('Merge by hand', draftBoxOf(DEPLOY))
   assert.ok(merge)
   const presses = [panel.press(merge), panel.press(merge)]
-  await until(() => button('Merge by hand', cardOf('Deploy'))?.disabled)
+  await until(() => button('Merge by hand', draftBoxOf(DEPLOY))?.disabled)
   assert.deepEqual(
-    buttonsIn('Deploy').map(text => button(text, cardOf('Deploy'))?.disabled),
+    buttonsIn(DEPLOY).map(text => button(text, draftBoxOf(DEPLOY))?.disabled),
     [true, true, true, true, true, true]
   )
-  assert.equal(diffsIn('Deploy').length, 2)
+  assert.equal(diffsIn(DEPLOY).length, 2)
   answer.release({ status: 'updated', message: 'Opened their version.' })
   await Promise.all(presses)
   assert.equal(requestsTo(host, 'wiki.resolve').length, 1)
-  assert.deepEqual(calloutsIn('Deploy'), [['success', null, 'Opened their version.']])
+  assert.deepEqual(calloutsIn(DEPLOY), [['success', null, 'Opened their version.']])
 })
 
 test('a newer conflict leaves the older one with its message only', async () => {
   const host = await open({ 'wiki.drafts': [DEPLOY, HOME], 'wiki.publish': CONFLICT })
-  await pressIn('Deploy', 'Publish')
-  assert.equal(diffsIn('Deploy').length, 2)
-  await pressIn('Home', 'Publish')
-  assert.equal(diffsIn('Home').length, 2)
-  assert.deepEqual(diffsIn('Deploy'), [])
-  assert.deepEqual(calloutsIn('Deploy').map(([tone, title]) => [tone, title]), [['warning', 'This page changed in Azure DevOps']])
-  assert.ok((calloutsIn('Deploy')[0][2] as string).includes(CONFLICT.message))
-  const hint = inside(cardOf('Deploy'), { type: 'Text', text: 'Press Publish to see both versions again.' })
+  await pressIn(DEPLOY, 'Publish')
+  assert.equal(diffsIn(DEPLOY).length, 2)
+  await pressIn(HOME, 'Publish')
+  assert.equal(diffsIn(HOME).length, 2)
+  assert.deepEqual(diffsIn(DEPLOY), [])
+  assert.deepEqual(calloutsIn(DEPLOY).map(([tone, title]) => [tone, title]), [['warning', 'This page changed in Azure DevOps']])
+  assert.ok((calloutsIn(DEPLOY)[0][2] as string).includes(CONFLICT.message))
+  const hint = inside(draftBoxOf(DEPLOY), { type: 'Text', text: 'Press Publish to see both versions again.' })
   assert.deepEqual([hint.length, hint[0].props.muted], [1, true])
-  assert.deepEqual(buttonsIn('Deploy'), ['Publish', 'Open', 'Discard…'])
-  assert.deepEqual(buttonsIn('Home'), ['Publish', 'Open', 'Discard…', 'Publish mine…', 'Take theirs…', 'Merge by hand'])
+  assert.deepEqual(buttonsIn(DEPLOY), ['Publish', 'Open', 'Discard…'])
+  assert.deepEqual(buttonsIn(HOME), ['Publish', 'Open', 'Discard…', 'Publish mine…', 'Take theirs…', 'Merge by hand'])
 
-  await pressIn('Deploy', 'Publish')
-  assert.equal(diffsIn('Deploy').length, 2)
-  assert.deepEqual(diffsIn('Home'), [])
+  await pressIn(DEPLOY, 'Publish')
+  assert.equal(diffsIn(DEPLOY).length, 2)
+  assert.deepEqual(diffsIn(HOME), [])
   assert.equal(requestsTo(host, 'wiki.publish').length, 3)
 })
 
@@ -1803,7 +1923,7 @@ test('switching org resets the tab but keeps the chosen wiki per org', async () 
   assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
   await panel.type(SEARCH_BOX, 'release', { submit: true })
   assert.ok(panel.find({ type: 'List', label: 'Search results' }))
-  assert.deepEqual(cardTitles(), ['Deploy'])
+  assert.deepEqual(draftTitles(), ['Deploy'])
 
   await panel.select({ type: 'Select', label: 'Organization' }, 'fabrikam')
   assert.deepEqual(inputsTo(host, 'wiki.list').slice(-1), [{ org: 'fabrikam' }])
@@ -1812,7 +1932,7 @@ test('switching org resets the tab but keeps the chosen wiki per org', async () 
   assert.deepEqual(panel.expandedOf(TREE), [])
   assert.equal(panel.valueOf(SEARCH_BOX), '')
   assert.equal(panel.find({ type: 'List', label: 'Search results' }), null)
-  assert.deepEqual(cardTitles(), [])
+  assert.deepEqual(draftTitles(), [])
   assert.deepEqual(inputsTo(host, 'wiki.pages').at(-1), { org: 'fabrikam', projectId: 'proj-web', wikiId: 'wiki-fabrikam', path: '/' })
   assert.deepEqual(panel.persisted.plugin.wikiChoice, { contoso: 'wiki-project' })
 
@@ -1824,7 +1944,7 @@ test('switching org resets the tab but keeps the chosen wiki per org', async () 
   assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
   assert.deepEqual(childrenOf('/Runbooks'), ['/Runbooks/Deploy', '/Runbooks/Rollback'])
   assert.equal(panel.valueOf(SEARCH_BOX), '')
-  assert.deepEqual(cardTitles(), ['Deploy'])
+  assert.deepEqual(draftTitles(), ['Deploy'])
   assert.deepEqual(inputsTo(host, 'wiki.pages').slice(-2), [
     { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/' },
     { org: 'contoso', projectId: 'proj-web', wikiId: 'wiki-project', path: '/Runbooks' }
@@ -1840,11 +1960,11 @@ test('an org that expires and reconnects keeps the tree, the search and the resu
   })
   await panel.select({ type: 'Select', label: 'Wiki' }, 'wiki-project')
   await panel.expand(TREE, '/Runbooks')
-  await pressIn('Deploy', 'Open')
+  await pressIn(DEPLOY, 'Open')
   await panel.type(SEARCH_BOX, 'release', { submit: true })
   const before = ['wiki.list', 'wiki.pages', 'wiki.drafts', 'wiki.search', 'wiki.edit'].map(name => requestsTo(host, name).length)
   const results = panel.findAll({ type: 'ListItem' }).map(item => item.label)
-  const callouts = calloutsIn('Deploy')
+  const callouts = calloutsIn(DEPLOY)
   assert.deepEqual(callouts, [['accent', null, OPENED]])
 
   await panel.post('orgs.changed', { orgs: [org('contoso', { state: 'expired' })] })
@@ -1855,7 +1975,7 @@ test('an org that expires and reconnects keeps the tree, the search and the resu
   assert.deepEqual(['wiki.list', 'wiki.pages', 'wiki.drafts', 'wiki.search', 'wiki.edit'].map(name => requestsTo(host, name).length), before)
   assert.equal(panel.valueOf(SEARCH_BOX), 'release')
   assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), results)
-  assert.deepEqual(calloutsIn('Deploy'), callouts)
+  assert.deepEqual(calloutsIn(DEPLOY), callouts)
   assert.equal(panel.valueOf({ type: 'Select', label: 'Wiki' }), 'wiki-project')
   await panel.press({ type: 'Button', text: 'Clear search' })
   assert.deepEqual(panel.expandedOf(TREE), ['/Runbooks'])
@@ -1877,16 +1997,16 @@ test('a drafts answer and an action result for an org that is no longer shown ar
     },
     { orgs: [org('contoso'), org('fabrikam')] }
   )
-  const publishing = pressIn('Deploy', 'Publish')
-  await until(() => button('Publish', cardOf('Deploy'))?.disabled)
+  const publishing = pressIn(DEPLOY, 'Publish')
+  await until(() => button('Publish', draftBoxOf(DEPLOY))?.disabled)
   const switching = panel.select({ type: 'Select', label: 'Organization' }, 'fabrikam')
   await until(() => inputsTo(host, 'wiki.drafts').some(input => (input as { org: string }).org === 'fabrikam'))
   late.release([DEPLOY, HOME])
   await Promise.all([publishing, switching])
-  assert.deepEqual(cardTitles(), [])
+  assert.deepEqual(draftTitles(), [])
   await panel.select({ type: 'Select', label: 'Organization' }, 'contoso')
-  assert.deepEqual(cardTitles(), ['Deploy'])
-  assert.deepEqual(calloutsIn('Deploy'), [])
+  assert.deepEqual(draftTitles(), ['Deploy'])
+  assert.deepEqual(calloutsIn(DEPLOY), [])
 })
 
 test('a remembered wiki that no longer exists falls back to the first', async () => {
@@ -2077,18 +2197,29 @@ test('a deep chain of folders stays within what Orca accepts', async () => {
 test('long titles, paths and snippets are cut so Orca keeps every label', async () => {
   const long = 'x'.repeat(3_000)
   const hit = { path: '/Home', title: long, snippet: long }
+  const away = refOf('/Away', CODE_WIKI)
   await open({
     'wiki.list': [{ ...PROJECT_WIKI, name: long }, { ...CODE_WIKI, name: long }],
     'wiki.pages': { pages: [{ path: '/Home', title: long, hasChildren: false }], total: 1 },
     'wiki.search': { hits: [hit], total: 1 },
-    'wiki.drafts': [draftOf('/Home', { title: long, wikiName: long, workspaceName: long, file: long })]
+    'wiki.drafts': [
+      draftOf('/Home', { title: long, wikiName: long, workspaceName: long, file: long }),
+      draftOf('/Away', { ...away, key: draftKey(away), title: long, wikiName: long, file: long })
+    ]
   })
-  assert.ok(new TextEncoder().encode(treeOf()[0].label).length <= 1024)
+  assert.ok(utf8(treeOf()[0].label) <= 1024)
   const options = panel.find({ type: 'Select', label: 'Wiki' })?.props.options as { label: string }[]
-  assert.ok(new TextEncoder().encode(options[0].label).length <= 1024)
+  assert.ok(utf8(options[0].label) <= 1024)
+  const group = panel.find({ type: 'Collapsible', label: 'Drafts · 2' })
+  assert.ok(group)
+  const texts = inside(group, { type: 'Text' })
+  assert.equal(texts.length, 6, 'a name, the wiki and a status for each of the two drafts')
+  assert.ok(texts.every(text => utf8(text.text) <= 1024))
+  const tooltips = inside(group, { type: 'IconButton', label: 'Open' }).map(item => String(item.props.tooltip))
+  assert.equal(tooltips.length, 2)
+  assert.ok(tooltips.every(tooltip => utf8(tooltip) <= 1024 && tooltip.endsWith('…')))
   await panel.type(SEARCH_BOX, 'release', { submit: true })
-  assert.ok(new TextEncoder().encode(String(panel.find({ type: 'ListItem' })?.props.description)).length <= 1024)
-  assert.ok(new TextEncoder().encode(String(panel.findAll({ type: 'Card' })[0]?.props.description)).length <= 1024)
+  assert.ok(utf8(String(panel.find({ type: 'ListItem' })?.props.description)) <= 1024)
 })
 
 const BIG = 'word '.repeat(12_000)
@@ -2128,11 +2259,11 @@ test('the tree stops at 1,000 items, and the tab stays under 4,000 nodes and 450
   for (let index = 7; index >= 3; index -= 1) await panel.expand(TREE, `/Folder ${index}`)
   assert.equal(countItems(treeOf()), MAX_TREE_ITEMS)
   assert.equal(panel.find({ type: 'Text', text: 'Some pages are hidden. Collapse a folder to see others.' })?.props.muted, true)
-  assert.equal(cardTitles().length, 50)
+  assert.equal(draftTitles().length, 50)
 
-  for (const title of ['Page 0', 'Page 1', 'Page 2']) await pressIn(title, 'Publish')
+  for (const draft of drafts.slice(0, 3)) await pressIn(draft, 'Publish')
   assert.deepEqual(
-    drafts.slice(0, 3).map(draft => diffsIn(draft.title).length),
+    drafts.slice(0, 3).map(draft => diffsIn(draft).length),
     [0, 0, 2]
   )
   measure('drafts in conflict with the tree open')
@@ -2154,8 +2285,8 @@ test('about 150-character page paths still leave room for a conflict under 450 K
   assert.ok(panel.find({ type: 'Text', text: 'Some pages are hidden. Collapse a folder to see others.' }))
   measure('long paths with the tree open')
 
-  await pressIn('Page 0', 'Publish')
-  assert.equal(diffsIn('Page 0').length, 2)
+  await pressIn(drafts[0], 'Publish')
+  assert.equal(diffsIn(drafts[0]).length, 2)
   measure('long paths with a conflict open')
 })
 

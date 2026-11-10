@@ -187,7 +187,7 @@ export function WikiTab({ org }: { org: OrgStatus }): OrcaNode {
   return (
     <Stack gap="md">
       <Header org={org.org} />
-      <Drafts />
+      <Drafts org={org.org} />
       <Browse org={org.org} />
     </Stack>
   )

@@ -1,25 +1,34 @@
-import { Button, Callout, Card, Heading, IconButton, Link, Markdown, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Box, Button, Callout, Heading, IconButton, Link, Markdown, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import { draftKey, type WikiPage } from '../../shared/wiki'
 import { counted, OPEN_IN_TAB } from '../copy'
 import { cutLabel } from '../label'
 import { LoadFailure } from '../snapshot-parts'
 import { backLabel, pageSegments, type PageSegment } from './segments'
-import { closePage, edit, isRunning, loadedPage, loadPageWhenIdle, openInTab, openPage, outcomeOf, pageLoad, readKey, reloadPage } from './state'
+import { closePage, edit, isRunning, linkKey, loadedPage, loadPageWhenIdle, openInTab, openLink, openPage, outcomeOf, pageLoad, readKey, reloadPage } from './state'
 
 const openable = (url: string): boolean => /^https?:\/\//i.test(url) && url.length <= 2048
 
 function Title({ title, path }: { title: string; path: string }): OrcaNode {
   return (
     <Stack gap="xs">
-      <Link onPress={closePage}>{backLabel(path)}</Link>
-      <Heading level={3}>{title}</Heading>
+      <Row>
+        <Link onPress={closePage}>{backLabel(path)}</Link>
+      </Row>
+      <Heading level={2}>{title}</Heading>
     </Stack>
   )
 }
 
-function OpenInTab({ page, variant }: { page: WikiPage; variant: 'solid' | 'outline' }): OrcaNode {
+function OpenInTab({ page, primary }: { page: WikiPage; primary: boolean }): OrcaNode {
   return (
-    <Button size="sm" variant={variant} disabled={isRunning(readKey(page))} onPress={() => openInTab(page)}>
+    <Button
+      size="xs"
+      variant={primary ? 'solid' : 'outline'}
+      tone={primary ? 'accent' : undefined}
+      icon="open-external"
+      disabled={isRunning(readKey(page))}
+      onPress={() => openInTab(page)}
+    >
       {OPEN_IN_TAB}
     </Button>
   )
@@ -29,25 +38,29 @@ function Header({ page, loading }: { page: WikiPage; loading: boolean }): OrcaNo
   const editKey = draftKey(page)
   const edited = page.editable ? outcomeOf(editKey) : undefined
   const tabbed = outcomeOf(readKey(page))
+  const linked = outcomeOf(linkKey(page))
   return (
     <Stack gap="xs">
       <Title title={page.title} path={page.path} />
-      <Row gap="sm" align="center" wrap>
-        <OpenInTab page={page} variant="solid" />
-        {page.editable ? (
-          <Button size="sm" variant="outline" icon="edit" disabled={isRunning(editKey)} onPress={() => edit(page)}>
-            Edit in Orca
-          </Button>
-        ) : null}
-        {openable(page.url) ? <Link href={page.url}>Open in Azure DevOps</Link> : null}
-        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={loading} onPress={reloadPage} />
+      <Row justify="between" align="center">
+        <Row gap="xs" align="center" wrap>
+          <OpenInTab page={page} primary />
+          {page.editable ? (
+            <Button size="xs" variant="outline" icon="edit" disabled={isRunning(editKey)} onPress={() => edit(page)}>
+              Edit in Orca
+            </Button>
+          ) : null}
+          {openable(page.url) ? <IconButton icon="globe" label="Open in Azure DevOps" size="xs" variant="ghost" onPress={() => openLink(page, page.url)} /> : null}
+        </Row>
+        <IconButton icon="refresh" label="Refresh" size="xs" variant="ghost" disabled={loading} onPress={reloadPage} />
       </Row>
       {edited?.status === 'opened' || edited?.status === 'refused' ? (
         <Callout tone={edited.status === 'opened' ? 'accent' : 'danger'}>{edited.message}</Callout>
       ) : null}
       {tabbed?.status === 'refused' ? <Callout tone="danger">{tabbed.message}</Callout> : null}
+      {linked?.status === 'refused' ? <Callout tone="danger">{linked.message}</Callout> : null}
       {page.notice ? (
-        <Text size="sm" muted>
+        <Text size="xs" muted>
           {page.notice}
         </Text>
       ) : null}
@@ -60,11 +73,19 @@ function Segment({ page, segment }: { page: WikiPage; segment: PageSegment }): O
   const title = segment.kind === 'diagram' ? `Diagram · ${segment.diagram}` : `Table · ${counted(segment.columns.length, 'column', 'columns')}`
   const description = segment.kind === 'table' ? cutLabel(segment.columns.join(' · ')) : undefined
   return (
-    <Card title={title} description={description}>
+    <Box border radius="md" background="muted" padding="sm" gap="xs">
+      <Text size="sm" weight="semibold">
+        {title}
+      </Text>
+      {description ? (
+        <Text size="xs" muted>
+          {description}
+        </Text>
+      ) : null}
       <Row>
-        <OpenInTab page={page} variant="outline" />
+        <OpenInTab page={page} primary={false} />
       </Row>
-    </Card>
+    </Box>
   )
 }
 
@@ -88,14 +109,14 @@ export function PageView(): OrcaNode {
   const load = read(pageLoad)
   if (page === null) {
     return (
-      <Stack gap="md">
+      <Stack gap="sm">
         <Title title={open.title} path={open.path} />
         {load.status === 'failed' ? <LoadFailure message={load.message} onRetry={reloadPage} /> : <Skeleton lines={6} label="Loading the page" />}
       </Stack>
     )
   }
   return (
-    <Stack gap="md">
+    <Stack gap="sm">
       <Header page={page} loading={load.status === 'loading'} />
       {load.status === 'failed' ? <Callout tone="danger">{load.message}</Callout> : null}
       <Content page={page} />

@@ -1,6 +1,6 @@
-import { atom, plugin, read, set, update, type TreeItem } from 'orca'
+import { atom, plugin, read, set, shell, update, type TreeItem } from 'orca'
 import type { DiffText } from '../../shared/diff'
-import { messageOf, SEARCH_TOO_SHORT } from '../../shared/messages'
+import { messageOf, OPEN_LINK_UNAVAILABLE, SEARCH_TOO_SHORT } from '../../shared/messages'
 import {
   draftKey,
   MIN_SEARCH_CHARS,
@@ -651,3 +651,16 @@ export const openInTab = (ref: WikiPageRef): Promise<void> =>
     const outcome = await opening(() => plugin.request('wiki.openInTab', pageRef(ref), LONG_WAIT))
     if (read(source) === org) record(readKey(ref), outcome)
   })
+
+export const linkKey = (ref: WikiPageRef): string => `link:${draftKey(ref)}`
+
+export async function openLink(ref: WikiPageRef, url: string): Promise<void> {
+  const key = linkKey(ref)
+  update(outcomes, all => without(all, key))
+  try {
+    const result = await shell.openExternal(url)
+    if (!result.opened && result.reason === 'consent-unavailable') record(key, { status: 'refused', message: OPEN_LINK_UNAVAILABLE })
+  } catch (error) {
+    record(key, { status: 'refused', message: messageOf(error) })
+  }
+}
