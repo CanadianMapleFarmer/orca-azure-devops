@@ -1,10 +1,12 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import type { WorkItemSummary, WorkSnapshot } from '../shared/work'
+import type { WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
+import { workViewKey } from './prefs'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
-import { draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
+import { CARDS_CONTENT, draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
+import { board, BOARDS, item, LANES, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   return {
@@ -20,78 +22,60 @@ function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-const BOARDS = { projectId: 'proj-web', projectName: 'Fabrikam Web', teamId: 'team-web', teamName: 'Web Team' }
 const NOW = 1_700_000_000_000
+const states = { columns: [], states: ['New', 'Active', 'Resolved', 'Closed'] }
 
-function item(id: number, over: Partial<WorkItemSummary>): WorkItemSummary {
-  return {
-    org: 'contoso',
-    id,
-    rev: 3,
-    type: 'User Story',
-    title: `Story ${id}`,
-    state: 'Active',
-    column: 'Active',
-    columnDone: false,
-    lane: null,
-    assignedTo: 'Ada Lovelace',
-    parentId: null,
-    parentTitle: null,
-    changedAt: NOW,
-    url: `https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/${id}`,
-    prs: [],
-    targets: { columns: ['New', 'Active', 'Done'], states: [] },
-    ...over
-  }
-}
-
-const prOf = (prId: number, over: Partial<WorkItemSummary['prs'][number]>): WorkItemSummary['prs'][number] => ({
-  prId,
-  repoId: 'repo-web',
-  projectId: BOARDS.projectId,
-  target: 'main',
-  state: 'open',
-  build: 'none',
-  url: `https://dev.azure.com/contoso/Fabrikam%20Web/_git/web/pullrequest/${prId}`,
-  ...over
-})
-
-const workSnapshot: WorkSnapshot = {
-  org: 'contoso',
-  board: {
-    org: 'contoso',
-    projectId: BOARDS.projectId,
-    teamId: BOARDS.teamId,
-    boardId: 'board-stories',
-    boardName: 'Stories',
-    requirementTypes: ['User Story'],
-    columns: ['New', 'Active', 'Done'].map((name, index) => ({
-      id: `col-${index}`,
-      name,
-      isSplit: false,
-      columnType: index === 0 ? 'incoming' : index === 2 ? 'outgoing' : 'inProgress',
-      stateMappings: { 'User Story': name }
-    })),
-    lanes: [],
-    fields: { column: 'WEF_1_Kanban.Column', columnDone: 'WEF_1_Kanban.Column.Done', lane: 'WEF_1_Kanban.Lane' },
-    areaPaths: [],
-    doneStates: {}
-  },
+const workSnapshot: WorkSnapshot = snapshotOfWork({
   mine: [
-    item(101, { title: 'Fix the sign-in redirect that sends people to the wrong page', column: 'Active', prs: [prOf(55, { state: 'merged' })] }),
-    item(102, { title: 'Add CSV export', column: 'New', prs: [prOf(56, { build: 'running' }), prOf(57, { target: 'release', build: 'failed' })] }),
+    item(101, { title: 'Fix the sign-in redirect that sends people to the wrong page', column: 'Active', prs: [pr(55, { state: 'merged' })] }),
+    item(102, { title: 'Add CSV export', column: 'New', prs: [pr(56, { build: 'running' }), pr(57, { target: 'release', build: 'failed' })] }),
     item(103, { title: 'Cache invalidation', column: 'Active' })
   ],
   other: [
-    item(201, { type: 'Task', title: 'Update the runbook', state: 'New', column: null, targets: { columns: [], states: ['Active', 'Closed'] } })
+    item(210, { type: 'Feature', title: 'Checkout revamp', column: null, targets: states }),
+    task(201, { title: 'Update the runbook', state: 'New', targets: { columns: [], states: ['Active', 'Closed'] } }),
+    task(301, { title: 'Write the redirect tests', parentId: 101, parentTitle: 'Fix the sign-in redirect that sends people to the wrong page' }),
+    task(304, { title: 'Draft the delivery copy', parentId: 150, parentTitle: 'Show the delivery estimate' }),
+    task(305, { title: 'Check the payment flags', parentId: 210, parentTitle: 'Checkout revamp' })
   ],
   nudges: [{ itemId: 101, prId: 55, branch: 'main', toColumn: 'Done' }],
-  updatedAt: NOW,
-  stale: false
+  families: {
+    parents: [parentOf(150, { title: 'Show the delivery estimate', column: 'Active' })],
+    lists: [
+      listOf(
+        101,
+        [
+          workTask(301, { title: 'Write the redirect tests', mine: true, assignee: 'Ada Lovelace' }),
+          workTask(302, { title: 'Update the sign-in copy', assignee: null }),
+          workTask(303, { title: 'Reproduce on staging', state: 'Closed', done: true, assignee: 'Grace Hopper' })
+        ],
+        { total: 4, done: 2 }
+      ),
+      listOf(150, [workTask(304, { title: 'Draft the delivery copy', mine: true, assignee: 'Ada Lovelace' }), workTask(306, { title: 'Pick the estimate rules' })])
+    ]
+  }
+})
+
+const workLanesSnapshot: WorkSnapshot = {
+  ...workSnapshot,
+  board: board('contoso', { lanes: LANES }),
+  mine: workSnapshot.mine.map(each => (each.id === 102 ? { ...each, lane: 'Expedite' } : each)),
+  families: { ...workSnapshot.families, parents: workSnapshot.families.parents.map(parent => ({ ...parent, lane: 'Expedite' })) }
 }
+
+const WEB_API = { repoId: 'repo-api', repoName: 'fabrikam-api' }
+const TOOLS_APP = { projectId: 'proj-tools', projectName: 'Contoso Tools', repoId: 'repo-tools-app', repoName: 'web-app' }
+const GRACE = { id: 'u-grace', name: 'Grace Hopper' }
 
 const prsSnapshot = snapshotOf({
   sets: [
+    setOf(
+      [
+        summaryOf(70, { target: 'develop', checks: { build: 'running', policies: 'pending' } }),
+        summaryOf(71, { ...TOOLS_APP, target: 'develop', reviewers: [reviewerOf('Grace Hopper', 0, { isRequired: true })] })
+      ],
+      { title: 'Rename the tenant setting in every project', sources: ['feature/tenant-setting'] }
+    ),
     setOf(
       [
         summaryOf(55, {
@@ -101,19 +85,26 @@ const prsSnapshot = snapshotOf({
           reviewers: [reviewerOf('Grace Hopper', 10), reviewerOf('Edsger Dijkstra', 0, { isRequired: true })]
         }),
         summaryOf(56, { target: 'qa', mergeStatus: 'conflicts', checks: { build: 'failed', policies: 'rejected' } }),
-        summaryOf(57, { target: 'main', status: 'completed', closedAt: NOW - 3_600_000 })
+        summaryOf(57, { target: 'main', status: 'completed', closedAt: NOW - 3_600_000 }),
+        summaryOf(58, { ...WEB_API, source: 'feature/login-api', target: 'develop', checks: { build: 'running', policies: 'pending' } })
       ],
-      { title: 'Fix the sign-in redirect that sends people to the wrong page', sources: ['feature/login'] }
+      { title: 'Fix the sign-in redirect that sends people to the wrong page', sources: ['feature/login', 'feature/login-api'] }
     ),
-    setOf([summaryOf(60, { title: 'Add CSV export', repoName: 'api', isDraft: true, checks: { build: 'running', policies: 'pending' } })])
+    setOf([summaryOf(60, { ...WEB_API, title: 'Add CSV export', isDraft: true, checks: { build: 'running', policies: 'pending' } })]),
+    setOf([summaryOf(61, { title: 'Tidy the footer links', status: 'completed', closedAt: NOW - 600_000 }), summaryOf(62, { title: 'Tidy the footer links' })]),
+    setOf([summaryOf(65, { ...TOOLS_APP, title: 'Pin the build image', autoComplete: true, checks: { build: 'succeeded', policies: 'approved' } })])
   ],
-  toReview: [summaryOf(80, { title: 'Cache the lookups', repoName: 'api', createdBy: { id: 'u-grace', name: 'Grace Hopper' } })],
-  toReviewCount: 1,
+  toReview: [
+    summaryOf(80, { ...WEB_API, title: 'Cache the lookups', createdBy: GRACE }),
+    summaryOf(82, { ...TOOLS_APP, title: 'Speed up the nightly export', createdBy: GRACE }),
+    summaryOf(83, { title: 'Tighten the cookie settings', createdBy: GRACE })
+  ],
+  toReviewCount: 3,
   reviewed: [
     summaryOf(81, {
+      ...WEB_API,
       title: 'Add the health endpoint',
-      repoName: 'api',
-      createdBy: { id: 'u-grace', name: 'Grace Hopper' },
+      createdBy: GRACE,
       reviewers: [reviewerOf('Ada Lovelace', 5, { id: 'u-contoso' })]
     })
   ],
@@ -122,8 +113,11 @@ const prsSnapshot = snapshotOf({
 
 const runsSnapshot = runsSnapshotOf({
   runs: [
-    waitingRun(3, [approvalOf('approval-3', 3, { canApprove: true, instructions: 'Check the smoke tests before approving.' })]),
+    waitingRun(3, [approvalOf('approval-3', 3, { canApprove: true, instructions: 'Check the smoke tests before approving.' })], {
+      repository: { id: 'repo-web-app', name: 'web-app' }
+    }),
     runOf(2, {
+      repository: { id: 'repo-api', name: 'fabrikam-api' },
       state: 'running',
       startedAt: RUN_NOW - 4 * MINUTE,
       finishedAt: null,
@@ -131,6 +125,9 @@ const runsSnapshot = runsSnapshotOf({
       stages: [stageOf('Build', 'succeeded'), stageOf('Image', 'running'), stageOf('Deploy production', 'pending')]
     }),
     runOf(1, {
+      projectId: 'proj-tools',
+      projectName: 'Contoso Tools',
+      repository: { id: 'repo-tools-app', name: 'web-app' },
       state: 'failed',
       prId: 77,
       finishedAt: RUN_NOW - 12 * MINUTE,
@@ -164,8 +161,24 @@ export default defineCheck({
       'work.snapshot': workSnapshot
     }
   },
+  workLanes: {
+    persisted: { plugin: { workViews: { [workViewKey('contoso', BOARDS)]: 'lanes' } } },
+    requests: {
+      'orgs.list': [org('contoso', { boards: BOARDS })],
+      'ui.visibility': { ok: true },
+      'work.snapshot': workLanesSnapshot
+    }
+  },
   prs: {
     persisted: { workspace: { tab: 'prs' } },
+    requests: {
+      'orgs.list': [org('contoso')],
+      'ui.visibility': { ok: true },
+      'prs.snapshot': prsSnapshot
+    }
+  },
+  prsToReview: {
+    persisted: { plugin: { prsPrefs: { contoso: { project: null, repo: null, view: 'review' } } }, workspace: { tab: 'prs' } },
     requests: {
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },
@@ -196,12 +209,12 @@ export default defineCheck({
       'ui.visibility': { ok: true },
       'wiki.list': [PROJECT_WIKI],
       'wiki.pages': input => LEVELS[input.path] ?? { pages: [], total: 0 },
-      'wiki.page': pageOf('/Runbooks/Deploy'),
+      'wiki.page': pageOf('/Runbooks/Deploy', { content: CARDS_CONTENT }),
       'wiki.drafts': [draftOf('/Runbooks/Deploy', { changed: true })]
     }
   },
   wikiTree: {
-    persisted: { workspace: { tab: 'wiki' } },
+    persisted: { plugin: { wikiExpanded: { 'contoso|wiki-project': ['/Runbooks'] } }, workspace: { tab: 'wiki' } },
     requests: {
       'orgs.list': [org('contoso')],
       'ui.visibility': { ok: true },

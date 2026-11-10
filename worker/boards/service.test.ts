@@ -1,18 +1,21 @@
 import { assert, test } from 'orca/testing'
-import type { OrgStatus } from '../../src/shared/types'
-import type { WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
+import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
+import { NO_FAMILIES, type TaskList, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
+import { loadBoardConfig } from '../ado/board-config'
 import { AdoError, createAdoHttp } from '../ado/http'
-import type { RawWorkItem } from '../ado/workitems'
+import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import {
+  addChildren,
   BOARDS,
   fixture,
   fakeAdo,
   FEATURES,
   FEATURES_WEF,
   isBatch,
+  isFieldsBatch,
   isPatch,
   isPullRequest,
   isTypeStates,
@@ -28,6 +31,7 @@ import {
   type AdoCall
 } from './fake-ado'
 import { createBoardsService, type BoardChange } from './service'
+import { createItemSource, loadMine } from './snapshot'
 
 const T0 = Date.parse('2026-11-04T09:00:00Z')
 const MINUTE = 60_000
@@ -52,7 +56,7 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness() {
+function harness(first: OrgStatus = status()) {
   const ado = fakeAdo()
   const clock = fakeClock(T0)
   const storage: Record<string, unknown> = {}
@@ -70,7 +74,7 @@ function harness() {
   }
   const posts: WorkSnapshot[] = []
   const boardPosts: BoardChange[] = []
-  let orgs = [status()]
+  let orgs = [first]
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const scheduler = createScheduler(clock)
   const service = createBoardsService({
@@ -557,6 +561,7 @@ test('orgs without boards get the settings message', async () => {
     mine: [],
     other: [],
     nudges: [],
+    families: NO_FAMILIES,
     updatedAt: T0,
     stale: false,
     message: NO_BOARDS
@@ -1206,4 +1211,247 @@ test('cachedItem reads the snapshot, then the open board views, and never calls 
   assert.equal(h.service.cachedItem(ORG, 1100)?.title, 'Vehicle search', 'an item only an open board view holds')
   assert.equal(h.ado.calls.length, viewCalls)
   assert.ok(viewCalls > calls)
+})
+
+const ALEX: PinnedAccount = { adoId: '9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b', uniqueName: 'alex@contoso.example', displayName: 'Alex Contoso', tenantId: null, objectId: null }
+const ALEX_IDENTITY = { displayName: 'Alex Contoso', uniqueName: 'alex@contoso.example', id: ALEX.adoId }
+const GRACE_IDENTITY = { displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example', id: 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d' }
+const TASKS_NOT_LOADED = "Couldn't load the tasks under your items. They show after the next refresh."
+
+function children(): RawWorkItem[] {
+  return fixture<{ value: RawWorkItem[] }>('workitems-children').value
+}
+
+function task(id: number, parent: number, fields: Record<string, unknown> = {}): RawWorkItem {
+  return {
+    id,
+    rev: 1,
+    url: `${ORG_URL}/${PROJECT}/_apis/wit/workItems/${id}`,
+    fields: {
+      'System.TeamProject': 'Fabrikam Web',
+      'System.WorkItemType': 'Task',
+      'System.Title': `Task ${id}`,
+      'System.State': 'Active',
+      'System.Parent': parent,
+      'System.ChangedDate': '2026-11-02T10:00:00Z',
+      ...fields
+    }
+  }
+}
+
+function shortLists(snapshot: WorkSnapshot | undefined): [number, number[], number, number][] {
+  return (snapshot?.families.lists ?? []).map(list => [list.parentId, list.tasks.map(entry => entry.id), list.total, list.done])
+}
+
+function listOf(snapshot: WorkSnapshot | undefined, parentId: number): TaskList | undefined {
+  return snapshot?.families.lists.find(list => list.parentId === parentId)
+}
+
+function myTask1207(h: ReturnType<typeof harness>): RawWorkItem {
+  const raw = h.ado.items.get(1207)!
+  raw.fields['System.AssignedTo'] = ALEX_IDENTITY
+  return raw
+}
+
+test('no child links means no children read', async () => {
+  const h = harness(status({ account: ALEX }))
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(snapshot.families, NO_FAMILIES, "the story's own parent is not a dimmed parent")
+  assert.equal(h.ado.count(isBatch), 2)
+  assert.equal(h.ado.count(isFieldsBatch), 0)
+})
+
+test('child task lists hold every task of a parent, any assignee, done ones marked, yours first, and count them', async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, children())
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(snapshot.families, {
+    parents: [],
+    lists: [
+      {
+        parentId: 1204,
+        tasks: [
+          { id: 1213, title: 'Write the filter tests', state: 'Active', done: false, assignee: 'Alex Contoso', mine: true },
+          { id: 1210, title: 'Add filter analytics', state: 'New', done: false, assignee: null, mine: false },
+          { id: 1209, title: 'Review the filter copy', state: 'Closed', done: true, assignee: 'Grace Hopper', mine: false }
+        ],
+        total: 3,
+        done: 1
+      }
+    ]
+  })
+  assert.equal(snapshot.message, undefined)
+  assert.deepEqual(h.posts.at(-1), snapshot)
+
+  const byName = harness(status({ account: { ...ALEX, adoId: 'another-id', uniqueName: 'ALEX@Contoso.example' } }))
+  addChildren(byName.ado, 1204, children())
+  assert.deepEqual(listOf(await byName.service.refresh(ORG), 1204)?.tasks.map(entry => [entry.id, entry.mine]), [[1213, true], [1210, false], [1209, false]])
+
+  const nobody = harness()
+  addChildren(nobody.ado, 1204, children())
+  assert.deepEqual(listOf(await nobody.service.refresh(ORG), 1204)?.tasks.map(entry => [entry.id, entry.mine]), [[1210, false], [1213, false], [1209, false]])
+})
+
+test("a child the account can't read comes back null and the other tasks still list, with no message", async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, children())
+  h.ado.items.get(1204)!.relations!.push({ rel: CHILD_LINK, url: `${ORG_URL}/_apis/wit/workItems/1212` })
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(h.ado.calls.filter(isFieldsBatch).map(call => call.body.ids), [[1213, 1209, 1210, 1211, 1212]])
+  assert.deepEqual(shortLists(snapshot), [[1204, [1213, 1210, 1209], 3, 1]])
+  assert.equal(snapshot.message, undefined)
+})
+
+test('a mine load reads missing parents once and the child tasks of listed items and those parents in one more batched read', async () => {
+  const h = harness(status({ account: ALEX }))
+  h.ado.items.set(1230, story(1230, T0 - MINUTE, 'Show saved searches'))
+  h.ado.items.set(1231, task(1231, 1230, { 'System.AssignedTo': ALEX_IDENTITY }))
+  addChildren(h.ado, 1204, children())
+  addChildren(h.ado, 1230, [h.ado.items.get(1231)!, task(1232, 1230, { 'System.AssignedTo': GRACE_IDENTITY })])
+  h.ado.state.wiql = [1204, 1207, 1205, 1208, 1231]
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(h.ado.calls.filter(isBatch).map(call => call.body), [
+    { ids: [1204, 1207, 1205, 1208, 1231], $expand: 'relations', errorPolicy: 'omit' },
+    { ids: [1100, 1230], $expand: 'relations', errorPolicy: 'omit' },
+    { ids: [1213, 1209, 1210, 1211, 1231, 1232], fields: TASK_FIELDS, errorPolicy: 'omit' }
+  ])
+  assert.deepEqual(snapshot.families.parents.map(parent => parent.id), [1230])
+  assert.deepEqual(shortLists(snapshot), [[1204, [1213, 1210, 1209], 3, 1], [1230, [1231, 1232], 2, 0]])
+})
+
+test("a task under a task: the parent task's children come in the same read", async () => {
+  const h = harness(status({ account: ALEX }))
+  h.ado.items.set(1220, task(1220, 1204, { 'System.Title': 'Wire the filter API', 'System.AssignedTo': GRACE_IDENTITY }))
+  h.ado.items.set(1221, task(1221, 1220, { 'System.Title': 'Map the filter fields', 'System.AssignedTo': ALEX_IDENTITY }))
+  addChildren(h.ado, 1220, [h.ado.items.get(1221)!, task(1223, 1220, { 'System.State': 'New' })])
+  addChildren(h.ado, 1207, [task(1222, 1207, { 'System.AssignedTo': GRACE_IDENTITY })])
+  h.ado.state.wiql = [1204, 1207, 1205, 1208, 1221]
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(h.ado.calls.filter(isFieldsBatch).map(call => call.body.ids), [[1222, 1221, 1223]])
+  assert.deepEqual(snapshot.families.parents, [{ id: 1220, type: 'Task', title: 'Wire the filter API', state: 'Active', column: null, lane: null }])
+  assert.deepEqual(
+    snapshot.families.lists.map(list => [list.parentId, list.tasks.map(entry => [entry.id, entry.mine])]),
+    [[1207, [[1222, false]]], [1220, [[1221, true], [1223, false]]]]
+  )
+})
+
+test('a parent with 30 tasks posts 20 and counts all 30, never dropping one of yours', async () => {
+  const ids = Array.from({ length: 30 }, (_, index) => 1300 + index)
+  const range = (from: number, to: number) => ids.filter(id => id >= from && id <= to)
+
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, ids.map(id => task(id, 1204, { 'System.AssignedTo': id >= 1325 ? ALEX_IDENTITY : GRACE_IDENTITY, 'System.State': id < 1305 ? 'Closed' : 'Active' })))
+  const list = listOf(await h.service.refresh(ORG), 1204)
+  assert.deepEqual(list?.tasks.map(entry => entry.id), [...range(1325, 1329), ...range(1305, 1319)])
+  assert.deepEqual([list?.total, list?.done], [30, 5])
+
+  const busy = harness(status({ account: ALEX }))
+  addChildren(busy.ado, 1204, ids.map(id => task(id, 1204, { 'System.AssignedTo': id >= 1306 ? ALEX_IDENTITY : GRACE_IDENTITY })))
+  const mine = listOf(await busy.service.refresh(ORG), 1204)
+  assert.deepEqual(mine?.tasks.map(entry => entry.id), range(1306, 1329), 'all 24 of yours')
+  assert.deepEqual([mine?.total, mine?.done], [30, 0])
+})
+
+test("a task whose parent isn't listed brings that parent as a dimmed parent with its column and lane", async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, [myTask1207(h), ...children().filter(raw => raw.id !== 1213)])
+  h.ado.state.wiql = [1207, 1205]
+  const snapshot = await h.service.refresh(ORG)
+  assert.deepEqual(snapshot.other.map(entry => entry.id), [1207, 1205])
+  assert.deepEqual(snapshot.families.parents, [{ id: 1204, type: 'User Story', title: 'Add vehicle search filters', state: 'Active', column: 'In Review', lane: 'Expedite' }])
+  assert.deepEqual(shortLists(snapshot), [[1204, [1207, 1210, 1209], 3, 1]], 'with every child task of the parent')
+  assert.deepEqual(h.ado.calls.filter(isBatch).map(call => call.body.ids), [[1207, 1205], [1204], [1207, 1209, 1210, 1211]])
+})
+
+test("children that aren't tasks are left out", async () => {
+  const h = harness(status({ account: ALEX }))
+  const bug = task(1240, 1204, { 'System.WorkItemType': 'Bug', 'System.Title': 'Filter drops the last page' })
+  addChildren(h.ado, 1204, [bug, task(1241, 1204)])
+  assert.deepEqual(shortLists(await h.service.refresh(ORG)), [[1204, [1241], 1, 0]])
+})
+
+test('a failed children read still posts the items, with no task lists and a message', async () => {
+  for (const code of [403, 500]) {
+    const h = harness(status({ account: ALEX }))
+    h.ado.items.set(1220, task(1220, 1204, { 'System.AssignedTo': GRACE_IDENTITY }))
+    h.ado.items.set(1221, task(1221, 1220, { 'System.AssignedTo': ALEX_IDENTITY }))
+    addChildren(h.ado, 1204, children())
+    addChildren(h.ado, 1220, [h.ado.items.get(1221)!])
+    h.ado.state.wiql = [1204, 1207, 1205, 1208, 1221]
+    h.ado.on(isFieldsBatch, () => json(code, { message: 'TF401027: You need the Read permission.' }))
+    const snapshot = await h.service.refresh(ORG)
+    assert.deepEqual(snapshot.mine.map(entry => entry.id), [1204], String(code))
+    assert.deepEqual(snapshot.other.map(entry => entry.id), [1207, 1205, 1221], String(code))
+    assert.deepEqual(snapshot.families.lists, [], String(code))
+    assert.deepEqual(snapshot.families.parents.map(parent => parent.id), [1220], `${code}: the parents come from the parents read`)
+    assert.equal(snapshot.message, TASKS_NOT_LOADED, String(code))
+    assert.equal(snapshot.stale, false)
+    assert.deepEqual(h.posts.at(-1), snapshot)
+  }
+
+  const cold = harness(status({ account: ALEX }))
+  addChildren(cold.ado, 1204, children())
+  cold.ado.state.wiql = [1204, 1205]
+  cold.ado.on(isTypeStates('Task'), () => json(500, { message: 'TF400898: An Internal Error Occurred.' }))
+  const unread = await cold.service.refresh(ORG)
+  assert.equal(cold.ado.count(isFieldsBatch), 1, 'the children were read')
+  assert.ok(cold.ado.count(isTypeStates('Task')) > 0, 'the Task states read was attempted')
+  assert.deepEqual([...unread.mine, ...unread.other].map(entry => entry.id), [1204, 1205])
+  assert.deepEqual(unread.families.lists, [])
+  assert.equal(unread.message, TASKS_NOT_LOADED)
+  assert.deepEqual(cold.posts.at(-1), unread)
+
+  const ado = fakeAdo()
+  addChildren(ado, 1204, children())
+  const hung = ado.hang(isFieldsBatch)
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const cfg = await loadBoardConfig(http, { org: ORG, projectId: PROJECT, teamId: TEAM })
+  const controller = new AbortController()
+  const loading = loadMine(createItemSource(http, ORG, ORG_URL, () => T0).withSignal(controller.signal), cfg, { id: ALEX.adoId, uniqueName: ALEX.uniqueName })
+  const settled = loading.then(() => 'resolved', (error: unknown) => error)
+  for (let turn = 0; turn < 10 && hung.length === 0; turn += 1) await drain()
+  assert.equal(hung.length, 1)
+  controller.abort()
+  assert.equal(await settled, controller.signal.reason, 'an aborted load rejects instead')
+})
+
+test('moving your task updates its row under its parent', async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, [myTask1207(h), ...children().filter(raw => raw.id !== 1213)])
+  await h.service.refresh(ORG)
+  assert.deepEqual(listOf(h.posts.at(-1), 1204)?.tasks.map(entry => [entry.id, entry.done]), [[1207, false], [1210, false], [1209, true]])
+  h.ado.items.get(1207)!.fields['System.Title'] = 'Write the filter and sort tests'
+
+  const moved = await h.service.move({ org: ORG, id: 1207, rev: 1, to: { state: 'Closed' } })
+  assert.equal(moved.state, 'Closed')
+  const list = listOf(h.posts.at(-1), 1204)
+  assert.deepEqual(list?.tasks.find(entry => entry.id === 1207), { id: 1207, title: 'Write the filter and sort tests', state: 'Closed', done: true, assignee: 'Alex Contoso', mine: true })
+  assert.deepEqual([list?.total, list?.done], [3, 2])
+  assert.deepEqual(item(h.posts.at(-1), 1207), moved)
+})
+
+test('a moved task shows its new state after the next poll while ADO still returns the old one', async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, [myTask1207(h), ...children().filter(raw => raw.id !== 1213)])
+  await h.service.refresh(ORG)
+  const before = structuredClone(h.ado.items.get(1207)!)
+  await h.service.move({ org: ORG, id: 1207, rev: 1, to: { state: 'Closed' } })
+
+  h.ado.items.set(1207, before)
+  const polled = await h.service.refresh(ORG)
+  assert.equal(h.ado.calls.filter(isFieldsBatch).length, 2, 'the poll read the children again')
+  assert.equal(item(polled, 1207)?.state, 'Closed')
+  const list = listOf(polled, 1204)
+  assert.deepEqual(list?.tasks.find(entry => entry.id === 1207), { id: 1207, title: 'Write the filter tests', state: 'Closed', done: true, assignee: 'Alex Contoso', mine: true })
+  assert.deepEqual([list?.total, list?.done], [3, 2])
+  assert.deepEqual(h.posts.at(-1), polled)
+})
+
+test('the children read asks for at most 1,000 ids, 200 a request', async () => {
+  const h = harness(status({ account: ALEX }))
+  addChildren(h.ado, 1204, Array.from({ length: 1001 }, (_, index) => task(20_000 + index, 1204)))
+  const list = listOf(await h.service.refresh(ORG), 1204)
+  assert.deepEqual(h.ado.calls.filter(isFieldsBatch).map(call => call.body.ids.length), [200, 200, 200, 200, 200])
+  assert.equal(h.ado.calls.filter(isFieldsBatch).flatMap(call => call.body.ids).includes(21_000), false, 'the 1,001st child is not read')
+  assert.deepEqual([list?.tasks.length, list?.total], [20, 1000])
 })

@@ -16,6 +16,9 @@ export interface PrRef { projectId: string; repoId: string; prId: number }
 export const WIQL_TOP = 500
 const BATCH_SIZE = 200
 export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
+export const CHILD_LINK = 'System.LinkTypes.Hierarchy-Forward'
+export const TASK_FIELDS: readonly string[] = ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.AssignedTo', 'System.Parent']
+const CHILD_URL = /\/workItems\/(\d+)$/
 
 export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
   return select([
@@ -61,7 +64,15 @@ export async function queryBoardIds(
   return queryIds(http, org, projectId, teamId, wiqlBoard(cfg, everyone))
 }
 
-export async function hydrate(http: AdoHttp, org: string, projectId: string, ids: number[]): Promise<RawWorkItem[]> {
+export function hydrate(http: AdoHttp, org: string, projectId: string, ids: number[]): Promise<RawWorkItem[]> {
+  return readBatches(http, org, projectId, ids, batch => ({ ids: batch, $expand: 'relations', errorPolicy: 'omit' }))
+}
+
+export function readFields(http: AdoHttp, org: string, projectId: string, ids: number[], fields: readonly string[]): Promise<RawWorkItem[]> {
+  return readBatches(http, org, projectId, ids, batch => ({ ids: batch, fields, errorPolicy: 'omit' }))
+}
+
+async function readBatches(http: AdoHttp, org: string, projectId: string, ids: number[], body: (batch: number[]) => object): Promise<RawWorkItem[]> {
   const found = new Map<number, RawWorkItem>()
   for (let start = 0; start < ids.length; start += BATCH_SIZE) {
     const { data } = await http.json<{ value: (RawWorkItem | null)[] }>({
@@ -69,13 +80,25 @@ export async function hydrate(http: AdoHttp, org: string, projectId: string, ids
       project: projectId,
       path: '/_apis/wit/workitemsbatch',
       method: 'POST',
-      body: { ids: ids.slice(start, start + BATCH_SIZE), $expand: 'relations', errorPolicy: 'omit' }
+      body: body(ids.slice(start, start + BATCH_SIZE))
     })
     for (const item of shape(() => expectList<RawWorkItem | null>(data.value))) {
       if (item) found.set(item.id, item)
     }
   }
   return ids.flatMap(id => found.get(id) ?? [])
+}
+
+export function childIdsOf(raw: RawWorkItem): number[] {
+  const relations: unknown = raw.relations
+  if (!Array.isArray(relations)) return []
+  return relations.flatMap(link => (link?.rel === CHILD_LINK ? (childId(link.url) ?? []) : []))
+}
+
+function childId(url: unknown): number | null {
+  const match = typeof url === 'string' ? CHILD_URL.exec(url) : null
+  const id = match ? Number(match[1]) : 0
+  return Number.isSafeInteger(id) && id > 0 ? id : null
 }
 
 export function toSummary(raw: RawWorkItem, cfg: BoardConfig, orgUrl: string): Omit<WorkItemSummary, 'prs' | 'parentTitle' | 'targets'> & { prRefs: PrRef[] } {
@@ -146,7 +169,7 @@ export function textOr<F>(value: unknown, fallback: F): string | F {
   return typeof value === 'string' ? value : fallback
 }
 
-function displayName(identity: unknown): string | null {
+export function displayName(identity: unknown): string | null {
   if (typeof identity !== 'object' || identity === null) return null
   return textOr((identity as { displayName?: unknown }).displayName, null)
 }

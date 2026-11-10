@@ -10,8 +10,20 @@ export interface BoardArgs {
   boardId?: string
 }
 
+interface BacklogLevel {
+  workItemTypes?: { name?: unknown }[]
+}
+
 interface BacklogConfiguration {
   requirementBacklog: { name: string }
+  taskBacklog?: BacklogLevel
+  bugWorkItems?: BacklogLevel
+  bugsBehavior?: string
+}
+
+interface FoundBoard {
+  board: RawBoard
+  taskTypes?: string[]
 }
 
 interface RawColumn {
@@ -59,8 +71,8 @@ export async function listTeamBoards(
 }
 
 export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<BoardConfig> {
-  const [board, areas] = await Promise.all([
-    args.boardId ? fetchBoard(http, args, args.boardId) : fetchRequirementBoard(http, args),
+  const [{ board, taskTypes }, areas] = await Promise.all([
+    args.boardId ? fetchBoard(http, args, args.boardId).then((named): FoundBoard => ({ board: named })) : fetchRequirementBoard(http, args),
     teamGet<TeamFieldValues>(http, args, 'teamsettings/teamfieldvalues')
   ])
   const requirementTypes = shape(() => requirementTypeNames(board))
@@ -80,11 +92,12 @@ export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<B
       lane: expectText(board.fields.rowField.referenceName)
     },
     areaPaths: areas.values.map(({ value, includeChildren }) => ({ value: expectText(value), includeChildren: includeChildren === true })),
-    doneStates: Object.fromEntries(requirementTypes.map((type, index) => [type, doneLists[index]]))
+    doneStates: Object.fromEntries(requirementTypes.map((type, index) => [type, doneLists[index]])),
+    ...(taskTypes ? { taskTypes } : {})
   }))
 }
 
-async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<RawBoard> {
+async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<FoundBoard> {
   const [backlog, boards] = await Promise.all([
     teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration'),
     listTeamBoards(http, args)
@@ -93,7 +106,17 @@ async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<Ra
   const lowerName = name.toLowerCase()
   const match = boards.find(board => board.name === name) ?? boards.find(board => board.name.toLowerCase() === lowerName)
   if (!match) throw new AdoError('not_found', 404, noBoardNamed(name))
-  return fetchBoard(http, args, match.id)
+  return { board: await fetchBoard(http, args, match.id), taskTypes: taskTypeNames(backlog) }
+}
+
+function taskTypeNames(backlog: BacklogConfiguration): string[] {
+  const levels = backlog.bugsBehavior === 'asTasks' ? [backlog.taskBacklog, backlog.bugWorkItems] : [backlog.taskBacklog]
+  return [...new Set(levels.flatMap(typeNames))]
+}
+
+function typeNames(level: BacklogLevel | undefined): string[] {
+  const types: unknown = level?.workItemTypes
+  return Array.isArray(types) ? types.flatMap(type => (typeof type?.name === 'string' ? [type.name] : [])) : []
 }
 
 function fetchBoard(http: AdoHttp, args: BoardArgs, boardId: string): Promise<RawBoard> {

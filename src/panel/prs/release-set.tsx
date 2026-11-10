@@ -1,72 +1,41 @@
-import { Badge, Button, Callout, Card, Link, Row, Stack, Text, type OrcaNode } from 'orca'
-import type { PrReviewer, PrSummary, ReleaseSet, RowResult } from '../../shared/prs'
+import { Badge, Box, Button, Callout, Link, Row, Stack, Text, type OrcaNode, type Tone } from 'orca'
+import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type PrSummary, type ReleaseSet, type RowResult } from '../../shared/prs'
 import { prShareItem } from '../../shared/share/pr-items'
 import { PR_TEMPLATE, PR_VARS } from '../../shared/share/template'
 import type { Identity } from '../../shared/types'
+import type { PlaceChip } from '../grouping'
+import { cutLabel } from '../label'
 import { openComposer } from '../share/state'
-import { act, isActing, outcomeOf, type Outcome } from './state'
+import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, placeChip, statusChip, waitingOn } from './rows'
+import { act, isActing, isMergedShown, outcomeOf, toggleMerged, type Outcome } from './state'
 
-type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
-interface Chip {
-  tone: Tone
-  text: string
-}
+const optionsLine = (options: AutoCompleteOptions): string =>
+  `Auto-complete uses ${MERGE_STRATEGY_LABELS[options.mergeStrategy]}, ${options.deleteSourceBranch ? 'deletes' : 'keeps'} the source branch, ${options.transitionWorkItems ? 'completes linked work items' : 'leaves work items alone'}. Change this in Settings → Azure DevOps.`
 
-const APPROVING_VOTE = 5
-const WAITING_FOR_AUTHOR_VOTE = -5
-const REJECTED_VOTE = -10
-
-const isWaitedFor = (reviewer: PrReviewer): boolean => reviewer.isRequired && !reviewer.hasDeclined && reviewer.vote === 0
-
-function statusChips(pr: PrSummary): Chip[] {
-  if (pr.status === 'completed') return [{ tone: 'success', text: 'merged ✓' }]
-  const chips: Chip[] = []
-  if (pr.isDraft) chips.push({ tone: 'neutral', text: 'draft' })
-  if (pr.mergeStatus === 'conflicts') chips.push({ tone: 'danger', text: 'conflicts' })
-  return chips
-}
-
-function checkChips(pr: PrSummary): Chip[] {
-  const chips: Chip[] = []
-  if (pr.checks?.build === 'running') chips.push({ tone: 'warning', text: '● build' })
-  if (pr.checks?.build === 'failed') chips.push({ tone: 'danger', text: '✗ build' })
-  if (pr.checks?.build === 'succeeded') chips.push({ tone: 'success', text: '✓ build' })
-  if (pr.checks?.policies === 'rejected') chips.push({ tone: 'danger', text: '✗ policies' })
-  if (pr.checks?.policies === 'pending') chips.push({ tone: 'neutral', text: '· policies' })
-  return chips
-}
-
-function voteChips(pr: PrSummary): Chip[] {
-  const approved = pr.reviewers.filter(reviewer => reviewer.vote >= APPROVING_VOTE).length
-  const rejected = pr.reviewers.filter(reviewer => reviewer.vote === REJECTED_VOTE).length
-  const chips: Chip[] = []
-  if (approved > 0) chips.push({ tone: 'success', text: `${approved} approved` })
-  if (rejected > 0) chips.push({ tone: 'danger', text: `${rejected} rejected` })
-  const waitingForAuthor = pr.reviewers.filter(reviewer => reviewer.vote === WAITING_FOR_AUTHOR_VOTE).length
-  if (waitingForAuthor > 0) chips.push({ tone: 'warning', text: `${waitingForAuthor} waiting for author` })
-  const waiting = pr.reviewers.filter(isWaitedFor).map(reviewer => reviewer.name)
-  if (waiting.length > 0) chips.push({ tone: 'warning', text: `waiting for ${waiting.join(', ')}` })
-  return chips
-}
-
-const chipsOf = (pr: PrSummary): Chip[] => [
-  ...statusChips(pr),
-  ...checkChips(pr),
-  ...voteChips(pr),
-  ...(pr.autoComplete ? [{ tone: 'accent' as const, text: 'auto-complete' }] : [])
-]
-
-function PrRow({ pr }: { pr: PrSummary }): OrcaNode {
+function PrRow({ pr, place }: { pr: PrSummary; place: PlaceChip }): OrcaNode {
+  const where = placeChip(pr, place)
+  const status = statusChip(pr)
+  const waiting = waitingOn(pr)
   return (
-    <Row gap="sm" align="center" wrap>
-      <Link href={pr.url}>{`Pull Request ${pr.prId}`}</Link>
-      <Text>{`→ ${pr.target}`}</Text>
-      {chipsOf(pr).map((chip, index) => (
-        <Badge key={index} tone={chip.tone}>
-          {chip.text}
-        </Badge>
-      ))}
-    </Row>
+    <>
+      <Row justify="between" align="center" gap="xs" wrap>
+        <Box direction="row" gap="xs" align="center" shrink={false} wrap maxWidth="100%">
+          <Link href={pr.url}>{`!${pr.prId}`}</Link>
+          <Text size="sm">{`→ ${pr.target}`}</Text>
+          {where ? <Badge tone={where.tone}>{where.text}</Badge> : null}
+        </Box>
+        {status ? (
+          <Box direction="row" shrink={false}>
+            <Badge tone={status.tone}>{status.text}</Badge>
+          </Box>
+        ) : null}
+      </Row>
+      {waiting ? (
+        <Text size="xs" muted>
+          {waiting}
+        </Text>
+      ) : null}
+    </>
   )
 }
 
@@ -85,11 +54,6 @@ function Result({ outcome }: { outcome: Outcome }): OrcaNode {
       </Stack>
     </Callout>
   )
-}
-
-function describe(set: ReleaseSet): string {
-  const repos = [...new Set(set.prs.map(pr => pr.repoName))].join(', ')
-  return [set.sources.join(', '), repos].filter(part => part !== '').join(' · ')
 }
 
 function reviewersOf(set: ReleaseSet, me: string | null): Identity[] {
@@ -121,34 +85,73 @@ function shareSet(org: string, me: string | null, set: ReleaseSet): void {
   })
 }
 
-export function ReleaseSetCard({ org, me, set, limit = set.prs.length }: { org: string; me: string | null; set: ReleaseSet; limit?: number }): OrcaNode {
+function foldMerged(prs: readonly PrSummary[]): { rows: PrSummary[]; folded: number } {
+  const rows: PrSummary[] = []
+  let merged = 0
+  for (const pr of prs) {
+    if (pr.status === 'completed') merged += 1
+    if (pr.status !== 'completed' || merged <= MERGED_SHOWN) rows.push(pr)
+  }
+  return { rows, folded: prs.length - rows.length }
+}
+
+interface ReleaseSetCardProps {
+  org: string
+  me: string | null
+  options: AutoCompleteOptions
+  set: ReleaseSet
+  limit?: number
+  place?: PlaceChip
+}
+
+export function ReleaseSetCard({ org, me, options, set, limit = set.prs.length, place = null }: ReleaseSetCardProps): OrcaNode {
   const shown = set.prs.slice(0, limit)
+  const { rows, folded } = foldMerged(shown)
+  const showMerged = isMergedShown(set.key)
   const active = set.prs.filter(pr => pr.status === 'active')
   const ids = set.prs.map(pr => pr.prId)
-  const idle = active.length > 0 && !isActing(ids)
+  const busy = isActing(ids)
   const outcome = outcomeOf(ids)
+  const branch = branchPattern(set.sources)
   return (
-    <Card title={set.title} description={describe(set)}>
-      {shown.map(pr => (
-        <PrRow key={pr.prId} pr={pr} />
+    <Box border radius="md" background="card" padding="sm" gap="xs">
+      <Text weight="semibold" size="sm">
+        {cutLabel(set.title)}
+      </Text>
+      {branch ? (
+        <Text size="xs" muted>
+          {cutLabel(branch)}
+        </Text>
+      ) : null}
+      {(showMerged ? shown : rows).map(pr => (
+        <PrRow key={pr.prId} pr={pr} place={place} />
       ))}
+      {folded > 0 ? (
+        <Row>
+          <Link onPress={() => toggleMerged(set.key)}>{showMerged ? 'Hide merged' : `+ ${folded} merged · show`}</Link>
+        </Row>
+      ) : null}
       {shown.length < set.prs.length ? (
-        <Text size="sm" muted>
+        <Text size="xs" muted>
           {`Showing ${shown.length} of ${set.prs.length} pull requests in this set.`}
         </Text>
       ) : null}
-      <Row gap="sm" wrap>
-        <Button size="sm" disabled={!idle} onPress={() => act('prs.approve', org, active)}>
-          Approve all
-        </Button>
-        <Button size="sm" variant="outline" disabled={!idle} onPress={() => act('prs.autoComplete', org, active)}>
-          Auto-complete all
-        </Button>
-        <Button size="sm" variant="outline" onPress={() => shareSet(org, me, set)}>
+      <Row gap="xs" wrap>
+        <Button size="xs" variant="solid" tone="accent" onPress={() => shareSet(org, me, set)}>
           Share…
         </Button>
+        {set.prs.some(pr => needsApprove(pr, me)) ? (
+          <Button size="xs" variant="outline" disabled={busy} onPress={() => act('prs.approve', org, active)}>
+            Approve
+          </Button>
+        ) : null}
+        {set.prs.some(needsAutoComplete) ? (
+          <Button size="xs" variant="outline" tooltip={optionsLine(options)} disabled={busy} onPress={() => act('prs.autoComplete', org, active)}>
+            Auto-complete
+          </Button>
+        ) : null}
       </Row>
       {outcome ? <Result outcome={outcome} /> : null}
-    </Card>
+    </Box>
   )
 }

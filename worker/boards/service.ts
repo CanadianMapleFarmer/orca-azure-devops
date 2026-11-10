@@ -1,18 +1,33 @@
 import { NO_BOARDS } from '../../src/shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
-import type { BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../src/shared/work'
+import { NO_FAMILIES, type BoardConfig, type MoveTarget, type WorkComment, type WorkFamilies, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
 import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
 import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
-import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
-import { capBoard, capSnapshot, createItemSource, isOnBoard, loadBoardItems, loadItem, loadMine, movesByState, restate, type ItemSource } from './snapshot'
+import {
+  capBoard,
+  capSnapshot,
+  createItemSource,
+  hasTask,
+  isCompleted,
+  isOnBoard,
+  loadBoardItems,
+  loadItem,
+  loadMine,
+  movesByState,
+  patchFamilies,
+  restate,
+  type ItemSource,
+  type Me
+} from './snapshot'
 
 export type { BoardChange, BoardRef, BoardResult }
 
@@ -105,7 +120,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function noBoards(org: string): WorkSnapshot {
-    return { org, board: null, mine: [], other: [], nudges: [], updatedAt: now(), stale: false, message: NO_BOARDS }
+    return { org, board: null, mine: [], other: [], nudges: [], families: NO_FAMILIES, updatedAt: now(), stale: false, message: NO_BOARDS }
   }
 
   function mineKey(org: string): string {
@@ -115,18 +130,21 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   async function build(status: OrgStatus, signal?: AbortSignal): Promise<WorkSnapshot> {
     const cfg = await defaultConfig(status, signal)
     const source = sourceOf(status).withSignal(signal)
-    const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
+    const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg, meOf(status)), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
+    const families = await restatedRows(source, cfg, loaded.families, items.filter((item, index) => item !== loaded.items[index]))
     const mine = items.filter(item => !movesByState(item, cfg))
+    const message = joinMessages(loaded.chipsOff ? CHIPS_NEED_CODE_READ : undefined, loaded.message)
     return capSnapshot({
       org: status.org,
       board: cfg,
       mine,
       other: items.filter(item => movesByState(item, cfg)),
       nudges: findNudges(cfg, mine, rules, dismissed),
+      families,
       updatedAt: now(),
       stale: false,
-      ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {})
+      ...(message ? { message } : {})
     })
   }
 
@@ -224,15 +242,23 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const entry = work.get(org)
     const board = entry?.snapshot?.board
     if (!entry?.snapshot || !board || !holds(entry.snapshot, raw.id)) return
+    const listed = hasTask(entry.snapshot.families, raw.id)
     const [item, rules, dismissed] = await Promise.all([
       restate(source, board, raw, like),
       nudges.rules(org, board.teamId),
       nudges.dismissed(org)
     ])
+    const done = listed ? await isCompleted(source, board, item) : null
     const snapshot = entry.snapshot
     if (work.get(org) !== entry || !snapshot?.board) return
     const mine = replaced(snapshot.mine, item)
-    entry.snapshot = { ...snapshot, mine, other: replaced(snapshot.other, item), nudges: findNudges(snapshot.board, mine, rules, dismissed) }
+    entry.snapshot = {
+      ...snapshot,
+      mine,
+      other: replaced(snapshot.other, item),
+      nudges: findNudges(snapshot.board, mine, rules, dismissed),
+      families: done === null ? snapshot.families : patchFamilies(snapshot.families, item, done)
+    }
     deps.post(entry.snapshot)
   }
 
@@ -388,6 +414,18 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     }
   }
   return service
+}
+
+function meOf(status: OrgStatus): Me | null {
+  return status.account ? { id: status.account.adoId, uniqueName: status.account.uniqueName } : null
+}
+
+async function restatedRows(source: ItemSource, cfg: BoardConfig, families: WorkFamilies, items: WorkItemSummary[]): Promise<WorkFamilies> {
+  let patched = families
+  for (const item of items) {
+    if (hasTask(patched, item.id)) patched = patchFamilies(patched, item, await isCompleted(source, cfg, item))
+  }
+  return patched
 }
 
 function holds(snapshot: WorkSnapshot, id: number): boolean {

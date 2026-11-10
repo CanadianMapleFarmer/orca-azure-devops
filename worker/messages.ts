@@ -17,6 +17,7 @@ export const MOVE_BY_COLUMN = 'Move this item by column.'
 export const INCOMPLETE_CONFIG = "This board's configuration is incomplete. Try refreshing."
 export const LAST_BOARD = 'Showing the last loaded board.'
 export const CHIPS_NEED_CODE_READ = 'Linked PR status needs Code (Read) access.'
+export const TASKS_NOT_LOADED = "Couldn't load the tasks under your items. They show after the next refresh."
 export const NOT_A_PR = "That isn't an Azure DevOps pull request link."
 export const EMPTY_COMMENT = 'Write a comment first.'
 export const UNKNOWN_AUTHOR = 'Unknown'
@@ -130,9 +131,11 @@ export const WIKI_READ_ONLY = 'This wiki is published from a repository. Edit it
 export const WIKI_SEARCH_UNAVAILABLE = "Wiki search isn't available in this organization."
 export const BAD_TAB_FILE = "That file name can't be used."
 export const DRAFT_OUTSIDE = 'The wiki draft folder leads outside this workspace, so nothing was written.'
+export const READER_OUTSIDE = "The .orca-ado folder leads outside this workspace or is in the way, so the page wasn't opened."
 export const DRAFT_WORKSPACE_GONE = 'The workspace holding this draft is gone. Discard the draft to edit the page again.'
 export const NO_LOCAL_WORKSPACE_WIKI = 'Open a local workspace first; wiki pages open in a tab there.'
 export const WIKI_PAGE_TOO_LARGE = 'This page is too large to edit here. Edit it in Azure DevOps.'
+export const READER_CUT_NOTE = 'This page is too long to show here in full. Open it in Azure DevOps to read the rest.'
 export const TOO_MANY_DRAFTS = `You have ${MAX_DRAFTS} wiki drafts. Publish or discard some first.`
 export const DRAFT_FILE_TAKEN = 'Another draft already uses that file name. Publish or discard it first.'
 export const DRAFT_DISCARDED = 'Draft discarded.'
@@ -252,6 +255,16 @@ export function armedCheckout({ repo, branch, base, prId, target }: { repo: stri
 
 export function openedDraft(title: string): string {
   return `Opened ${title} in Orca. Save your changes there, then press Publish here.`
+}
+
+export function openedReader(title: string): string {
+  return `Opened ${title} in a tab.`
+}
+
+export function readerBanner(title: string, editable: boolean): string {
+  return editable
+    ? `*A read-only copy of ${title}. To change it, use Edit in Orca in the Azure DevOps sidebar.*`
+    : `*A read-only copy of ${title}. To change it, edit the page in its repository.*`
 }
 
 export function draftPathTaken(path: string): string {

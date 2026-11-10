@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
-import { assertInside, baseName, draftName, fileSegment, MAX_DRAFT_NAME, MAX_SEGMENT, theirsName } from './draft-files'
+import { assertInside, baseName, draftName, fileSegment, MAX_DRAFT_NAME, MAX_SEGMENT, pageFileName, readerName, theirsName } from './draft-files'
 import { inUse, listing, outside } from './draft-test-support'
 
 const WIKI_NAME = 'Fabrikam Web.wiki'
@@ -102,6 +102,19 @@ test('draftName nests the page under its org and wiki and caps long names with a
   assert.notEqual(first, second)
   assert.equal(first.slice(0, -12), second.slice(0, -12), 'they differ only by the hash')
   assert.equal(deep('Appendix A'), first, 'the name is stable')
+})
+
+test('readerName puts a page under wiki-read by the same rules, apart from its draft', () => {
+  assert.equal(readerName('contoso', WIKI_NAME, '/Release process/Checklist'), 'wiki-read/contoso/Fabrikam Web.wiki/Release process/Checklist.md')
+  assert.equal(readerName('contoso', WIKI_NAME, '/../../etc/passwd'), 'wiki-read/contoso/Fabrikam Web.wiki/_/_/etc/passwd.md')
+  assert.equal(pageFileName('wiki', 'contoso', WIKI_NAME, '/Q&A: what?'), draftName('contoso', WIKI_NAME, '/Q&A: what?'))
+
+  const deep = `/${'Section '.repeat(9)}/${'Chapter '.repeat(9)}/${'Part '.repeat(14)}/Appendix A`
+  const read = readerName('contoso', WIKI_NAME, deep)
+  assert.ok(read.length <= MAX_DRAFT_NAME, `${read.length} units`)
+  assert.match(read, HASHED)
+  assert.ok(read.startsWith('wiki-read/contoso/Fabrikam Web.wiki/'))
+  assert.equal(read.slice(-12), draftName('contoso', WIKI_NAME, deep).slice(-12), 'the hash names the page, not the folder')
 })
 
 test('baseName and theirsName sit beside the drafts where no page can reach', () => {

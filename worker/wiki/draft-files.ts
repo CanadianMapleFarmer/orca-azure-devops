@@ -9,6 +9,7 @@ export const MAX_DRAFT_NAME = 200
 export type DraftFs = TabFileFs & Pick<typeof import('node:fs/promises'), 'rm' | 'realpath' | 'lstat'>
 
 const WIKI_FOLDER = 'wiki'
+const READ_FOLDER = 'wiki-read'
 const WIKI_DEPTH = 2
 const BASE_FOLDER = '.base'
 const THEIRS_FOLDER = '.theirs'
@@ -29,13 +30,21 @@ export function fileSegment(text: string): string {
   return DEVICE.test(segment) ? cutUnits(`_${segment}`, MAX_SEGMENT).replace(TRAILING, '') : segment
 }
 
-export function draftName(org: string, wikiName: string, pagePath: string): string {
+export function pageFileName(folder: string, org: string, wikiName: string, pagePath: string): string {
   const pages = pagePath.split('/')
   if (pages.length > 1 && pages[0] === '') pages.shift()
-  const name = `${[WIKI_FOLDER, ...[org, wikiName, ...pages].map(fileSegment)].join('/')}${EXTENSION}`
+  const name = `${[folder, ...[org, wikiName, ...pages].map(fileSegment)].join('/')}${EXTENSION}`
   if (name.length <= MAX_DRAFT_NAME) return name
   const hash = createHash('sha256').update(JSON.stringify([org, wikiName, pagePath])).digest('hex').slice(0, HASH_CHARS)
   return `${cutUnits(name, CUT_NAME).replace(NAME_TRAILING, '')}~${hash}${EXTENSION}`
+}
+
+export function draftName(org: string, wikiName: string, pagePath: string): string {
+  return pageFileName(WIKI_FOLDER, org, wikiName, pagePath)
+}
+
+export function readerName(org: string, wikiName: string, pagePath: string): string {
+  return pageFileName(READ_FOLDER, org, wikiName, pagePath)
 }
 
 export function baseName(draft: string): string {
@@ -46,10 +55,10 @@ export function theirsName(draft: string): string {
   return `${WIKI_FOLDER}/${THEIRS_FOLDER}/${insideWiki(draft)}`
 }
 
-export async function assertInside(fs: DraftFs, workspacePath: string, relative: string): Promise<string> {
+export async function assertInside(fs: DraftFs, workspacePath: string, relative: string, outside = DRAFT_OUTSIDE): Promise<string> {
   const segments = relative.split('/')
   if (path.isAbsolute(relative) || relative.includes('\\') || segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
-    throw badRequest(DRAFT_OUTSIDE)
+    throw badRequest(outside)
   }
   const root = await fs.realpath(workspacePath)
   const parts = [TAB_FOLDER, ...segments]
@@ -66,7 +75,7 @@ export async function assertInside(fs: DraftFs, workspacePath: string, relative:
     if (wrongKind && depth > WIKI_DEPTH && parts[WIKI_DEPTH - 1] === WIKI_FOLDER) {
       throw badRequest(draftPathTaken(parts.slice(WIKI_DEPTH, depth).join('/')))
     }
-    throw badRequest(DRAFT_OUTSIDE)
+    throw badRequest(outside)
   }
   return path.join(root, TAB_FOLDER, relative)
 }

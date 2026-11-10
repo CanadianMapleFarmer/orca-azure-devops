@@ -4,7 +4,6 @@ import {
   Callout,
   Heading,
   IconButton,
-  Link,
   List,
   ListItem,
   Markdown,
@@ -18,7 +17,9 @@ import {
   Tabs,
   Text,
   Textarea,
-  type OrcaNode
+  type OrcaNode,
+  type Tone,
+  type Variant
 } from 'orca'
 import { MAX_REVIEW_COMMENT, VOTE_BUTTON, VOTE_VALUE, votePhrase, type PrReview, type VoteChoice } from '../../../shared/reviews'
 import type { OrgStatus } from '../../../shared/types'
@@ -47,11 +48,14 @@ import {
 } from './state'
 import { CommentsSection, ResultCallout } from './threads'
 
-type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
-
 const MAX_REVIEWERS = 100
 const CHOICES: readonly VoteChoice[] = ['approve', 'suggestions', 'waitForAuthor', 'reject']
-const VOTE_TONE: Record<VoteChoice, Tone> = { approve: 'success', suggestions: 'success', waitForAuthor: 'warning', reject: 'danger' }
+const VOTE_LOOK: Record<VoteChoice, { variant: Variant; tone?: Tone }> = {
+  approve: { variant: 'solid', tone: 'accent' },
+  suggestions: { variant: 'outline' },
+  waitForAuthor: { variant: 'outline' },
+  reject: { variant: 'outline', tone: 'danger' }
+}
 const APPROVING_VOTE = 5
 const REJECTED_VOTE = -10
 
@@ -65,15 +69,18 @@ function Header({ review }: { review: PrReview }): OrcaNode {
   const reload = read(reviewLoad)
   return (
     <Stack gap="xs">
-      <Row justify="between" align="center" gap="sm">
-        <IconButton icon="close" label="Back" variant="ghost" size="sm" onPress={() => closeReview()} />
-        <IconButton icon="refresh" label="Refresh" variant="ghost" size="sm" disabled={reload.status === 'loading'} onPress={() => refreshReview()} />
+      <Row justify="between" align="center" gap="xs">
+        <IconButton icon="close" label="Back" variant="ghost" size="xs" onPress={() => closeReview()} />
+        <Row gap="none" align="center">
+          <IconButton icon="refresh" label="Refresh" variant="ghost" size="xs" disabled={reload.status === 'loading'} onPress={() => refreshReview()} />
+          <IconButton icon="open-external" label="Open in Azure DevOps" variant="ghost" size="xs" onPress={() => openPr(pr.url)} />
+        </Row>
       </Row>
-      <Heading level={3}>{pr.title}</Heading>
-      <Text muted size="sm">
+      <Heading level={2}>{pr.title}</Heading>
+      <Text muted size="xs">
         {`Pull Request ${pr.prId} · ${pr.repoName} · ${pr.source} → ${pr.target}`}
       </Text>
-      <Text muted size="sm">
+      <Text muted size="xs">
         {`${pr.createdBy.name} · opened `}
         <RelativeTime at={pr.createdAt} />
         {' · loaded '}
@@ -86,7 +93,6 @@ function Header({ review }: { review: PrReview }): OrcaNode {
           {review.myVote !== 0 ? <Badge tone={voteTone(review.myVote)}>{`You: ${votePhrase(review.myVote)}`}</Badge> : null}
         </Row>
       ) : null}
-      <Link onPress={() => openPr(pr.url)}>Open in Azure DevOps</Link>
       {notice ? <Callout tone="danger">{notice}</Callout> : null}
       <SnapshotMessage message={review.message} stale={false} />
       {reload.status === 'failed' ? <Callout tone="danger">{reload.message}</Callout> : null}
@@ -102,9 +108,10 @@ function Votes({ review }: { review: PrReview }): OrcaNode {
         {CHOICES.map(choice => (
           <Button
             key={choice}
-            size="sm"
-            tone={VOTE_TONE[choice]}
-            variant={review.myVote === VOTE_VALUE[choice] ? 'solid' : 'outline'}
+            size="xs"
+            variant={VOTE_LOOK[choice].variant}
+            tone={VOTE_LOOK[choice].tone}
+            icon={review.myVote === VOTE_VALUE[choice] ? 'check' : undefined}
             disabled={busy}
             onPress={() => vote(choice)}
           >
@@ -123,7 +130,7 @@ function Checkout(): OrcaNode {
   return (
     <Stack gap="xs">
       <Row gap="sm">
-        <Button size="sm" variant="outline" icon="branch" disabled={busy} onPress={() => checkout()}>
+        <Button size="xs" variant="outline" icon="branch" disabled={busy} onPress={() => checkout()}>
           Check out in Orca
         </Button>
       </Row>
@@ -221,9 +228,9 @@ export function ReviewView({ org }: { org: OrgStatus }): OrcaNode {
     return (
       <Stack gap="md">
         <Row>
-          <IconButton icon="close" label="Back" variant="ghost" size="sm" onPress={() => closeReview()} />
+          <IconButton icon="close" label="Back" variant="ghost" size="xs" onPress={() => closeReview()} />
         </Row>
-        <Heading level={3}>{open.title}</Heading>
+        <Heading level={2}>{open.title}</Heading>
         {status.status === 'failed' ? <LoadFailure message={status.message} onRetry={reloadReview} /> : <Skeleton lines={4} label="Loading the pull request" />}
       </Stack>
     )

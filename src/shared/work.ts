@@ -20,6 +20,7 @@ export interface BoardConfig {
   fields: { column: string; columnDone: string; lane: string }
   areaPaths: { value: string; includeChildren: boolean }[]
   doneStates: Record<string, string[]>
+  taskTypes?: string[]
 }
 
 export interface PrChip {
@@ -67,12 +68,25 @@ export const MAX_NUDGE_RULES = 20
 
 export interface Nudge { itemId: number; prId: number; branch: string; toColumn: string }
 
+export const MAX_CHILD_TASKS = 20
+
+export interface WorkTask { id: number; title: string; state: string; done: boolean; assignee: string | null; mine: boolean }
+
+export interface TaskList { parentId: number; tasks: WorkTask[]; total: number; done: number }
+
+export interface WorkParent { id: number; type: string; title: string; state: string; column: string | null; lane: string | null }
+
+export interface WorkFamilies { lists: TaskList[]; parents: WorkParent[] }
+
+export const NO_FAMILIES: WorkFamilies = { lists: [], parents: [] }
+
 export interface WorkSnapshot {
   org: string
   board: BoardConfig | null
   mine: WorkItemSummary[]
   other: WorkItemSummary[]
   nudges: Nudge[]
+  families: WorkFamilies
   updatedAt: number
   stale: boolean
   message?: string

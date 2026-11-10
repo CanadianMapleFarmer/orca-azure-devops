@@ -1,0 +1,63 @@
+{
+  "count": 4,
+  "value": [
+    {
+      "id": 1213,
+      "rev": 1,
+      "fields": {
+        "System.Id": 1213,
+        "System.WorkItemType": "Task",
+        "System.Title": "Write the filter tests",
+        "System.State": "Active",
+        "System.AssignedTo": {
+          "displayName": "Alex Contoso",
+          "uniqueName": "alex@contoso.example",
+          "id": "9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b"
+        },
+        "System.Parent": 1204
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1213"
+    },
+    {
+      "id": 1209,
+      "rev": 6,
+      "fields": {
+        "System.Id": 1209,
+        "System.WorkItemType": "Task",
+        "System.Title": "Review the filter copy",
+        "System.State": "Closed",
+        "System.AssignedTo": {
+          "displayName": "Grace Hopper",
+          "uniqueName": "grace@contoso.example",
+          "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d"
+        },
+        "System.Parent": 1204
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1209"
+    },
+    {
+      "id": 1210,
+      "rev": 1,
+      "fields": {
+        "System.Id": 1210,
+        "System.WorkItemType": "Task",
+        "System.Title": "Add filter analytics",
+        "System.State": "New",
+        "System.Parent": 1204
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1210"
+    },
+    {
+      "id": 1211,
+      "rev": 2,
+      "fields": {
+        "System.Id": 1211,
+        "System.WorkItemType": "Task",
+        "System.Title": "Spike a saved-search endpoint",
+        "System.State": "Removed",
+        "System.Parent": 1204
+      },
+      "url": "https://dev.azure.com/contoso/4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d/_apis/wit/workItems/1211"
+    }
+  ]
+}

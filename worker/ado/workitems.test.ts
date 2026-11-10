@@ -2,7 +2,20 @@ import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import type { BoardConfig } from '../../src/shared/work'
 import { createAdoHttp } from './http'
-import { hydrate, parsePrRef, queryBoardIds, queryIds, toSummary, wiqlBoard, wiqlMine, type RawWorkItem } from './workitems'
+import {
+  CHILD_LINK,
+  childIdsOf,
+  hydrate,
+  parsePrRef,
+  queryBoardIds,
+  queryIds,
+  readFields,
+  TASK_FIELDS,
+  toSummary,
+  wiqlBoard,
+  wiqlMine,
+  type RawWorkItem
+} from './workitems'
 
 const ORG = 'contoso'
 const ORG_URL = `https://dev.azure.com/${ORG}`
@@ -183,6 +196,50 @@ test('hydrate fails with a server error when the batch has no value list', async
     return
   }
   assert.fail('expected hydrate to fail')
+})
+
+test('childIdsOf reads child links only and skips malformed ones', () => {
+  const link = (rel: unknown, url: unknown) => ({ rel, url, attributes: { name: 'Child' } }) as never
+  const raw: RawWorkItem = {
+    ...rawItem(1204),
+    relations: [
+      link('System.LinkTypes.Hierarchy-Reverse', `${ORG_URL}/_apis/wit/workItems/1100`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/1209`),
+      link('System.LinkTypes.Related', `${ORG_URL}/_apis/wit/workItems/1300`),
+      link('ArtifactLink', `vstfs:///Git/PullRequestId/${PROJECT}%2F${REPO}%2F321`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/1210`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/0`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/-4`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/12x`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/99999999999999999999`),
+      link(CHILD_LINK, `${ORG_URL}/_apis/wit/workItems/`),
+      link(CHILD_LINK, 1211),
+      link(CHILD_LINK, undefined),
+      null as never
+    ]
+  }
+  assert.deepEqual(childIdsOf(raw), [1209, 1210])
+  assert.deepEqual(childIdsOf(rawItem(1205)), [])
+  assert.deepEqual(childIdsOf({ ...rawItem(1206), relations: {} as never }), [])
+})
+
+test('readFields posts the ids, the fields and errorPolicy omit without expanding relations, 200 ids a request', async () => {
+  const ids = Array.from({ length: 250 }, (_, index) => 20_000 + index)
+  const { http, calls } = recorder(call => {
+    const requested = (call.body as { ids: number[] }).ids
+    return { count: requested.length, value: requested.map(id => (id === 20_007 ? null : { ...rawItem(id), fields: { 'System.Id': id } })) }
+  })
+  const items = await readFields(http, ORG, PROJECT, ids, TASK_FIELDS)
+  assert.deepEqual(items.map(item => item.id), ids.filter(id => id !== 20_007), 'in order, without the null the account could not read')
+  assert.deepEqual(TASK_FIELDS, ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.AssignedTo', 'System.Parent'])
+  const url = `${ORG_URL}/${PROJECT}/_apis/wit/workitemsbatch?api-version=7.1`
+  assert.deepEqual(calls.map(call => [call.url, call.method]), [[url, 'POST'], [url, 'POST']])
+  assert.deepEqual(calls.map(call => call.body), [
+    { ids: ids.slice(0, 200), fields: TASK_FIELDS, errorPolicy: 'omit' },
+    { ids: ids.slice(200), fields: TASK_FIELDS, errorPolicy: 'omit' }
+  ])
+  assert.deepEqual(await readFields(http, ORG, PROJECT, [], TASK_FIELDS), [])
+  assert.equal(calls.length, 2, 'no ids, no request')
 })
 
 function batchItem(id: number): RawWorkItem {

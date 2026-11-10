@@ -1,6 +1,7 @@
-import { Button, Callout, Card, CodeView, Collapsible, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Box, Button, Callout, CodeView, IconButton, read, RelativeTime, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { DiffText } from '../../shared/diff'
 import type { DraftSummary } from '../../shared/wiki'
+import { Group } from '../group'
 import { cutLabel } from '../label'
 import { LoadFailure } from '../snapshot-parts'
 import {
@@ -22,6 +23,7 @@ import {
 } from './state'
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+
 
 const TONE: Record<Exclude<Outcome['status'], 'conflict'>, Tone> = {
   published: 'success',
@@ -48,11 +50,11 @@ function Confirmation({ id, confirm }: { id: string; confirm: Confirm }): OrcaNo
   return (
     <Stack gap="xs">
       <Text size="sm">{question}</Text>
-      <Row gap="sm" wrap>
-        <Button size="sm" tone="danger" disabled={busy} onPress={() => carryOut(id, confirm)}>
+      <Row gap="xs" wrap>
+        <Button size="xs" variant="outline" tone="danger" disabled={busy} onPress={() => carryOut(id, confirm)}>
           {yes}
         </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onPress={() => cancelAsk(id)}>
+        <Button size="xs" variant="ghost" disabled={busy} onPress={() => cancelAsk(id)}>
           {no}
         </Button>
       </Row>
@@ -79,14 +81,14 @@ function Choices({ id }: { id: string }): OrcaNode {
   if (confirm === 'mine' || confirm === 'theirs') return <Confirmation id={id} confirm={confirm} />
   const busy = isRunning(id)
   return (
-    <Row gap="sm" wrap>
-      <Button size="sm" disabled={busy} onPress={() => ask(id, 'mine')}>
+    <Row gap="xs" wrap>
+      <Button size="xs" variant="outline" disabled={busy} onPress={() => ask(id, 'mine')}>
         Publish mine…
       </Button>
-      <Button size="sm" disabled={busy} onPress={() => ask(id, 'theirs')}>
+      <Button size="xs" variant="outline" disabled={busy} onPress={() => ask(id, 'theirs')}>
         Take theirs…
       </Button>
-      <Button size="sm" variant="outline" disabled={busy} onPress={() => resolve(id, 'merge')}>
+      <Button size="xs" variant="outline" disabled={busy} onPress={() => resolve(id, 'merge')}>
         Merge by hand
       </Button>
     </Row>
@@ -95,7 +97,7 @@ function Choices({ id }: { id: string }): OrcaNode {
 
 function Conflict({ id, message, versions }: { id: string; message: string; versions: Versions | null }): OrcaNode {
   return (
-    <Stack gap="sm">
+    <Stack gap="xs">
       <Callout tone="warning" title="This page changed in Azure DevOps">
         {message}
       </Callout>
@@ -104,7 +106,7 @@ function Conflict({ id, message, versions }: { id: string; message: string; vers
           Press Publish to see both versions again.
         </Text>
       ) : (
-        <Stack gap="sm">
+        <Stack gap="xs">
           <Version label="Their changes" version={versions.theirs} />
           <Version label="Your changes" version={versions.mine} />
           <Choices id={id} />
@@ -124,11 +126,11 @@ function Result({ id }: { id: string }): OrcaNode {
 function Status({ draft }: { draft: DraftSummary }): OrcaNode {
   const saved = draft.changed ? 'Saved changes not published yet.' : 'No changes since you opened or published it.'
   return draft.publishedAt === null ? (
-    <Text size="sm" muted>
+    <Text size="xs" muted truncate>
       {saved}
     </Text>
   ) : (
-    <Text size="sm" muted>
+    <Text size="xs" muted truncate>
       {`${saved} Published `}
       <RelativeTime at={draft.publishedAt} />
     </Text>
@@ -136,55 +138,71 @@ function Status({ draft }: { draft: DraftSummary }): OrcaNode {
 }
 
 function Actions({ draft }: { draft: DraftSummary }): OrcaNode {
-  const confirm = confirmOf(draft.key)
-  if (confirm === 'discard') return <Confirmation id={draft.key} confirm={confirm} />
   const busy = isRunning(draft.key)
   return (
-    <Row gap="sm" wrap>
-      <Button size="sm" disabled={busy} onPress={() => publish(draft.key)}>
+    <Box direction="row" gap="none" align="center" shrink={false}>
+      <Button size="xs" variant="outline" disabled={busy} onPress={() => publish(draft.key)}>
         Publish
       </Button>
-      <Button size="sm" variant="outline" disabled={busy} onPress={() => edit(draft)}>
-        Open
-      </Button>
-      <Button size="sm" variant="ghost" tone="danger" disabled={busy} onPress={() => ask(draft.key, 'discard')}>
-        Discard…
-      </Button>
-    </Row>
+      <IconButton
+        icon="file-text"
+        label="Open"
+        tooltip={cutLabel(`.orca-ado/${draft.file}`)}
+        size="xs"
+        variant="ghost"
+        disabled={busy}
+        onPress={() => edit(draft)}
+      />
+      <IconButton icon="delete" label="Discard…" size="xs" variant="ghost" tone="danger" disabled={busy} onPress={() => ask(draft.key, 'discard')} />
+    </Box>
   )
 }
 
-function DraftCard({ draft }: { draft: DraftSummary }): OrcaNode {
-  return (
-    <Card title={cutLabel(draft.title)} description={cutLabel(`${draft.wikiName} · in ${draft.workspaceName}`)}>
-      <Stack gap="sm">
-        <Text size="sm" muted>
-          {cutLabel(`.orca-ado/${draft.file}`)}
+function DraftRow({ draft, showWiki }: { draft: DraftSummary; showWiki: boolean }): OrcaNode {
+  const asking = confirmOf(draft.key) === 'discard'
+  const row = (
+    <Box border radius="md" padding="xs" direction="row" justify="between" align="center" gap="xs">
+      <Box grow minWidth={0} gap="none">
+        <Text size="sm" weight="semibold" truncate>
+          {cutLabel(draft.title)}
         </Text>
+        {showWiki ? (
+          <Text size="xs" muted truncate>
+            {cutLabel(draft.wikiName)}
+          </Text>
+        ) : null}
         <Status draft={draft} />
-        <Actions draft={draft} />
-        <Result id={draft.key} />
-      </Stack>
-    </Card>
+      </Box>
+      {asking ? null : <Actions draft={draft} />}
+    </Box>
+  )
+  if (!asking && outcomeOf(draft.key) === undefined) return row
+  return (
+    <Stack gap="xs">
+      {row}
+      {asking ? <Confirmation id={draft.key} confirm="discard" /> : null}
+      <Result id={draft.key} />
+    </Stack>
   )
 }
 
-export function Drafts(): OrcaNode {
+export function Drafts({ org }: { org: string }): OrcaNode {
   const list = read(drafts)
   const load = read(draftsLoad)
   const failure = load.status === 'failed' ? <LoadFailure message={load.message} onRetry={retryDrafts} /> : null
   if (list === null) return failure ?? <Skeleton lines={2} label="Loading drafts" />
   if (list.length === 0) return failure
+  const showWiki = new Set(list.map(draft => draft.wikiId)).size > 1
   return (
     <Stack gap="sm">
       {failure}
-      <Collapsible title={`Drafts (${list.length})`} defaultOpen>
-        <Stack gap="sm">
+      <Group org={org} tab="wiki" foldKey="drafts" title="Drafts" count={String(list.length)}>
+        <Stack gap="xs">
           {list.map(draft => (
-            <DraftCard key={draft.key} draft={draft} />
+            <DraftRow key={draft.key} draft={draft} showWiki={showWiki} />
           ))}
         </Stack>
-      </Collapsible>
+      </Group>
     </Stack>
   )
 }

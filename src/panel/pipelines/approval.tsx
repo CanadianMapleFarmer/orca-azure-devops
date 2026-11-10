@@ -1,10 +1,10 @@
-import { Button, Callout, RelativeTime, Row, Stack, Text, Textarea, type OrcaNode } from 'orca'
+import { Button, Callout, RelativeTime, Row, Text, Textarea, type OrcaNode } from 'orca'
 import { MAX_COMMENT, type ApprovalSummary, type RunSummary } from '../../shared/pipelines'
-import { approverNames } from '../../shared/runs'
+import { approverNames, isActive } from '../../shared/runs'
 import { APPROVAL_TEMPLATE, APPROVAL_VARS, approvalShareItem } from '../../shared/share/approval-items'
 import type { Identity } from '../../shared/types'
 import { openComposer } from '../share/state'
-import { askToDecide, cancelDecision, confirmOf, decide, isBusy, outcomeOf, typeComment, type Outcome } from './state'
+import { askToDecide, cancelDecision, confirmOf, decide, isBusy, typeComment, type Confirm, type Outcome } from './state'
 
 const MAX_INSTRUCTIONS = 500
 
@@ -15,19 +15,29 @@ function clip(text: string): string {
 
 const placeOf = (approval: ApprovalSummary): string => approval.environment ?? approval.stage ?? 'A stage'
 
-function shareApproval(org: string, me: string | null, run: RunSummary, approval: ApprovalSummary): void {
-  const item = approvalShareItem(run, approval)
+function suggestedApprovers(run: RunSummary, me: string | null): Identity[] {
+  const seen = new Set<string>()
+  const people: Identity[] = []
+  for (const approver of run.approvals.flatMap(approval => approval.approvers)) {
+    if (approver.isGroup || approver.uniqueName === '' || approver.id.toLowerCase() === me?.toLowerCase() || seen.has(approver.id)) continue
+    seen.add(approver.id)
+    people.push({ id: approver.id, displayName: approver.name, uniqueName: approver.uniqueName, kind: 'user' })
+  }
+  return people
+}
+
+function shareForApproval(org: string, me: string | null, run: RunSummary): void {
   const runName = `${run.pipeline.name} ${run.runNumber}`
-  const approvers: Identity[] = approval.approvers
-    .filter(approver => !approver.isGroup && approver.uniqueName !== '' && approver.id.toLowerCase() !== me?.toLowerCase())
-    .map(({ id, name, uniqueName }) => ({ id, displayName: name, uniqueName, kind: 'user' }))
   openComposer({
     org,
     kind: 'approval',
     host: 'pipelines',
     title: 'Share for approval',
-    items: [{ key: item.key, label: `${runName} → ${placeOf(approval)}`, item, checked: true }],
-    suggestions: approvers,
+    items: run.approvals.map(approval => {
+      const item = approvalShareItem(run, approval)
+      return { key: item.key, label: `${runName} → ${placeOf(approval)}`, item, checked: true }
+    }),
+    suggestions: suggestedApprovers(run, me),
     reviewers: false,
     email: true,
     subject: `Approval needed: ${runName}`,
@@ -36,9 +46,10 @@ function shareApproval(org: string, me: string | null, run: RunSummary, approval
   })
 }
 
-function approversLine(approval: ApprovalSummary): string | null {
-  if (approval.approvers.length === 0) return null
-  return `Approvers: ${approverNames(approval)}${approval.minRequired > 1 ? ` · needs ${approval.minRequired}` : ''}`
+export function approvalLine(approval: ApprovalSummary): string {
+  if (approval.approvers.length === 0) return placeOf(approval)
+  const count = approval.minRequired > 1 ? `${approval.minRequired} of ` : ''
+  return `${placeOf(approval)} needs ${count}${approverNames(approval)}`
 }
 
 export function OutcomeCallout({ outcome }: { outcome: Outcome }): OrcaNode {
@@ -46,63 +57,76 @@ export function OutcomeCallout({ outcome }: { outcome: Outcome }): OrcaNode {
   return <Callout tone={!ok ? 'danger' : warn ? 'warning' : 'success'}>{message}</Callout>
 }
 
-function Decide({ org, approval }: { org: string; approval: ApprovalSummary }): OrcaNode {
+function Confirmation({ org, approval, confirm }: { org: string; approval: ApprovalSummary; confirm: Confirm }): OrcaNode {
   const { approvalId } = approval
-  const confirm = confirmOf(approvalId)
-  if (!confirm) {
-    return (
-      <Row gap="sm" wrap>
-        <Button size="sm" onPress={() => askToDecide(approvalId, 'approved')}>
-          Approve…
-        </Button>
-        <Button size="sm" variant="outline" onPress={() => askToDecide(approvalId, 'rejected')}>
-          Reject…
-        </Button>
-      </Row>
-    )
-  }
   const approving = confirm.decision === 'approved'
   const sending = isBusy(`decide:${approvalId}`)
   return (
-    <Stack gap="xs">
+    <>
       <Textarea label="Comment (optional)" value={confirm.comment} maxLength={MAX_COMMENT} disabled={sending} onChange={value => typeComment(approvalId, value)} />
-      <Row gap="sm" wrap>
-        <Button size="sm" tone={approving ? 'success' : 'danger'} disabled={sending} onPress={() => decide(org, approval)}>
+      <Row gap="xs" wrap>
+        <Button size="xs" tone={approving ? 'success' : 'danger'} disabled={sending} onPress={() => decide(org, approval)}>
           {approving ? 'Approve' : 'Reject'}
         </Button>
-        <Button size="sm" variant="ghost" disabled={sending} onPress={() => cancelDecision(approvalId)}>
+        <Button size="xs" variant="ghost" disabled={sending} onPress={() => cancelDecision(approvalId)}>
           Cancel
         </Button>
       </Row>
-    </Stack>
+    </>
   )
 }
 
-export function ApprovalBlock({ org, me, run, approval }: { org: string; me: string | null; run: RunSummary; approval: ApprovalSummary }): OrcaNode {
-  const approvers = approversLine(approval)
-  const outcome = outcomeOf(approval.approvalId)
+function ShareButton({ org, me, run }: { org: string; me: string | null; run: RunSummary }): OrcaNode {
+  const canDecide = run.approvals.some(approval => approval.canApprove)
   return (
-    <Stack gap="xs">
-      <Callout tone="warning" title="Waiting for approval">
-        <Stack gap="xs">
-          <Text size="sm">
-            {placeOf(approval)} · waiting <RelativeTime at={approval.createdAt} format="duration" />
-          </Text>
-          {approvers ? <Text size="sm">{approvers}</Text> : null}
-          {approval.instructions ? (
-            <Text size="sm" muted>
-              {clip(approval.instructions)}
-            </Text>
-          ) : null}
-          {approval.canApprove ? <Decide org={org} approval={approval} /> : null}
-          <Row gap="sm" wrap>
-            <Button size="sm" variant="outline" onPress={() => shareApproval(org, me, run, approval)}>
-              Share for approval
+    <Button size="xs" variant={canDecide ? 'outline' : 'solid'} tone={canDecide ? undefined : 'accent'} onPress={() => shareForApproval(org, me, run)}>
+      Share for approval
+    </Button>
+  )
+}
+
+function ApprovalBlock({ org, approval, share }: { org: string; approval: ApprovalSummary; share: OrcaNode }): OrcaNode {
+  const { approvalId, canApprove } = approval
+  const confirm = canApprove ? confirmOf(approvalId) : undefined
+  const deciding = canApprove && !confirm
+  return (
+    <>
+      <Text size="sm" tone="warning">
+        {approvalLine(approval)} · waiting <RelativeTime at={approval.createdAt} format="duration" />
+      </Text>
+      {canApprove && approval.instructions ? (
+        <Text size="xs" muted>
+          {clip(approval.instructions)}
+        </Text>
+      ) : null}
+      {confirm ? <Confirmation org={org} approval={approval} confirm={confirm} /> : null}
+      {deciding || share ? (
+        <Row gap="xs" wrap>
+          {deciding ? (
+            <Button size="xs" variant="solid" tone="accent" onPress={() => askToDecide(approvalId, 'approved')}>
+              Approve…
             </Button>
-          </Row>
-        </Stack>
-      </Callout>
-      {outcome ? <OutcomeCallout outcome={outcome} /> : null}
-    </Stack>
+          ) : null}
+          {deciding ? (
+            <Button size="xs" variant="outline" tone="danger" onPress={() => askToDecide(approvalId, 'rejected')}>
+              Reject…
+            </Button>
+          ) : null}
+          {share}
+        </Row>
+      ) : null}
+    </>
+  )
+}
+
+export function Approvals({ org, me, run }: { org: string; me: string | null; run: RunSummary }): OrcaNode {
+  const share = isActive(run) ? <ShareButton org={org} me={me} run={run} /> : null
+  const last = run.approvals.length - 1
+  return (
+    <>
+      {run.approvals.map((approval, index) => (
+        <ApprovalBlock key={approval.approvalId} org={org} approval={approval} share={index === last ? share : null} />
+      ))}
+    </>
   )
 }

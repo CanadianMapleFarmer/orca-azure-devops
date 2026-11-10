@@ -15,8 +15,8 @@ export const load = atom<Load>({ status: 'idle' })
 export const notice = atom<string | null>(null)
 export const reviewNotice = atom<string | null>(null)
 export const refreshing = atom(false)
-export const toReviewOpen = atom(false)
 const outcomes = atom<Outcome[]>([])
+const mergedShown = atom<string[]>([])
 const acting = atom<number[]>([])
 const source = atom<string | null>(null)
 const visibility = surfaceVisibility('prs')
@@ -54,7 +54,7 @@ const surface: SyncedSurface = {
     set(snapshot, null)
     set(outcomes, [])
     set(acting, [])
-    set(toReviewOpen, false)
+    set(mergedShown, [])
     set(notice, null)
     set(reviewNotice, null)
     set(refreshing, false)
@@ -88,7 +88,10 @@ export async function refresh(org: string): Promise<void> {
   if (read(source) === org) set(refreshing, false)
 }
 
-export const setToReviewOpen = (open: boolean): void => set(toReviewOpen, open)
+export const isMergedShown = (setKey: string): boolean => read(mergedShown).includes(setKey)
+
+export const toggleMerged = (setKey: string): void =>
+  update(mergedShown, keys => (keys.includes(setKey) ? keys.filter(key => key !== setKey) : [...keys, setKey]))
 
 export function openPr(url: string): void {
   const org = read(source)

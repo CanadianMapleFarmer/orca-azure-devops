@@ -1,85 +1,89 @@
-import { Badge, Box, Button, Callout, Card, IconButton, Link, RelativeTime, Row, Stack, Text, type OrcaNode } from 'orca'
-import { MAX_STAGE_CHIPS, type RunSummary, type StageChip, type StepState } from '../../shared/pipelines'
-import { isActive, RUN_STATE_TEXT, RUN_STATE_TONE, STEP_GLYPH } from '../../shared/runs'
-import { ApprovalBlock, OutcomeCallout } from './approval'
-import { isBusy, noteOf, openRun, orphanOutcomes, toggleWatch } from './state'
+import { Badge, Box, Button, Callout, IconButton, RelativeTime, Row, Text, type OrcaNode, type Tone } from 'orca'
+import { MAX_STAGE_CHIPS, type RunFilter, type RunState, type RunSummary, type StageChip, type StepState } from '../../shared/pipelines'
+import { isActive, RUN_STATE_TONE, STEP_GLYPH } from '../../shared/runs'
+import { Chips, type Chip } from '../chips'
+import { Approvals, OutcomeCallout } from './approval'
+import { isBusy, noteOf, openInAzureDevOps, openRun, outcomesOf, toggleWatch } from './state'
 
-const SEGMENT: Record<StepState, 'success' | 'danger' | 'warning' | 'accent' | 'muted'> = {
+export const STAGE_TONE: Record<StepState, Tone> = {
   succeeded: 'success',
   failed: 'danger',
   waiting: 'warning',
   warning: 'warning',
   running: 'accent',
-  pending: 'muted',
-  skipped: 'muted',
-  canceled: 'muted'
+  pending: 'neutral',
+  skipped: 'neutral',
+  canceled: 'neutral'
 }
 
-export function stageLine(stages: readonly StageChip[]): string {
-  const parts = stages.slice(0, MAX_STAGE_CHIPS).map(stage => `${stage.name} ${STEP_GLYPH[stage.state]}`)
-  if (stages.length > MAX_STAGE_CHIPS) parts.push(`+${stages.length - MAX_STAGE_CHIPS} more`)
-  return parts.join(' · ')
+const STATE_BADGE: Record<RunState, string> = {
+  queued: 'queued',
+  running: 'running',
+  waiting: 'waiting',
+  cancelling: 'cancelling',
+  succeeded: '✓ succeeded',
+  warning: '! partial',
+  failed: '✕ failed',
+  canceled: 'canceled'
 }
 
-function describe(run: RunSummary): string {
-  return [run.runNumber, run.branch, run.prId === null ? '' : `PR ${run.prId}`, run.requestedFor.name].filter(part => part !== '').join(' · ')
+export function stageChips(stages: readonly StageChip[]): Chip[] {
+  return stages.slice(0, MAX_STAGE_CHIPS).map(stage => ({ tone: STAGE_TONE[stage.state], text: `${stage.name} ${STEP_GLYPH[stage.state]}` }))
 }
 
-function When({ run }: { run: RunSummary }): OrcaNode {
-  const [label, at] = run.finishedAt !== null ? ['finished', run.finishedAt] : run.startedAt !== null ? ['started', run.startedAt] : ['queued', run.queuedAt]
-  return (
-    <Text size="sm" muted>
-      {label} <RelativeTime at={at} />
-    </Text>
-  )
+function describe(run: RunSummary, filter: RunFilter): string {
+  const where = run.prId === null ? run.branch : `PR !${run.prId}`
+  return [run.runNumber, where, filter === 'mine' ? '' : run.requestedFor.name].filter(part => part !== '').join(' · ')
 }
 
-function StageBar({ stages }: { stages: readonly StageChip[] }): OrcaNode {
-  return (
-    <Stack gap="xs">
-      <Row gap="xs">
-        {stages.slice(0, MAX_STAGE_CHIPS).map(stage => (
-          <Box key={stage.id} width={14} height={6} radius="full" background={SEGMENT[stage.state]} />
-        ))}
-      </Row>
-      <Text size="xs" muted truncate>
-        {stageLine(stages)}
-      </Text>
-    </Stack>
-  )
+export function StageChips({ stages }: { stages: readonly StageChip[] | null }): OrcaNode {
+  return stages && stages.length > 0 ? <Chips chips={stageChips(stages)} /> : null
 }
 
-export function RunCard({ org, me, run }: { org: string; me: string | null; run: RunSummary }): OrcaNode {
+export function RunCard({ org, me, filter, run }: { org: string; me: string | null; filter: RunFilter; run: RunSummary }): OrcaNode {
   const note = noteOf(run.buildId)
-  const leftovers = orphanOutcomes(run)
   return (
-    <Card title={run.pipeline.name} description={describe(run)}>
-      <Row gap="sm" align="center" wrap>
-        <Badge tone={RUN_STATE_TONE[run.state]}>{RUN_STATE_TEXT[run.state]}</Badge>
-        <When run={run} />
+    <Box border radius="md" background="card" padding="sm" gap="xs">
+      <Row justify="between" align="center" gap="xs">
+        <Box direction="row" gap="xs" align="center" grow minWidth={0}>
+          <Box shrink={false}>
+            <Badge tone={RUN_STATE_TONE[run.state]}>{STATE_BADGE[run.state]}</Badge>
+          </Box>
+          <Box grow minWidth={0}>
+            <Text weight="semibold" size="sm" truncate>
+              {run.pipeline.name}
+            </Text>
+          </Box>
+        </Box>
+        <Box shrink={false}>
+          <Text size="xs" muted>
+            <RelativeTime at={run.finishedAt ?? run.startedAt ?? run.queuedAt} format="short" />
+          </Text>
+        </Box>
       </Row>
-      {run.stages && run.stages.length > 0 ? <StageBar stages={run.stages} /> : null}
-      <Row gap="sm" align="center" wrap>
-        <Button size="sm" disabled={isBusy(`open:${run.buildId}`)} onPress={() => openRun(org, run)}>
+      <Text size="xs" muted>
+        {describe(run, filter)}
+      </Text>
+      <StageChips stages={run.stages} />
+      <Approvals org={org} me={me} run={run} />
+      <Row gap="xs" align="center" wrap>
+        <Button size="xs" variant="outline" disabled={isBusy(`open:${run.buildId}`)} onPress={() => openRun(org, run)}>
           Open run
         </Button>
         <IconButton
           icon="bell"
           label={run.watched ? 'Stop watching' : 'Watch'}
-          size="sm"
+          size="xs"
           variant={run.watched ? 'solid' : 'ghost'}
           disabled={isBusy(`watch:${run.buildId}`) || (!run.watched && !isActive(run))}
           onPress={() => toggleWatch(org, run)}
         />
-        <Link href={run.url}>Open in Azure DevOps</Link>
+        <IconButton icon="open-external" label="Open in Azure DevOps" size="xs" variant="ghost" onPress={() => openInAzureDevOps(org, run)} />
       </Row>
       {note ? <Callout tone="danger">{note}</Callout> : null}
-      {run.approvals.map(approval => (
-        <ApprovalBlock key={approval.approvalId} org={org} me={me} run={run} approval={approval} />
-      ))}
-      {leftovers.map(outcome => (
+      {outcomesOf(run).map(outcome => (
         <OutcomeCallout key={outcome.approvalId} outcome={outcome} />
       ))}
-    </Card>
+    </Box>
   )
 }

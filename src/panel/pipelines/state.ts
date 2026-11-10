@@ -1,7 +1,8 @@
-import { atom, plugin, read, set, update } from 'orca'
-import { messageOf } from '../../shared/messages'
+import { atom, plugin, read, set, shell, update } from 'orca'
+import { messageOf, OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
 import type { ApprovalSummary, RunActionResult, RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import type { OrgStatus } from '../../shared/types'
+import type { Place } from '../grouping'
 import { LONG_WAIT } from '../state'
 import { syncSurface, type SyncedSurface } from '../surface-sync'
 import { surfaceVisibility } from '../visibility'
@@ -34,11 +35,11 @@ export const hidePipelines = visibility.hide
 
 export const confirmOf = (approvalId: string): Confirm | undefined => read(confirms)[approvalId]
 
-export const outcomeOf = (approvalId: string): Outcome | undefined => read(outcomes).find(outcome => outcome.approvalId === approvalId)
+export const outcomesOf = (run: RunSummary): Outcome[] => read(outcomes).filter(outcome => outcome.buildId === run.buildId)
 
-export function orphanOutcomes(run: RunSummary): Outcome[] {
-  return read(outcomes).filter(outcome => outcome.buildId === run.buildId && !run.approvals.some(approval => approval.approvalId === outcome.approvalId))
-}
+export const runPlaces = (run: RunSummary): Place[] => [
+  { projectId: run.projectId, projectName: run.projectName, repoId: run.repository?.id ?? null, repoName: run.repository?.name ?? null }
+]
 
 export const noteOf = (buildId: number): string | undefined => read(runNotes)[buildId]
 
@@ -131,6 +132,20 @@ export function openRun(org: string, run: RunSummary): Promise<void> {
       if (read(source) === org) setNote(run.buildId, messageOf(error))
     }
   })
+}
+
+export function openInAzureDevOps(org: string, run: RunSummary): void {
+  const opening = shell.openExternal(run.url)
+  setNote(run.buildId, null)
+  const show = (text: string): void => {
+    if (read(source) === org) setNote(run.buildId, text)
+  }
+  opening.then(
+    result => {
+      if (!result.opened && result.reason === 'consent-unavailable') show(OPEN_LINK_UNAVAILABLE)
+    },
+    error => show(messageOf(error))
+  )
 }
 
 export function toggleWatch(org: string, run: RunSummary): Promise<void> {

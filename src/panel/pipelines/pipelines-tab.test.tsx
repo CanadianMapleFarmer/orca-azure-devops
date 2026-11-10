@@ -1,9 +1,13 @@
-import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel } from 'orca/testing'
-import type { RunActionResult, RunFilter, RunState, StepState } from '../../shared/pipelines'
+import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TreeSnapshot } from 'orca/testing'
+import { OPEN_LINK_UNAVAILABLE } from '../../shared/messages'
+import type { RunActionResult, RunFilter, RunState, RunSummary, StepState } from '../../shared/pipelines'
 import type { OrgStatus } from '../../shared/types'
-import { closeCleanly, countNodes, mountPanel, org, requestsTo, type TestHost } from '../test-support'
-import { approvalOf, HOUR, MINUTE, NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './fixtures'
-import { stageLine } from './run-card'
+import { CHOOSE_ALL } from '../copy'
+import { closeCleanly, countNodes, mountPanel, org, reloadPanel, requestsTo, type TestHost } from '../test-support'
+import { approvalLine } from './approval'
+import { approvalOf, HOUR, largeRuns, MINUTE, NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './fixtures'
+import { stageChips, STAGE_TONE } from './run-card'
+import { runPlaces } from './state'
 
 let panel: TestPanel
 
@@ -14,13 +18,20 @@ interface OpenOptions {
   visible?: boolean
   tab?: string
   filter?: string
+  prefs?: Record<string, unknown>
 }
 
 async function open(snapshot: MockRequests['runs.snapshot'], more: MockRequests = {}, options: OpenOptions = {}) {
   const mounted = await mountPanel(
     options.orgs ?? [org('contoso')],
     { 'runs.snapshot': snapshot, ...more },
-    { visible: options.visible, persisted: { workspace: { tab: options.tab ?? 'pipelines', ...(options.filter ? { pipelinesFilter: options.filter } : {}) } } }
+    {
+      visible: options.visible,
+      persisted: {
+        plugin: options.prefs ? { runsPrefs: options.prefs } : {},
+        workspace: { tab: options.tab ?? 'pipelines', ...(options.filter ? { pipelinesFilter: options.filter } : {}) }
+      }
+    }
   )
   panel = mounted.panel
   return mounted.host
@@ -30,12 +41,16 @@ const inputsTo = (host: TestHost, name: string) => requestsTo(host, name).map(ca
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
-const numberOf = (card: TestElement): number => Number(String(card.props.description).match(/^20261105\.(\d+)/)?.[1])
+const numberOf = (card: TestElement): number => Number(card.text.match(/20261105\.(\d+)/)?.[1])
 
-const ids = () => panel.findAll({ type: 'Card' }).map(numberOf)
+const isCardProps = (props: Readonly<Record<string, unknown>> | undefined): boolean => props?.border === true && props.background === 'card'
+
+const cards = () => panel.findAll({ type: 'Box', text: /20261105\.\d+/ }).filter(box => isCardProps(box.props))
+
+const ids = () => cards().map(numberOf)
 
 const cardOf = (buildId: number): TestElement => {
-  const card = panel.findAll({ type: 'Card' }).find(item => numberOf(item) === buildId)
+  const card = cards().find(item => numberOf(item) === buildId)
   assert.ok(card, `run ${buildId} is drawn`)
   return card
 }
@@ -48,22 +63,132 @@ const within = (buildId: number, query: Parameters<TestPanel['findAll']>[0]): Te
   return found
 }
 
-const waitingBlocks = (buildId: number) => inside(cardOf(buildId), { type: 'Callout' }).filter(callout => callout.props.title === 'Waiting for approval')
+const stageRow = (buildId: number): TestElement | undefined =>
+  inside(cardOf(buildId), { type: 'Row' }).find(row => row.props.wrap === true && inside(row, { type: 'Badge' }).length > 0)
+
+const rowWith = (buildId: number, text: string): TestElement => {
+  const row = inside(cardOf(buildId), { type: 'Row' }).find(each => inside(each, { type: 'Button', text }).length > 0)
+  assert.ok(row, `${text} sits in a row of run ${buildId}`)
+  return row
+}
+
+const buttonsIn = (row: TestElement) =>
+  inside(row, { type: 'Button' }).map(button => [button.text, button.props.size, button.props.variant, button.props.tone])
+
+const stageBadges = (buildId: number): TestElement[] => {
+  const row = stageRow(buildId)
+  return row ? inside(row, { type: 'Badge' }) : []
+}
+
+const waitingLines = (buildId: number) => inside(cardOf(buildId), { type: 'Text' }).filter(line => line.props.tone === 'warning')
+
+const textOf = (node: TreeSnapshot | string | undefined): string => (typeof node === 'string' ? node : (node?.children ?? []).map(textOf).join(''))
+
+function outline(): string[] {
+  const lines: string[] = []
+  const walk = (node: TreeSnapshot | string | null, depth: number): void => {
+    if (node === null || typeof node === 'string') return
+    let inner = depth
+    if (node.type === 'Collapsible') {
+      lines.push(`${'  '.repeat(depth)}${node.props?.title}${node.props?.description ? ` [${node.props.description}]` : ''}`)
+      inner += 1
+    } else if (isCardProps(node.props)) {
+      lines.push(`${'  '.repeat(depth)}#${/20261105\.(\d+)/.exec(textOf(node))?.[1]}`)
+    }
+    for (const child of node.children ?? []) walk(child, inner)
+  }
+  walk(panel.tree(), 0)
+  return lines
+}
+
+const cardNode = (buildId: number): TreeSnapshot => {
+  let found: TreeSnapshot | undefined
+  const walk = (node: TreeSnapshot | string | null): void => {
+    if (node === null || typeof node === 'string' || found) return
+    if (isCardProps(node.props) && textOf(node).includes(`20261105.${buildId}`)) found = node
+    else node.children?.forEach(walk)
+  }
+  walk(panel.tree())
+  assert.ok(found, `run ${buildId} is drawn`)
+  return found
+}
+
+const WEB = { projectId: 'proj-web', projectName: 'Fabrikam Web' }
+const TOOLS = { projectId: 'proj-tools', projectName: 'Contoso Tools' }
+const BOARDS = { projectId: 'proj-boards', projectName: 'Fabrikam Boards' }
+const WEB_APP = { id: 'repo-web-app', name: 'web-app' }
+const WEB_API = { id: 'repo-api', name: 'fabrikam-api' }
+const TOOLS_APP = { id: 'repo-tools-app', name: 'web-app' }
+
+const runIn = (buildId: number, project: typeof WEB, repository: RunSummary['repository'], over: Partial<RunSummary> = {}): RunSummary =>
+  runOf(buildId, { ...project, repository, ...over })
+
+const everywhere =
+  (runs: RunSummary[]): MockRequests['runs.snapshot'] =>
+  input =>
+    runsSnapshotOf({ org: input.org, runs })
+
+const projectSelect = () => panel.find({ type: 'Select', label: 'Project' })
+const repoSelect = () => panel.find({ type: 'Select', label: 'Repository' })
+const optionsOf = (select: TestElement | null) => ((select?.props.options as { value: string; label: string }[] | undefined) ?? []).map(option => [option.value, option.label])
+
+function groups(): { title: unknown; description: unknown; open: unknown }[] {
+  const found: { title: unknown; description: unknown; open: unknown }[] = []
+  const walk = (node: TreeSnapshot | string | null): void => {
+    if (node === null || typeof node === 'string') return
+    if (node.type === 'Collapsible') found.push({ title: node.props?.title, description: node.props?.description, open: node.props?.open })
+    node.children?.forEach(walk)
+  }
+  walk(panel.tree())
+  return found
+}
+
+const groupHeaders = () => groups().map(group => [group.title, group.description])
+const groupStates = () => groups().map(group => [group.title, group.open])
 
 const KEPT = 'Azure DevOps is unreachable. Showing the last results.'
 
 const STATES: [RunState, string, string][] = [
   ['queued', 'queued', 'neutral'],
-  ['running', '● running', 'accent'],
-  ['waiting', '⏸ waiting for approval', 'warning'],
+  ['running', 'running', 'accent'],
+  ['waiting', 'waiting', 'warning'],
   ['cancelling', 'cancelling', 'neutral'],
   ['succeeded', '✓ succeeded', 'success'],
-  ['warning', '! partially succeeded', 'warning'],
-  ['failed', '✗ failed', 'danger'],
+  ['warning', '! partial', 'warning'],
+  ['failed', '✕ failed', 'danger'],
   ['canceled', 'canceled', 'neutral']
 ]
 
-test('runs show their state, stage bar and stage line', async () => {
+test('runs show their state and the age of when they were queued, started or finished', async () => {
+  const finished = (state: RunState) => state === 'succeeded' || state === 'warning' || state === 'failed' || state === 'canceled'
+  const runs = STATES.map(([state], index) =>
+    runOf(100 + index, {
+      state,
+      queuedAt: NOW - (10 + index) * MINUTE,
+      startedAt: state === 'queued' ? null : NOW - (9 + index) * MINUTE,
+      finishedAt: finished(state) ? NOW - 5 * MINUTE : null
+    })
+  )
+  await open(runsSnapshotOf({ runs }))
+  for (const [index, [state, text, tone]] of STATES.entries()) {
+    const badge = within(100 + index, { type: 'Badge' })
+    assert.equal(badge.text, text, state)
+    assert.equal(badge.props.tone, tone, state)
+  }
+  const age = (buildId: number) => within(buildId, { type: 'RelativeTime' })
+  assert.equal(age(100).props.at, runs[0].queuedAt)
+  assert.equal(age(101).props.at, runs[1].startedAt)
+  assert.equal(age(104).props.at, runs[4].finishedAt)
+  for (const buildId of [100, 101, 104]) {
+    assert.equal(age(buildId).props.format, 'short', String(buildId))
+    const wrapper = inside(cardOf(buildId), { type: 'Text' }).find(text => inside(text, { type: 'RelativeTime' }).length > 0)
+    assert.deepEqual([wrapper?.props.size, wrapper?.props.muted], ['xs', true], String(buildId))
+  }
+  for (const text of [/^queued /, /^started /, /^finished /]) assert.equal(inside(cardOf(100), { type: 'Text', text }).length, 0)
+  assert.equal(inside(cardOf(105), { type: 'Text', text: /✓|✗/ }).length, 0)
+})
+
+test("stage chips show each stage's name and mark in its tone", async () => {
   const stages: [string, StepState][] = [
     ['Build', 'succeeded'],
     ['Image', 'failed'],
@@ -74,51 +199,95 @@ test('runs show their state, stage bar and stage line', async () => {
     ['Lint', 'pending'],
     ['Docs', 'canceled']
   ]
-  const finished = (state: RunState) => state === 'succeeded' || state === 'warning' || state === 'failed' || state === 'canceled'
-  const runs = STATES.map(([state], index) =>
-    runOf(100 + index, {
-      state,
-      queuedAt: NOW - (10 + index) * MINUTE,
-      startedAt: state === 'queued' ? null : NOW - (9 + index) * MINUTE,
-      finishedAt: finished(state) ? NOW - 5 * MINUTE : null,
-      stages: index === 6 ? stages.map(([name, step]) => stageOf(name, step)) : null
-    })
+  await open(runsSnapshotOf({ runs: [runOf(1, { state: 'failed', stages: stages.map(([name, step]) => stageOf(name, step)) })] }))
+  assert.deepEqual(
+    stageBadges(1).map(chip => [chip.text, chip.props.tone]),
+    [
+      ['Build ✓', 'success'],
+      ['Image ✗', 'danger'],
+      ['Deploy production –', 'neutral'],
+      ['Test !', 'warning'],
+      ['Approve ⏸', 'warning'],
+      ['Smoke ●', 'accent'],
+      ['Lint ○', 'neutral'],
+      ['Docs ⊘', 'neutral']
+    ]
   )
-  await open(runsSnapshotOf({ runs }))
-  for (const [index, [state, text, tone]] of STATES.entries()) {
-    const badge = within(100 + index, { type: 'Badge' })
-    assert.equal(badge.text, text, state)
-    assert.equal(badge.props.tone, tone, state)
-  }
-  assert.match(within(100, { type: 'Text', text: /^queued / }).text, /^queued /)
-  assert.match(within(101, { type: 'Text', text: /^started / }).text, /^started /)
-  assert.match(within(104, { type: 'Text', text: /^finished / }).text, /^finished /)
-  assert.ok(within(100, { type: 'RelativeTime' }))
-
-  const bar = inside(cardOf(106), { type: 'Box' }).filter(box => box.props.width === 14)
-  assert.deepEqual(bar.map(box => box.props.background), ['success', 'danger', 'muted', 'warning', 'warning', 'accent', 'muted', 'muted'])
-  assert.ok(bar.every(box => box.props.height === 6 && box.props.radius === 'full'))
-  const line = within(106, { type: 'Text', text: /^Build ✓/ })
-  assert.equal(line.text, 'Build ✓ · Image ✗ · Deploy production – · Test ! · Approve ⏸ · Smoke ● · Lint ○ · Docs ⊘')
-  assert.equal(line.props.size, 'xs')
-  assert.equal(line.props.muted, true)
-  assert.equal(line.props.truncate, true)
-  assert.equal(inside(cardOf(105), { type: 'Box' }).length, 0)
-  assert.equal(inside(cardOf(105), { type: 'Text', text: /✓|✗/ }).length, 0)
+  assert.equal(inside(cardOf(1), { type: 'Box' }).filter(box => box.props.width !== undefined).length, 0)
+  assert.equal(inside(stageRow(1) as TestElement, { type: 'Box' }).length, 0)
+  assert.deepEqual(panel.summary().filter(line => line.startsWith('Box')), [])
+  assert.equal(inside(cardOf(1), { type: 'Text', text: /Build|Image|Deploy production|Lint|Docs/ }).length, 0)
 })
 
-test('a run card names the pipeline, run, branch, PR and requester, and links to Azure DevOps', async () => {
+test('a run card names the pipeline, run, branch, PR and requester', async () => {
+  const running = { state: 'running', finishedAt: null } as const
   const runs = [
-    runOf(201, { pipeline: { id: 9, name: 'web-app-cd' }, branch: 'main' }),
-    runOf(202, { prId: 77, requestedFor: { id: 'u-grace', name: 'Grace Hopper' } })
+    runOf(201, { ...running, pipeline: { id: 9, name: 'web-app-cd' }, branch: 'main' }),
+    runOf(202, { ...running, prId: 77, requestedFor: { id: 'u-grace', name: 'Grace Hopper' } })
+  ]
+  await open(runsSnapshotOf({ runs }), {}, { filter: 'running' })
+  for (const [buildId, name] of [[201, 'web-app-cd'], [202, 'web-app-ci']] as const) {
+    const title = within(buildId, { type: 'Text', text: name })
+    assert.deepEqual([title.props.weight, title.props.size], ['semibold', 'sm'], name)
+  }
+  assert.equal(within(201, { type: 'Text', text: /^20261105\.201 / }).text, '20261105.201 · main · Ada Lovelace')
+  assert.equal(within(202, { type: 'Text', text: /^20261105\.202 / }).text, '20261105.202 · PR !77 · Grace Hopper')
+})
+
+test('a run card is a compact bordered box: state and pipeline with the age, the run number, the stage chips, then the actions', async () => {
+  const run = runOf(301, {
+    state: 'failed',
+    pipeline: { id: 9, name: 'web-app-cd' },
+    branch: 'main',
+    startedAt: NOW - 29 * MINUTE,
+    finishedAt: NOW - 10 * MINUTE,
+    stages: [stageOf('Build', 'succeeded')]
+  })
+  await open(runsSnapshotOf({ runs: [run, runOf(302, { prId: 77 })] }))
+  const card = cardNode(301)
+  assert.equal(card.type, 'Box')
+  assert.deepEqual(card.props, { border: true, radius: 'md', background: 'card', padding: 'sm', gap: 'xs' })
+  const [first, meta, chips, actions, ...rest] = card.children as TreeSnapshot[]
+  assert.deepEqual([first.type, first.props?.justify, first.props?.align], ['Row', 'between', 'center'])
+  assert.deepEqual(first.children?.map(child => (child as TreeSnapshot).type), ['Box', 'Box'])
+  const [left, right] = first.children as TreeSnapshot[]
+  assert.deepEqual([left.props?.direction, left.props?.grow, left.props?.minWidth], ['row', true, 0])
+  const [badgeBox, nameBox] = left.children as TreeSnapshot[]
+  assert.equal(badgeBox.props?.shrink, false)
+  const badge = badgeBox.children?.[0] as TreeSnapshot
+  assert.deepEqual([badge.type, badge.props?.tone, textOf(badge)], ['Badge', 'danger', '✕ failed'])
+  assert.deepEqual([nameBox.props?.grow, nameBox.props?.minWidth], [true, 0])
+  const name = nameBox.children?.[0] as TreeSnapshot
+  assert.deepEqual([name.type, name.props?.weight, name.props?.size, name.props?.truncate, textOf(name)], ['Text', 'semibold', 'sm', true, 'web-app-cd'])
+  assert.equal(right.props?.shrink, false)
+  const age = right.children?.[0] as TreeSnapshot
+  assert.deepEqual([age.type, age.props?.size, age.props?.muted], ['Text', 'xs', true])
+  const waited = age.children?.[0] as TreeSnapshot
+  assert.deepEqual([waited.type, waited.props?.at, waited.props?.format], ['RelativeTime', run.finishedAt, 'short'])
+  assert.deepEqual([meta.type, meta.props?.size, meta.props?.muted, textOf(meta)], ['Text', 'xs', true, '20261105.301 · main'])
+  assert.deepEqual(chips.children?.map(child => textOf(child)), ['Build ✓'])
+  assert.deepEqual(
+    [actions.type, actions.props?.gap, actions.children?.map(child => (child as TreeSnapshot).type)],
+    ['Row', 'xs', ['Button', 'IconButton', 'IconButton']]
+  )
+  assert.deepEqual(rest, [])
+  assert.equal(textOf(cardNode(302).children?.[1]), '20261105.302 · PR !77')
+})
+
+test('on Mine the requester is left out; on the other filters it is shown', async () => {
+  const runs = [
+    waitingRun(1, [approvalOf('ap-1', 1)]),
+    runOf(2, { state: 'failed', finishedAt: NOW - 10 * MINUTE, branch: 'main', pipeline: { id: 21, name: 'web-app-ci' } })
   ]
   await open(runsSnapshotOf({ runs }))
-  assert.equal(cardOf(201).label, 'web-app-cd')
-  assert.equal(cardOf(201).props.description, '20261105.201 · main · Ada Lovelace')
-  assert.equal(cardOf(202).label, 'web-app-ci')
-  assert.equal(cardOf(202).props.description, '20261105.202 · develop · PR 77 · Grace Hopper')
-  assert.equal(within(201, { type: 'Link' }).text, 'Open in Azure DevOps')
-  assert.equal(within(201, { type: 'Link' }).props.href, runs[0].url)
+  const metaOf = (buildId: number) => within(buildId, { type: 'Text', text: new RegExp(`^20261105\\.${buildId} `) }).text
+  assert.deepEqual([metaOf(1), metaOf(2)], ['20261105.1 · main', '20261105.2 · main'])
+  for (const [label, buildId] of [['Running', 1], ['Needs me · 1', 1], ['Failed · 1', 2]] as const) {
+    await panel.press({ type: 'Button', text: label })
+    assert.equal(metaOf(buildId), `20261105.${buildId} · main · Ada Lovelace`, label)
+  }
+  await panel.press({ type: 'Button', text: 'Mine' })
+  assert.equal(metaOf(1), '20261105.1 · main')
 })
 
 test('running runs come first, newest first', async () => {
@@ -132,26 +301,42 @@ test('running runs come first, newest first', async () => {
   assert.deepEqual(ids(), [304, 302, 303, 301])
 })
 
-test('stageLine writes each stage with its glyph and says how many more there are', () => {
-  assert.equal(stageLine([stageOf('Build', 'succeeded'), stageOf('Image', 'failed'), stageOf('Deploy production', 'skipped')]), 'Build ✓ · Image ✗ · Deploy production –')
-  assert.equal(stageLine([]), '')
-  const many = Array.from({ length: 14 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
-  assert.equal(stageLine(many), `${many.slice(0, 12).map(stage => `${stage.name} ✓`).join(' · ')} · +2 more`)
-  assert.equal(stageLine(many.slice(0, 12)).includes('more'), false)
+test('stageChips maps every step state to its mark and tone', () => {
+  const expected: [StepState, string, string][] = [
+    ['succeeded', '✓', 'success'],
+    ['failed', '✗', 'danger'],
+    ['waiting', '⏸', 'warning'],
+    ['warning', '!', 'warning'],
+    ['running', '●', 'accent'],
+    ['pending', '○', 'neutral'],
+    ['skipped', '–', 'neutral'],
+    ['canceled', '⊘', 'neutral']
+  ]
+  for (const [state, mark, tone] of expected) assert.deepEqual(stageChips([stageOf('Deploy production', state)]), [{ tone, text: `Deploy production ${mark}` }], state)
+  assert.deepEqual(Object.keys(STAGE_TONE).sort(), expected.map(([state]) => state).sort())
+  assert.deepEqual(stageChips([]), [])
+  const many = Array.from({ length: 15 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
+  assert.deepEqual(stageChips(many).map(chip => chip.text), many.slice(0, 12).map(stage => `${stage.name} ✓`))
 })
 
-test('a run with an empty stage list draws no stage bar and no stage line', async () => {
-  await open(runsSnapshotOf({ runs: [runOf(1, { stages: [] }), runOf(2, { stages: [stageOf('Build', 'succeeded')] })] }))
-  assert.equal(inside(cardOf(1), { type: 'Box' }).length, 0)
-  assert.equal(inside(cardOf(1), { type: 'Text' }).filter(text => text.props.size === 'xs').length, 0)
-  assert.equal(inside(cardOf(2), { type: 'Box' }).length, 1)
+test('a run with no stages or an empty stage list draws no stage chips', async () => {
+  await open(runsSnapshotOf({ runs: [runOf(1, { stages: null }), runOf(2, { stages: [] }), runOf(3, { stages: [stageOf('Build', 'succeeded')] })] }))
+  for (const buildId of [1, 2]) {
+    assert.equal(stageRow(buildId), undefined, `run ${buildId} has no chip row`)
+    assert.equal(inside(cardOf(buildId), { type: 'Badge' }).length, 1, `run ${buildId} shows only its state`)
+  }
+  assert.deepEqual(stageBadges(3).map(chip => chip.text), ['Build ✓'])
 })
 
-test('a stage bar draws at most twelve segments', async () => {
-  const stages = Array.from({ length: 15 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
+test('twelve stages draw twelve chips and no overflow count', async () => {
+  const stages = Array.from({ length: 12 }, (_, index) => stageOf(`S${index + 1}`, 'succeeded'))
   await open(runsSnapshotOf({ runs: [runOf(1, { stages })] }))
-  assert.equal(inside(cardOf(1), { type: 'Box' }).filter(box => box.props.width === 14).length, 12)
-  assert.match(within(1, { type: 'Text', text: /^S1 ✓/ }).text, / · \+3 more$/)
+  assert.deepEqual(
+    stageBadges(1).map(chip => chip.text),
+    stages.map(stage => `${stage.name} ✓`)
+  )
+  assert.equal(inside(cardOf(1), { type: 'Badge', text: /more/ }).length, 0)
+  assert.equal(inside(cardOf(1), { type: 'Text', text: /more/ }).length, 0)
 })
 
 const mixed = () => [
@@ -166,13 +351,13 @@ test('filters switch the list and show the counts', async () => {
   const filterButtons = () => panel.findAll({ type: 'Button' }).map(button => button.text).filter(text => /^(Mine|Running|Needs me|Failed)/.test(text))
   assert.deepEqual(filterButtons(), ['Mine', 'Running', 'Needs me · 2', 'Failed · 1'])
   const variantOf = (text: string) => panel.find({ type: 'Button', text })?.props.variant
-  assert.equal(variantOf('Mine'), 'solid')
+  assert.equal(variantOf('Mine'), 'outline')
   assert.equal(variantOf('Running'), 'ghost')
   assert.deepEqual(ids(), [3, 1])
 
   await panel.press({ type: 'Button', text: 'Running' })
   assert.deepEqual(ids(), [4, 3, 2])
-  assert.equal(variantOf('Running'), 'solid')
+  assert.equal(variantOf('Running'), 'outline')
   assert.equal(variantOf('Mine'), 'ghost')
 
   await panel.press({ type: 'Button', text: 'Needs me · 2' })
@@ -181,76 +366,168 @@ test('filters switch the list and show the counts', async () => {
 
   await panel.press({ type: 'Button', text: 'Failed · 1' })
   assert.deepEqual(ids(), [1])
-  assert.equal(variantOf('Failed · 1'), 'solid')
+  assert.equal(variantOf('Failed · 1'), 'outline')
 })
 
-test('the filter buttons wrap and carry no count at zero', async () => {
+test('the filters are one labelled switch of small buttons inside the toolbar row that wraps, with no count at zero', async () => {
   await open(runsSnapshotOf({ runs: [runOf(1)] }))
-  assert.equal(panel.find({ type: 'Button', text: 'Needs me' })?.props.size, 'sm')
+  assert.equal(panel.find({ type: 'Button', text: 'Needs me' })?.props.size, 'xs')
   assert.ok(panel.find({ type: 'Button', text: 'Failed' }))
-  const row = panel.find({ type: 'Row', text: /^Mine/ })
-  assert.equal(row?.props.wrap, true)
+  const filters = panel.find({ type: 'Toolbar', label: 'Runs filter' })
+  assert.ok(filters)
+  assert.deepEqual(
+    panel.findAll({ type: 'Button' }).filter(button => button.path.startsWith(`${filters.path}/`)).map(button => button.text),
+    ['Mine', 'Running', 'Needs me', 'Failed']
+  )
+  const rows = panel.findAll({ type: 'Row' }).filter(row => filters.path.startsWith(`${row.path}/`))
+  assert.ok(rows.some(row => row.props.wrap === true))
 })
 
 test('the chosen filter is remembered for the workspace', async () => {
   await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'failed' })
   assert.deepEqual(ids(), [1])
-  assert.equal(panel.find({ type: 'Button', text: 'Failed · 1' })?.props.variant, 'solid')
+  assert.equal(panel.find({ type: 'Button', text: 'Failed · 1' })?.props.variant, 'outline')
 })
 
 test('an unknown remembered filter falls back to Mine', async () => {
   await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'everything' })
   assert.deepEqual(ids(), [3, 1])
-  assert.equal(panel.find({ type: 'Button', text: 'Mine' })?.props.variant, 'solid')
+  assert.equal(panel.find({ type: 'Button', text: 'Mine' })?.props.variant, 'outline')
   await panel.press({ type: 'Button', text: 'Failed · 1' })
   assert.deepEqual(ids(), [1])
   assert.equal(panel.persisted.workspace.pipelinesFilter, 'failed')
 })
 
+const GRACE = { id: 'u-grace', name: 'Grace Hopper', uniqueName: 'grace@contoso.com', isGroup: false }
+const RELEASE = { id: 'g-release', name: 'Release approvers', uniqueName: 'release', isGroup: true }
+
 test('Needs me shows the approval with approvers and waiting time', async () => {
   const approval = approvalOf('ap-1', 5, {
-    approvers: [
-      { id: 'u-grace', name: 'Grace Hopper', uniqueName: 'grace@contoso.com', isGroup: false },
-      { id: 'g-release', name: 'Release approvers', uniqueName: 'release', isGroup: true }
-    ],
+    approvers: [GRACE, RELEASE],
     minRequired: 2,
     instructions: 'Check the smoke tests first.',
     createdAt: NOW - 20 * MINUTE
   })
   await open(runsSnapshotOf({ runs: [waitingRun(5, [approval])] }), {}, { filter: 'needsMe' })
   assert.deepEqual(ids(), [5])
-  const callout = within(5, { type: 'Callout' })
-  assert.equal(callout.props.tone, 'warning')
-  assert.equal(callout.props.title, 'Waiting for approval')
-  assert.equal(within(5, { type: 'Text', text: /^production · waiting / }).props.size, 'sm')
-  const waited = inside(cardOf(5), { type: 'RelativeTime' }).find(item => item.props.format === 'duration')
-  assert.equal(waited?.props.at, approval.createdAt)
-  assert.equal(within(5, { type: 'Text', text: 'Approvers: Grace Hopper, Release approvers (group) · needs 2' }).props.size, 'sm')
-  assert.equal(within(5, { type: 'Text', text: 'Check the smoke tests first.' }).props.muted, true)
+  const [line, ...others] = waitingLines(5)
+  assert.equal(others.length, 0)
+  assert.match(line.text, /^production needs 2 of Grace Hopper, Release approvers \(group\) · waiting /)
+  assert.equal(line.props.size, 'sm')
+  const waited = inside(line, { type: 'RelativeTime' })[0]
+  assert.equal(waited.props.format, 'duration')
+  assert.equal(waited.props.at, approval.createdAt)
+  assert.equal(inside(cardOf(5), { type: 'Callout' }).length, 0)
+  assert.equal(inside(cardOf(5), { type: 'Text', text: /^Approvers/ }).length, 0)
+  assert.equal(inside(cardOf(5), { type: 'Text', text: 'Check the smoke tests first.' }).length, 0)
   assert.equal(inside(cardOf(5), { type: 'Button', text: /Approve|Reject/ }).length, 0)
 })
 
-test('an approval names its environment, else its stage, else a stage; one approver needs no count; no approvers, no line', async () => {
+test('a waiting approval shows one line: where, who and how long', async () => {
+  const forms = [
+    approvalOf('a', 41, { approvers: [GRACE] }),
+    approvalOf('b', 42, { approvers: [GRACE, RELEASE], minRequired: 2 }),
+    approvalOf('c', 43, { approvers: [], minRequired: 1 })
+  ]
+  const expected = [
+    'production needs Grace Hopper',
+    'production needs 2 of Grace Hopper, Release approvers (group)',
+    'production'
+  ]
+  assert.deepEqual(forms.map(approvalLine), expected)
+  await open(runsSnapshotOf({ runs: forms.map((approval, index) => waitingRun(41 + index, [approval])) }))
+  for (const [index, approval] of forms.entries()) {
+    const buildId = 41 + index
+    const [line, ...others] = waitingLines(buildId)
+    assert.equal(others.length, 0, `run ${buildId} has one line`)
+    assert.ok(line.text.startsWith(`${expected[index]} · waiting `), line.text)
+    assert.deepEqual([line.props.tone, line.props.size], ['warning', 'sm'])
+    const waited = inside(line, { type: 'RelativeTime' })
+    assert.deepEqual(waited.map(item => [item.props.at, item.props.format]), [[approval.createdAt, 'duration']])
+  }
+})
+
+test('an approval names its environment, else its stage, else a stage; one approver needs no count; no approvers leave the place alone', async () => {
   const runs = [
     waitingRun(11, [approvalOf('a', 11, { environment: null, stage: 'Deploy production' })]),
     waitingRun(12, [approvalOf('b', 12, { environment: null, stage: null })]),
     waitingRun(13, [approvalOf('c', 13, { approvers: [], minRequired: 1 })])
   ]
   await open(runsSnapshotOf({ runs }))
-  assert.match(within(11, { type: 'Text', text: /^Deploy production · waiting / }).text, /^Deploy production · waiting /)
-  assert.match(within(12, { type: 'Text', text: /^A stage · waiting / }).text, /^A stage · waiting /)
-  assert.equal(inside(cardOf(11), { type: 'Text', text: 'Approvers: Grace Hopper' }).length, 1)
-  assert.equal(inside(cardOf(13), { type: 'Text', text: /^Approvers/ }).length, 0)
+  assert.match(waitingLines(11)[0].text, /^Deploy production needs Grace Hopper · waiting /)
+  assert.match(waitingLines(12)[0].text, /^A stage needs Grace Hopper · waiting /)
+  assert.match(waitingLines(13)[0].text, /^production · waiting /)
+  assert.equal(inside(cardOf(13), { type: 'Text', text: /needs/ }).length, 0)
+  assert.equal(inside(cardOf(11), { type: 'Text', text: /Approvers/ }).length, 0)
 })
 
 test('long instructions are cut at 500 characters with an ellipsis', async () => {
   const instructions = 'x'.repeat(600)
-  await open(runsSnapshotOf({ runs: [waitingRun(5, [approvalOf('ap-1', 5, { instructions })])] }))
+  await open(runsSnapshotOf({ runs: [waitingRun(5, [approvalOf('ap-1', 5, { instructions, canApprove: true })])] }))
   const shown = within(5, { type: 'Text', text: /^x+/ }).text
   assert.equal(shown.length, 500)
   assert.equal(shown, `${'x'.repeat(499)}…`)
-  await panel.post('runs.changed', runsSnapshotOf({ runs: [waitingRun(5, [approvalOf('ap-1', 5, { instructions: 'y'.repeat(500) })])] }))
+  await panel.post('runs.changed', runsSnapshotOf({ runs: [waitingRun(5, [approvalOf('ap-1', 5, { instructions: 'y'.repeat(500), canApprove: true })])] }))
   assert.equal(within(5, { type: 'Text', text: /^y+/ }).text, 'y'.repeat(500))
+})
+
+test('Approve and Reject show only for an approval the person can give, with its instructions', async () => {
+  const mine = approvalOf('ap-1', 5, { canApprove: true, instructions: 'Check the smoke tests first.', environment: 'production' })
+  const theirs = approvalOf('ap-2', 5, { canApprove: false, instructions: 'Only for the release managers.', environment: 'staging' })
+  await open(runsSnapshotOf({ runs: [waitingRun(5, [mine, theirs])] }))
+  const shape = () => {
+    const parts: string[] = []
+    const walk = (node: TreeSnapshot | string): void => {
+      if (typeof node === 'string') return
+      if (node.type === 'Text' || node.type === 'Button') parts.push(textOf(node))
+      else node.children?.forEach(walk)
+    }
+    walk(cardNode(5))
+    return parts.filter(part => /needs|Approve…|Reject…|smoke|managers/.test(part)).map(part => part.replace(/ · waiting.*$/, ''))
+  }
+  assert.deepEqual(shape(), ['production needs Grace Hopper', 'Check the smoke tests first.', 'Approve…', 'Reject…', 'staging needs Grace Hopper'])
+  const instructions = inside(cardOf(5), { type: 'Text', text: 'Check the smoke tests first.' })[0]
+  assert.deepEqual([instructions.props.size, instructions.props.muted], ['xs', true])
+  assert.equal(inside(cardOf(5), { type: 'Text', text: 'Only for the release managers.' }).length, 0)
+})
+
+test('an approval is one warning line, its instructions, then one row of buttons: Approve…, Reject…, Share for approval', async () => {
+  const approval = approvalOf('ap-1', 5, { canApprove: true, instructions: 'Check the smoke tests first.' })
+  await open(runsSnapshotOf({ runs: [waitingRun(5, [approval])] }))
+  const card = cardNode(5)
+  const [, , , line, instructions, buttons, actions, ...rest] = card.children as TreeSnapshot[]
+  assert.deepEqual([line.type, line.props?.size, line.props?.tone], ['Text', 'sm', 'warning'])
+  assert.match(textOf(line), /^production needs Grace Hopper · waiting /)
+  assert.deepEqual([instructions.type, instructions.props?.size, instructions.props?.muted, textOf(instructions)], ['Text', 'xs', true, 'Check the smoke tests first.'])
+  assert.deepEqual([buttons.type, buttons.props?.gap, buttons.props?.wrap], ['Row', 'xs', true])
+  assert.deepEqual(
+    buttons.children?.map(child => [textOf(child), (child as TreeSnapshot).props?.size, (child as TreeSnapshot).props?.variant, (child as TreeSnapshot).props?.tone]),
+    [
+      ['Approve…', 'xs', 'solid', 'accent'],
+      ['Reject…', 'xs', 'outline', 'danger'],
+      ['Share for approval', 'xs', 'outline', undefined]
+    ]
+  )
+  assert.equal(actions.type, 'Row')
+  assert.deepEqual(rest, [])
+})
+
+test('when the person cannot approve, Share for approval is the accent button and the only one in the approval row', async () => {
+  await open(runsSnapshotOf({ runs: [waitingRun(6, [approvalOf('ap-2', 6, { instructions: 'Only for the release managers.' })])] }))
+  assert.deepEqual(buttonsIn(rowWith(6, 'Share for approval')), [['Share for approval', 'xs', 'solid', 'accent']])
+  assert.equal(inside(cardOf(6), { type: 'Text', text: 'Only for the release managers.' }).length, 0)
+  assert.equal(inside(cardOf(6), { type: 'Button', text: /^(Approve|Reject)/ }).length, 0)
+})
+
+test('with several approvals each keeps its own buttons and Share for approval closes the last row once', async () => {
+  const mine = approvalOf('ap-1', 5, { canApprove: true, environment: 'production' })
+  const theirs = approvalOf('ap-2', 5, { environment: 'staging' })
+  await open(runsSnapshotOf({ runs: [waitingRun(5, [mine, theirs])] }))
+  const rows = inside(cardOf(5), { type: 'Row' }).filter(
+    row => row.props.wrap === true && inside(row, { type: 'Button' }).length > 0 && inside(row, { type: 'Button', text: 'Open run' }).length === 0
+  )
+  assert.deepEqual(rows.map(row => buttonsIn(row).map(([text]) => text)), [['Approve…', 'Reject…'], ['Share for approval']])
+  assert.equal(buttonsIn(rows[1])[0][2], 'outline')
 })
 
 const approvable = () => runsSnapshotOf({ runs: [waitingRun(5, [approvalOf('ap-1', 5, { canApprove: true })])] })
@@ -269,6 +546,8 @@ test('Approve asks for a comment, sends runs.decide only on confirm, and shows t
   assert.equal(inside(cardOf(5), { type: 'Button', text: 'Reject…' }).length, 0)
   assert.equal(within(5, { type: 'Button', text: 'Approve' }).props.tone, 'success')
   assert.equal(within(5, { type: 'Button', text: 'Cancel' }).props.variant, 'ghost')
+  assert.deepEqual(buttonsIn(rowWith(5, 'Cancel')).map(([text, size]) => [text, size]), [['Approve', 'xs'], ['Cancel', 'xs']])
+  assert.equal(inside(cardOf(5), { type: 'Button', text: 'Share for approval' }).length, 1)
 
   await panel.type({ type: 'Textarea', label: 'Comment (optional)' }, 'Ship it')
   assert.deepEqual(requestsTo(host, 'runs.decide'), [])
@@ -350,7 +629,7 @@ test('only an approval the person can give shows Approve and Reject', async () =
   ]
   await open(runsSnapshotOf({ runs }))
   assert.equal(inside(cardOf(5), { type: 'Button', text: 'Approve…' }).length, 1)
-  assert.equal(waitingBlocks(5).length, 2)
+  assert.equal(waitingLines(5).length, 2)
   assert.equal(inside(cardOf(6), { type: 'Button', text: 'Approve…' }).length, 0)
 })
 
@@ -377,7 +656,7 @@ test('a result stays on the run after its approval leaves the snapshot', async (
   await panel.press({ type: 'Button', text: 'Approve…' })
   await panel.press({ type: 'Button', text: 'Approve' })
   await panel.post('runs.changed', runsSnapshotOf({ runs: [waitingRun(5, [], { state: 'running' })], updatedAt: NOW + 1 }))
-  assert.equal(waitingBlocks(5).length, 0)
+  assert.equal(waitingLines(5).length, 0)
   assert.equal(within(5, { type: 'Callout', text: 'Approved.' }).props.tone, 'success')
 })
 
@@ -392,10 +671,11 @@ test('Watch sends runs.watch and the bell follows the snapshot', async () => {
       }
     }
   )
-  const bell = () => within(7, { type: 'IconButton' })
+  const bell = () => within(7, { type: 'IconButton', label: /^(Watch|Stop watching)$/ })
   assert.equal(bell().label, 'Watch')
   assert.equal(bell().props.icon, 'bell')
   assert.equal(bell().props.variant, 'ghost')
+  assert.equal(bell().props.size, 'xs')
   await panel.press(bell())
   assert.deepEqual(inputsTo(host, 'runs.watch'), [{ org: 'contoso', projectId: 'proj-web', buildId: 7, watched: true }])
   assert.equal(bell().label, 'Stop watching')
@@ -412,13 +692,68 @@ test('a finished run can be watched only while it is, and a failed watch shows i
       throw hostError('action_failed', 'You can watch up to 20 runs.')
     }
   })
-  assert.equal(within(8, { type: 'IconButton' }).disabled, true)
-  assert.equal(within(9, { type: 'IconButton' }).label, 'Stop watching')
-  assert.equal(within(9, { type: 'IconButton' }).disabled, false)
-  await panel.press(within(10, { type: 'IconButton' }))
+  const bellOf = (buildId: number) => within(buildId, { type: 'IconButton', label: /^(Watch|Stop watching)$/ })
+  assert.equal(bellOf(8).disabled, true)
+  assert.equal(bellOf(9).label, 'Stop watching')
+  assert.equal(bellOf(9).disabled, false)
+  await panel.press(bellOf(10))
   assert.equal(within(10, { type: 'Callout' }).text, 'You can watch up to 20 runs.')
   assert.equal(within(10, { type: 'Callout' }).props.tone, 'danger')
   assert.equal(inside(cardOf(8), { type: 'Callout' }).length, 0)
+})
+
+test('the actions row holds Open run, the Watch bell and an Open in Azure DevOps icon, all extra small, with no link and no Share', async () => {
+  const approval = approvalOf('ap-1', 5, { canApprove: true })
+  await open(runsSnapshotOf({ runs: [waitingRun(5, [approval]), runOf(7, { state: 'running', finishedAt: null })] }))
+  for (const buildId of [5, 7]) {
+    const row = rowWith(buildId, 'Open run')
+    assert.deepEqual(buttonsIn(row), [['Open run', 'xs', 'outline', undefined]], String(buildId))
+    assert.deepEqual(
+      inside(row, { type: 'IconButton' }).map(button => [button.label, button.props.icon, button.props.size, button.props.variant]),
+      [
+        ['Watch', 'bell', 'xs', 'ghost'],
+        ['Open in Azure DevOps', 'open-external', 'xs', 'ghost']
+      ],
+      String(buildId)
+    )
+    assert.equal(inside(cardOf(buildId), { type: 'Link' }).length, 0, String(buildId))
+  }
+  assert.equal(inside(rowWith(5, 'Open run'), { type: 'Button', text: 'Share for approval' }).length, 0)
+})
+
+const adoLink = (buildId: number) => within(buildId, { type: 'IconButton', label: 'Open in Azure DevOps' })
+
+test('Open in Azure DevOps hands the run address to the browser and shows nothing when it opens', async () => {
+  const runs = [runOf(1), runOf(2, { finishedAt: NOW - HOUR })]
+  const host = await open(runsSnapshotOf({ runs }))
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press(adoLink(2))
+  assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: runs[1].url }])
+  assert.equal(panel.find({ type: 'Callout' }), null)
+})
+
+test('a link Orca refuses to open shows the error under that run and the next press clears it', async () => {
+  const host = await open(runsSnapshotOf({ runs: [runOf(1), runOf(2, { finishedAt: NOW - HOUR })] }))
+  host.respond('shell.openExternal', () => {
+    throw hostError('action_failed', 'Orca could not open the link.')
+  })
+  await panel.press(adoLink(2))
+  assert.deepEqual([within(2, { type: 'Callout' }).props.tone, within(2, { type: 'Callout' }).text], ['danger', 'Orca could not open the link.'])
+  assert.equal(inside(cardOf(1), { type: 'Callout' }).length, 0)
+  host.respond('shell.openExternal', { opened: true })
+  await panel.press(adoLink(2))
+  assert.equal(panel.find({ type: 'Callout' }), null)
+  assert.equal(host.callsOf('shell.openExternal').length, 2)
+})
+
+test('a link Orca could not ask about shows a fixed message, and one the person declined stays silent', async () => {
+  const host = await open(runsSnapshotOf({ runs: [runOf(1)] }))
+  host.respond('shell.openExternal', { opened: false, reason: 'consent-unavailable' })
+  await panel.press(adoLink(1))
+  assert.deepEqual([within(1, { type: 'Callout' }).props.tone, within(1, { type: 'Callout' }).text], ['danger', OPEN_LINK_UNAVAILABLE])
+  host.respond('shell.openExternal', { opened: false, reason: 'cancelled' })
+  await panel.press(adoLink(1))
+  assert.equal(panel.find({ type: 'Callout' }), null)
 })
 
 test('Open run sends runs.open and shows a refusal under that run', async () => {
@@ -543,7 +878,7 @@ test("each filter's empty state", async () => {
     const empty = panel.find({ type: 'EmptyState' })
     assert.equal(empty?.label, EMPTY[filter][0], filter)
     assert.equal(empty?.props.description, EMPTY[filter][1], filter)
-    assert.equal(panel.find({ type: 'Card' }), null, filter)
+    assert.deepEqual(ids(), [], filter)
   }
 })
 
@@ -569,29 +904,29 @@ test('thirty runs show no cap note', async () => {
   assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
 })
 
-test('thirty runs with twelve stages and an approval each stay under 2,000 nodes', async () => {
-  const stages = Array.from({ length: 12 }, (_, index) => stageOf(`Stage number ${index + 1}`, index < 8 ? 'succeeded' : 'waiting'))
-  const runs = Array.from({ length: 30 }, (_, index) =>
-    waitingRun(
-      2000 + index,
-      [
-        approvalOf(`ap-${index}`, 2000 + index, {
-          canApprove: true,
-          instructions: 'z'.repeat(600),
-          minRequired: 2,
-          approvers: Array.from({ length: 3 }, (_, who) => ({ id: `u-${who}`, name: `Approver ${who}`, uniqueName: `a${who}@contoso.com`, isGroup: who === 2 }))
-        })
-      ],
-      { stages, watched: index % 2 === 0 }
-    )
-  )
-  await open(runsSnapshotOf({ runs }))
+test('thirty runs with approvals across projects and repositories, all open, stay under 2,000 nodes and 450 KiB', async () => {
+  await open(runsSnapshotOf({ runs: largeRuns() }))
   assert.deepEqual(panel.errors, [])
   assert.equal(ids().length, 30)
-  const nodes = countNodes(panel.tree())
-  assert.ok(nodes < 2000, `${nodes} nodes`)
+  assert.deepEqual(
+    groupStates(),
+    [
+      ['Contoso Tools · web-app · 7 runs', true],
+      ['Fabrikam Boards · boards-app · 7 runs', true],
+      ['Fabrikam Web · 2 repos · 16 runs', true],
+      ['fabrikam-api · 8 runs', true],
+      ['web-app · 8 runs', true]
+    ]
+  )
+  const withinLimits = () => {
+    const nodes = countNodes(panel.tree())
+    const bytes = new TextEncoder().encode(JSON.stringify(panel.tree())).length
+    assert.ok(nodes < 2_000, `${nodes} nodes`)
+    assert.ok(bytes < 450 * 1024, `${bytes} bytes`)
+  }
+  withinLimits()
   await panel.press({ type: 'Button', text: 'Approve…' })
-  assert.ok(countNodes(panel.tree()) < 2000)
+  withinLimits()
 })
 
 test('only the selected tab is drawn, so the tabs never add up past the node limit', async () => {
@@ -674,47 +1009,322 @@ test("switching organization loads that org and drops the other one's results", 
   await panel.press({ type: 'Button', text: 'Open run' })
   assert.equal(panel.findAll({ type: 'Callout' }).length, 1)
   await panel.select({ label: 'Organization' }, 'fabrikam')
-  assert.equal(cardOf(2).label, 'fabrikam-ci')
+  assert.ok(within(2, { type: 'Text', text: 'fabrikam-ci' }))
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.deepEqual(inputsTo(host, 'runs.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
 })
 
-test('every waiting approval offers Share for approval, whether or not the person can approve it', async () => {
+test('Share for approval shows only on a waiting run and shares every waiting approval of that run', async () => {
   const runs = [
-    waitingRun(21, [approvalOf('a', 21, { canApprove: true }), approvalOf('b', 21)]),
+    waitingRun(21, [approvalOf('a', 21, { canApprove: true }), approvalOf('b', 21, { environment: 'staging' })]),
     waitingRun(22, [approvalOf('c', 22)]),
-    runOf(23)
+    runOf(23),
+    runOf(24, { state: 'running', finishedAt: null }),
+    runOf(25, { approvals: [approvalOf('d', 25)] })
   ]
-  await open(runsSnapshotOf({ runs }))
-  assert.equal(inside(cardOf(21), { type: 'Button', text: 'Share for approval' }).length, 2)
-  assert.equal(inside(cardOf(22), { type: 'Button', text: 'Share for approval' }).length, 1)
-  assert.equal(inside(cardOf(23), { type: 'Button', text: 'Share for approval' }).length, 0)
-  assert.equal(within(22, { type: 'Button', text: 'Share for approval' }).props.variant, 'outline')
-})
-
-test('Share for approval opens the composer for that approval only', async () => {
-  const runs = [waitingRun(31, [approvalOf('a', 31, { environment: 'staging' })]), waitingRun(32, [approvalOf('b', 32, { environment: null, stage: 'Deploy production' })])]
   const host = await open(runsSnapshotOf({ runs }))
-  await panel.press(within(32, { type: 'Button', text: 'Share for approval' }))
+  const shares = (buildId: number) => inside(cardOf(buildId), { type: 'Button', text: 'Share for approval' })
+  assert.deepEqual([21, 22, 23, 24, 25].map(buildId => shares(buildId).length), [1, 1, 0, 0, 0])
+  assert.deepEqual([shares(21)[0].props.variant, shares(21)[0].props.tone, shares(21)[0].props.size], ['outline', undefined, 'xs'])
+  assert.deepEqual([shares(22)[0].props.variant, shares(22)[0].props.tone, shares(22)[0].props.size], ['solid', 'accent', 'xs'])
+
+  await panel.press(shares(21)[0])
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Share for approval')
   assert.deepEqual(inputsTo(host, 'share.prefs'), [{ org: 'contoso', kind: 'approval' }])
   assert.deepEqual(
     panel.findAll({ type: 'Checkbox', label: /→/ }).map(box => [box.label, box.props.checked]),
-    [['web-app-cd 20261105.32 → Deploy production', true]]
+    [
+      ['web-app-cd 20261105.21 → production', true],
+      ['web-app-cd 20261105.21 → staging', true]
+    ]
   )
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(ids(), [])
   await panel.press({ type: 'Button', text: 'Back' })
-  assert.equal(panel.findAll({ type: 'Card' }).length, 2)
+  assert.deepEqual(ids(), [24, 22, 21, 25, 23])
 })
 
-test('the header has a Teams channels button that opens the manager and Back returns to the runs', async () => {
+test('Share for approval opens the composer for that run only', async () => {
+  const runs = [waitingRun(31, [approvalOf('a', 31, { environment: 'staging' })]), waitingRun(32, [approvalOf('b', 32, { environment: null, stage: 'Deploy production' })])]
+  await open(runsSnapshotOf({ runs }))
+  await panel.press(within(32, { type: 'Button', text: 'Share for approval' }))
+  assert.deepEqual(
+    panel.findAll({ type: 'Checkbox', label: /→/ }).map(box => [box.label, box.props.checked]),
+    [['web-app-cd 20261105.32 → Deploy production', true]]
+  )
+})
+
+test('Share for approval suggests the approvers who are people, once each, apart from you', async () => {
+  const alan = { id: 'u-alan', name: 'Alan Turing', uniqueName: 'alan@contoso.com', isGroup: false }
+  const nameless = { id: 'u-nameless', name: 'Alex Contoso', uniqueName: '', isGroup: false }
+  const me = { id: 'U-CONTOSO', name: 'Ada Lovelace', uniqueName: 'ada@contoso.com', isGroup: false }
+  const run = waitingRun(5, [approvalOf('a', 5, { approvers: [GRACE, RELEASE, me] }), approvalOf('b', 5, { approvers: [alan, GRACE, nameless] })])
+  await open(runsSnapshotOf({ runs: [run] }))
+  await panel.press({ type: 'Button', text: 'Share for approval' })
+  await panel.toggle({ type: 'Checkbox', label: 'Email' })
+  assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Grace Hopper', 'Alan Turing'])
+})
+
+test('the toolbar has a Teams channels button that opens the manager and Back returns to the runs', async () => {
   const host = await open(runsSnapshotOf({ runs: [runOf(41)] }), { 'share.channels': [] })
-  const settings = panel.find({ label: 'Teams channels' })
-  assert.equal(settings?.props.variant, 'ghost')
+  const toolbar = panel.findAll({ type: 'IconButton' }).filter(button => !['Watch', 'Open in Azure DevOps', 'Add organization', 'Organization settings'].includes(button.label ?? ''))
+  assert.deepEqual(
+    toolbar.map(button => [button.label, button.props.icon, button.props.variant, button.props.size]),
+    [
+      ['Collapse all', 'collapse', 'ghost', 'xs'],
+      ['Expand all', 'expand', 'ghost', 'xs'],
+      ['Refresh', 'refresh', 'ghost', 'xs'],
+      ['Teams channels', 'settings', 'ghost', 'xs']
+    ]
+  )
   await panel.press({ label: 'Teams channels' })
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Teams channels')
   assert.deepEqual(inputsTo(host, 'share.channels'), [{}])
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(ids(), [])
   await panel.press({ type: 'Button', text: 'Back' })
   assert.deepEqual(ids(), [41])
+})
+
+test('Refresh is disabled while it refreshes', async () => {
+  let release: (value: ReturnType<typeof runsSnapshotOf>) => void = () => {}
+  const held = new Promise<ReturnType<typeof runsSnapshotOf>>(resolve => {
+    release = resolve
+  })
+  await open(runsSnapshotOf({ runs: [runOf(1)] }), { 'runs.refresh': () => held })
+  const pressed = panel.press({ label: 'Refresh' })
+  await pause(10)
+  assert.equal(panel.find({ label: 'Refresh' })?.disabled, true)
+  release(runsSnapshotOf({ runs: [runOf(2)], updatedAt: NOW + 1 }))
+  await pressed
+  assert.equal(panel.find({ label: 'Refresh' })?.disabled, false)
+  assert.deepEqual(ids(), [2])
+})
+
+test('runPlaces gives each run its project and repository, or no repository', () => {
+  assert.deepEqual(runPlaces(runIn(1, WEB, WEB_APP)), [{ projectId: 'proj-web', projectName: 'Fabrikam Web', repoId: 'repo-web-app', repoName: 'web-app' }])
+  assert.deepEqual(runPlaces(runIn(2, TOOLS, null)), [{ projectId: 'proj-tools', projectName: 'Contoso Tools', repoId: null, repoName: null }])
+})
+
+test('runs group by project, and a project with runs from several repositories splits into repository groups', async () => {
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP), runIn(4, WEB, WEB_APP)] }))
+  assert.deepEqual(outline(), [
+    'Contoso Tools · web-app · 1 run',
+    '  #3',
+    'Fabrikam Web · 2 repos · 3 runs',
+    '  fabrikam-api · 1 run',
+    '    #2',
+    '  web-app · 2 runs',
+    '    #4',
+    '    #1'
+  ])
+})
+
+test('a project whose runs share one repository stays flat and names it in the header', async () => {
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_APP), runIn(3, TOOLS, null)] }))
+  assert.deepEqual(outline(), ['Contoso Tools · 1 run', '  #3', 'Fabrikam Web · web-app · 2 runs', '  #2', '  #1'])
+})
+
+test('pipelines named alike in different projects each sit under their own project', async () => {
+  const alike = { pipeline: { id: 8, name: 'Build Pipeline' } }
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, null, alike), runIn(2, TOOLS, null, alike), runIn(3, BOARDS, null, alike)] }))
+  assert.deepEqual(outline(), ['Contoso Tools · 1 run', '  #2', 'Fabrikam Boards · 1 run', '  #3', 'Fabrikam Web · 1 run', '  #1'])
+  assert.equal(panel.findAll({ type: 'Text', text: 'Build Pipeline' }).length, 3)
+})
+
+test('runs without a repository sit under their project before its repository groups', async () => {
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, null), runIn(2, WEB, WEB_APP), runIn(3, WEB, WEB_API), runIn(4, WEB, null)] }))
+  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos · 4 runs', '  #4', '  #1', '  fabrikam-api · 1 run', '    #3', '  web-app · 1 run', '    #2'])
+})
+
+test('the project picker filters the runs, and the repository picker appears for a project with several repositories', async () => {
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP)] }))
+  assert.equal(projectSelect()?.props.labelHidden, true)
+  assert.deepEqual(optionsOf(projectSelect()), [
+    ['*', 'All projects'],
+    ['proj-tools', 'Contoso Tools'],
+    ['proj-web', 'Fabrikam Web']
+  ])
+  assert.equal(projectSelect()?.props.value, '*')
+  assert.equal(repoSelect(), null)
+
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run', '  #3'])
+  assert.equal(repoSelect(), null)
+  assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-tools', repo: null } })
+
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-web')
+  assert.equal(repoSelect()?.props.labelHidden, true)
+  assert.deepEqual(optionsOf(repoSelect()), [
+    ['*', 'All repos'],
+    ['repo-api', 'fabrikam-api'],
+    ['repo-web-app', 'web-app']
+  ])
+  assert.equal(repoSelect()?.props.value, '*')
+  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos · 2 runs', '  fabrikam-api · 1 run', '    #2', '  web-app · 1 run', '    #1'])
+
+  await panel.select({ type: 'Select', label: 'Repository' }, 'repo-api')
+  assert.equal(repoSelect()?.props.value, 'repo-api')
+  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api · 1 run', '  #2'])
+  assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-web', repo: 'repo-api' } })
+
+  await panel.select({ type: 'Select', label: 'Repository' }, '*')
+  assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-web', repo: null } })
+  await panel.select({ type: 'Select', label: 'Project' }, '*')
+  assert.equal(repoSelect(), null)
+  assert.deepEqual(outline().filter(line => !line.startsWith(' ')), ['Contoso Tools · web-app · 1 run', 'Fabrikam Web · 2 repos · 2 runs'])
+})
+
+test('the chosen project and repository survive a reload, per organisation', async () => {
+  const orgs = [org('contoso'), org('fabrikam')]
+  const runs = [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP)]
+  await open(everywhere(runs), {}, { orgs })
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-web')
+  await panel.select({ type: 'Select', label: 'Repository' }, 'repo-api')
+
+  const reloaded = await reloadPanel(panel, orgs, { 'runs.snapshot': everywhere(runs) })
+  panel = reloaded.panel
+  assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-web', 'repo-api'])
+  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api · 1 run', '  #2'])
+
+  await panel.select({ label: 'Organization' }, 'fabrikam')
+  assert.deepEqual([projectSelect()?.props.value, repoSelect()], ['*', null])
+  assert.equal(outline().filter(line => !line.startsWith(' ')).length, 2)
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
+
+  await panel.select({ label: 'Organization' }, 'contoso')
+  assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-web', 'repo-api'])
+  assert.deepEqual(panel.persisted.plugin.runsPrefs, {
+    contoso: { project: 'proj-web', repo: 'repo-api' },
+    fabrikam: { project: 'proj-tools', repo: null }
+  })
+})
+
+test('a remembered project with nothing in it now shows All projects', async () => {
+  const remembered = { contoso: { project: 'proj-gone', repo: 'repo-gone' } }
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, TOOLS, TOOLS_APP)] }), {}, { prefs: remembered })
+  assert.equal(projectSelect()?.props.value, '*')
+  assert.equal(repoSelect(), null)
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run', '  #2', 'Fabrikam Web · web-app · 1 run', '  #1'])
+  assert.equal(panel.find({ type: 'EmptyState' }), null)
+  assert.deepEqual(panel.persisted.plugin.runsPrefs, remembered)
+
+  const archive = { projectId: 'proj-gone', projectName: 'Contoso Archive' }
+  const back = [runIn(1, WEB, WEB_APP), runIn(3, archive, { id: 'repo-gone', name: 'legacy-app' }), runIn(4, archive, { id: 'repo-other', name: 'legacy-api' })]
+  await panel.post('runs.changed', runsSnapshotOf({ runs: back, updatedAt: NOW + 1 }))
+  assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-gone', 'repo-gone'])
+  assert.deepEqual(outline(), ['Contoso Archive · legacy-app · 1 run', '  #3'])
+})
+
+test('a chosen project stays chosen across filters and shows Nothing here when the filter is empty', async () => {
+  const runs = [runIn(1, WEB, WEB_APP), runIn(2, TOOLS, TOOLS_APP, { mine: false, state: 'running', finishedAt: null })]
+  await open(runsSnapshotOf({ runs }))
+  const projects = optionsOf(projectSelect())
+  assert.deepEqual(
+    projects.map(([value]) => value),
+    ['*', 'proj-tools', 'proj-web']
+  )
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
+  const nothing = () => [panel.find({ type: 'EmptyState' })?.label, panel.find({ type: 'EmptyState' })?.props.description, ids()]
+  assert.deepEqual(nothing(), ['Nothing here for Contoso Tools', CHOOSE_ALL, []])
+
+  await panel.press({ type: 'Button', text: 'Running' })
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run [1 running]', '  #2'])
+  for (const label of ['Needs me', 'Failed']) {
+    await panel.press({ type: 'Button', text: label })
+    assert.deepEqual(nothing(), ['Nothing here for Contoso Tools', CHOOSE_ALL, []], label)
+    assert.deepEqual(optionsOf(projectSelect()), projects, label)
+    assert.equal(projectSelect()?.props.value, 'proj-tools', label)
+  }
+  await panel.select({ type: 'Select', label: 'Project' }, '*')
+  assert.equal(panel.find({ type: 'EmptyState' })?.label, EMPTY.failed[0])
+})
+
+test('the cap applies after the project is chosen', async () => {
+  const web = Array.from({ length: 35 }, (_, index) => runIn(1000 + index, WEB, null, { finishedAt: NOW - (index + 1) * MINUTE }))
+  await open(runsSnapshotOf({ runs: [...web, runIn(2000, TOOLS, null), runIn(2001, TOOLS, null)] }))
+  assert.equal(panel.find({ type: 'Text', text: 'Showing 30 of 37 runs.' })?.props.muted, true)
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
+  assert.deepEqual(ids(), [2001, 2000])
+  assert.equal(panel.find({ type: 'Text', text: /^Showing/ }), null)
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-web')
+  assert.equal(ids().length, 30)
+  assert.equal(panel.find({ type: 'Text', text: 'Showing 30 of 35 runs.' })?.props.muted, true)
+})
+
+test('a group header counts its runs and says when one needs you, else failed, else running', async () => {
+  const failed = (buildId: number, project: typeof WEB, over: Partial<RunSummary> = {}) =>
+    runIn(buildId, project, null, { state: 'failed', finishedAt: NOW - 10 * MINUTE, pipeline: { id: 100 + buildId, name: 'web-app-ci' }, ...over })
+  const running = (buildId: number, project: typeof WEB) =>
+    runIn(buildId, project, null, { state: 'running', finishedAt: null, pipeline: { id: 100 + buildId, name: 'web-app-ci' } })
+  const DATA = { projectId: 'proj-data', projectName: 'Fabrikam Data' }
+  const runs = [
+    waitingRun(1, [approvalOf('ap-1', 1)], { pipeline: { id: 101, name: 'web-app-cd' } }),
+    failed(2, WEB),
+    running(3, WEB),
+    failed(4, TOOLS),
+    failed(5, TOOLS),
+    running(6, TOOLS),
+    runIn(7, TOOLS, null, { pipeline: { id: 107, name: 'web-app-ci' } }),
+    running(8, BOARDS),
+    runIn(9, BOARDS, null, { pipeline: { id: 109, name: 'web-app-ci' } }),
+    failed(10, DATA, { finishedAt: NOW - 3 * 24 * HOUR }),
+    runIn(11, DATA, null, { pipeline: { id: 111, name: 'web-app-ci' } }),
+    failed(13, DATA),
+    runIn(14, DATA, null, { mine: false, pipeline: { id: 113, name: 'web-app-ci' }, queuedAt: NOW }),
+    runIn(12, { projectId: 'proj-solo', projectName: 'Fabrikam Solo' }, null, { pipeline: { id: 112, name: 'web-app-ci' } })
+  ]
+  await open(runsSnapshotOf({ runs }))
+  assert.deepEqual(groupHeaders(), [
+    ['Contoso Tools · 4 runs', '2 failed'],
+    ['Fabrikam Boards · 2 runs', '1 running'],
+    ['Fabrikam Data · 3 runs', undefined],
+    ['Fabrikam Solo · 1 run', undefined],
+    ['Fabrikam Web · 3 runs', '1 needs you']
+  ])
+})
+
+test('Collapse all and Expand all close and open every project and repository group', async () => {
+  await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP)] }))
+  assert.deepEqual(groupStates(), [
+    ['Contoso Tools · web-app · 1 run', true],
+    ['Fabrikam Web · 2 repos · 2 runs', true],
+    ['fabrikam-api · 1 run', true],
+    ['web-app · 1 run', true]
+  ])
+
+  await panel.press({ type: 'IconButton', label: 'Collapse all' })
+  assert.deepEqual(groupStates(), [
+    ['Contoso Tools · web-app · 1 run', false],
+    ['Fabrikam Web · 2 repos · 2 runs', false]
+  ])
+  assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|pipelines'], { all: 'closed', open: [], closed: [] })
+  assert.deepEqual(ids(), [])
+
+  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos · 2 runs' })
+  assert.deepEqual(groupStates(), [
+    ['Contoso Tools · web-app · 1 run', false],
+    ['Fabrikam Web · 2 repos · 2 runs', true],
+    ['fabrikam-api · 1 run', false],
+    ['web-app · 1 run', false]
+  ])
+  assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|pipelines'], { all: 'closed', open: ['project:proj-web'], closed: [] })
+
+  await panel.press({ type: 'IconButton', label: 'Expand all' })
+  assert.deepEqual(
+    groupStates().map(([, open]) => open),
+    [true, true, true, true]
+  )
+  assert.equal(ids().length, 3)
+})
+
+test('a project name over 1 KiB is cut in the picker, the group header and the empty state', async () => {
+  const huge = { projectId: 'proj-huge', projectName: `${'Ωmega '.repeat(300)}`.trim() }
+  await open(runsSnapshotOf({ runs: [runIn(1, huge, null, { mine: false, state: 'running', finishedAt: null })] }))
+  const bytes = (text: unknown) => new TextEncoder().encode(String(text)).length
+  await panel.press({ type: 'Button', text: 'Running' })
+  assert.ok(bytes(groupHeaders()[0][0]) <= 1024)
+  assert.ok(bytes(optionsOf(projectSelect())[1][1]) <= 1024)
+  await panel.press({ type: 'Button', text: 'Mine' })
+  assert.equal(panel.find({ type: 'EmptyState' })?.label, EMPTY.mine[0])
+  await panel.select({ type: 'Select', label: 'Project' }, 'proj-huge')
+  assert.ok(bytes(panel.find({ type: 'EmptyState' })?.label) <= 1024)
 })

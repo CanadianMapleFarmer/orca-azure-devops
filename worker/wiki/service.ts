@@ -25,7 +25,7 @@ export interface WikiService {
   wikis(org: string): Promise<WikiRef[]>
   wiki(org: string, wikiId: string): Promise<WikiRef>
   level(ref: WikiPageRef): Promise<WikiLevel>
-  page(ref: WikiPageRef): Promise<WikiPage>
+  page(ref: WikiPageRef, maxBytes?: number, cutNote?: string): Promise<WikiPage>
   fresh(ref: WikiPageRef): Promise<{ content: string; etag: string; title: string } | null>
   search(input: Omit<WikiPageRef, 'path'> & { text: string }): Promise<{ hits: WikiHit[]; total: number }>
 }
@@ -107,7 +107,7 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
         return { pages: nodes.slice(0, MAX_LEVEL_PAGES).map(item => item.node), total: nodes.length }
       }),
 
-    page: ref =>
+    page: (ref, maxBytes = MAX_PAGE_MARKDOWN_BYTES, cutNote) =>
       loads.load(ref.org, async current => {
         const wiki = await wikiOf(current, ref.org, ref.wikiId)
         const { page } = await missingAs(getPage(current.http, ref.org, ref.projectId, ref.wikiId, ref.path), WIKI_PAGE_GONE)
@@ -120,7 +120,8 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
           path: ref.path,
           title: titleText(ref.path),
           content: panelMarkdown(page.content ?? '', {
-            maxBytes: MAX_PAGE_MARKDOWN_BYTES,
+            maxBytes,
+            cutNote,
             resolve: href => (isPageLink(href) ? urlOf(pagePathOf(beforeAnchorOrQuery(href))) : url)
           }),
           url,

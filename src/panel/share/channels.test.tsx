@@ -189,7 +189,7 @@ test('Back returns to the composer when it was open, else the list', async () =>
   await panel.press({ label: 'Teams channels' })
   await panel.press({ type: 'Button', text: 'Back' })
   assert.equal(panel.find({ type: 'Heading' }), null)
-  assert.equal(panel.findAll({ type: 'Card' }).length, 1)
+  assert.equal(panel.findAll({ type: 'Button', text: 'Share…' }).length, 1)
 })
 
 test('a failed channel list shows the message and Try again loads again', async () => {
