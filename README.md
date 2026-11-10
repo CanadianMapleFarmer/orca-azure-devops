@@ -1,5 +1,7 @@
 # Azure DevOps for Orca
 
+![Azure DevOps for Orca: boards, pull requests, pipelines and wikis in the Orca sidebar](assets/cover.jpg)
+
 Azure DevOps work items, boards, pull requests, pipelines and wikis in the [Orca](https://github.com/stablyai/orca) sidebar. Connect any number of organisations with the Azure CLI, a Microsoft account or a personal access token, and the plugin keeps each one pinned to the account you signed in with.
 
 Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Microsoft.
@@ -19,7 +21,7 @@ Orca's community plugin catalog picks up each release of this plugin from its ve
 
 `orca plugin update` fetches newer versions: the newest release, or the newest commit on `main` if you installed before the first release. Report problems and ideas in [Issues](https://github.com/kloppers-labs/orca-azure-devops/issues). Never paste a token, a sign-in code or a Teams webhook URL there. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
-| Works now |
+| What it does |
 | --- |
 | Connecting any number of Azure DevOps organisations |
 | Pinning each organisation to one account |
@@ -39,6 +41,27 @@ Orca's community plugin catalog picks up each release of this plugin from its ve
 | Desktop notifications for failed runs, watched runs, approvals, review requests and new comments on your pull requests |
 | Wiki: a page tree that tells folders from pages, search and rendered pages, Open in tab with Mermaid diagrams drawn, and Edit in Orca and Publish that handles conflicts |
 | `ADO · N failed · N approvals · N to review` on the status bar |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/work.jpg" alt="The Work tab by board column, with tasks inside their story, and by the board's swimlanes"></td>
+    <td width="50%"><img src="assets/screenshots/pull-requests.jpg" alt="The PRs tab with release sets grouped by project, and the To review list"></td>
+  </tr>
+  <tr>
+    <td>Your board in the sidebar, by column or by swimlane, with tasks inside their story.</td>
+    <td>Pull requests grouped by project, ready to share, approve or review.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/pipelines.jpg" alt="The Pipelines tab with runs, their stage chips and a production approval"></td>
+    <td width="50%"><img src="assets/screenshots/wiki.jpg" alt="The Wiki tab with the page tree, drafts and a page with diagram and table cards"></td>
+  </tr>
+  <tr>
+    <td>Every run with its stages, and approvals you can give or share.</td>
+    <td>Browse and edit wikis; Open in tab draws Mermaid diagrams full width.</td>
+  </tr>
+</table>
 
 ## Requirements
 
@@ -171,7 +194,7 @@ My work lists the items assigned to you. Finished items are left out.
 
 A card has two lines, and shows its tasks inside it while they are open (see Tasks under their parent). The first is the title, one pressable line cut with `…` after 90 characters: press it to open the item's details. The second has, on the left, the type's icon (it opens the details too), `#id`, the chips for linked pull requests and **Tasks n/m** when the item has tasks. On the right is a compact **Move** box.
 
-- Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `build …` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
+- Each card shows chips for its linked pull requests, one per target branch: the branch with `✓` when merged, `building` while a build runs, `✗ build` when it failed, and `abandoned`. When several pull requests target the same branch, the chip shows the merged one, else an open one (a failed build first, then a running one), else an abandoned one. A card shows up to four chips and counts the rest; the board and the details show them all.
 - **Move** moves the item to another column. Moving into a split column puts the item in Doing. A move is refused when someone else changed the item first: the item is refreshed and you try again.
 - The details show the description, acceptance criteria, comments, parent and links, with each linked pull request's state. You can add a comment, link a pull request by its URL, start a workspace or an agent, or open the item in Azure DevOps.
 
@@ -267,7 +290,7 @@ A set is one card:
 The status chip carries the meaning in its colour:
 
 - A merged pull request shows only `merged`, and an abandoned one `abandoned`, because votes and checks no longer matter.
-- An active one shows the worst of its checks first: `conflicts`, `✗ build`, `✗ policies`, `rejected` (a Rejected vote), `waiting for author`, `build …` while a build runs, `· policies` while some are pending, and `✓ build` when the build succeeded or the policies are approved. `draft` and `auto-complete` join the same chip when they apply, as in `draft · ✗ build`. A pull request with nothing to say has no chip.
+- An active one shows the worst of its checks first: `conflicts`, `✗ build`, `✗ policies`, `rejected` (a Rejected vote), `waiting for author`, `building` while a build runs, `· policies` while some are pending, and `✓ build` when the build succeeded or the policies are approved. `draft` and `auto-complete` join the same chip when they apply, as in `draft · ✗ build`. A pull request with nothing to say has no chip.
 - `waiting for …` sits under the pull request's row and names the required reviewers who haven't voted or declined.
 
 The tab shows the 30 newest sets and up to 150 rows, and says when it leaves some out.

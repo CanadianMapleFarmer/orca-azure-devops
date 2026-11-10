@@ -201,7 +201,7 @@ test('chips show merge and build state', async () => {
   )
   assert.deepEqual(chips(/main|release|dev|hotfix|next|old/), [
     { text: 'main ✓', tone: 'success' },
-    { text: 'release build …', tone: 'warning' },
+    { text: 'release building', tone: 'warning' },
     { text: 'dev ✗ build', tone: 'danger' },
     { text: 'hotfix ·', tone: 'neutral' },
     { text: 'next ·', tone: 'neutral' },
@@ -229,7 +229,7 @@ test('a card shows at most four chips and counts the rest', async () => {
   )
   assert.deepEqual(chips(/./).filter(chip => chip.text !== 'Web Team · Stories' && chip.text !== 'Connected'), [
     { text: 'main ✓', tone: 'success' },
-    { text: 'release build …', tone: 'warning' },
+    { text: 'release building', tone: 'warning' },
     { text: 'dev ✗ build', tone: 'danger' },
     { text: 'next ·', tone: 'neutral' },
     { text: '+2', tone: 'neutral' },
@@ -422,7 +422,7 @@ test('a card is a pressable title, then the type, id, chips, Tasks n/m and a com
   assert.deepEqual(shapeOf(drawn!), [
     'Box',
     ['List', ['ListItem']],
-    ['Box', ['Row', ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release build …'], ['Button', 'Tasks 1/3']], ['Box', ['Select']]]]
+    ['Box', ['Row', ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release building'], ['Button', 'Tasks 1/3']], ['Box', ['Select']]]]
   ])
   const [list, meta] = drawn!.children as TreeSnapshot[]
   const [row] = meta!.children as TreeSnapshot[]
