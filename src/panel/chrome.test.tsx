@@ -140,15 +140,15 @@ test('a toolbar action runs its onPress, and a disabled one does not', async () 
   await closeCleanly(panel)
 })
 
-test('a group header shows its title, with the count and hint as its description', async () => {
+test('a group header shows its title with the count, and only the hint as its description', async () => {
   const { panel } = await mountPanel(ORGS, {}, { module: TwoGroups })
 
   const groups = panel.findAll({ type: 'Collapsible' })
   assert.deepEqual(
     groups.map(group => [group.props.title, group.props.description, group.props.open]),
     [
-      ['Web', '2 PRs', true],
-      ['Boards', '1 PR · 1 needs you', true]
+      ['Web · 2 PRs', undefined, true],
+      ['Boards · 1 PR', '1 needs you', true]
     ]
   )
   await closeCleanly(panel)
@@ -198,13 +198,13 @@ test('a group set by hand stays as it was left, and other organisations keep the
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(opens(panel), [
-    ['Contoso Web', false],
-    ['Contoso Boards', false],
-    ['Fabrikam Web', true]
+    ['Contoso Web · 2 PRs', false],
+    ['Contoso Boards · 1 PR', false],
+    ['Fabrikam Web · 3 PRs', true]
   ])
 
-  await panel.toggle({ type: 'Collapsible', label: 'Contoso Web' })
-  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web' })
+  await panel.toggle({ type: 'Collapsible', label: 'Contoso Web · 2 PRs' })
+  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 3 PRs' })
   assert.deepEqual(foldsOf(panel), {
     'contoso|prs': { all: 'closed', open: ['project:p1'], closed: [] },
     'fabrikam|prs': { all: null, open: [], closed: ['project:p1'] }
@@ -212,9 +212,9 @@ test('a group set by hand stays as it was left, and other organisations keep the
 
   const reloaded = await reloadPanel(panel, ORGS, {}, { module: TwoOrganisations })
   assert.deepEqual(opens(reloaded.panel), [
-    ['Contoso Web', true],
-    ['Contoso Boards', false],
-    ['Fabrikam Web', false]
+    ['Contoso Web · 2 PRs', true],
+    ['Contoso Boards · 1 PR', false],
+    ['Fabrikam Web · 3 PRs', false]
   ])
   await closeCleanly(reloaded.panel)
 })
@@ -224,7 +224,7 @@ test('a group starts as its natural state says until a hand setting, Collapse al
   const opens = (target: typeof panel) => target.findAll({ type: 'Collapsible' }).map(group => group.props.open)
   assert.deepEqual(opens(panel), [true, false])
 
-  await panel.toggle({ type: 'Collapsible', label: 'Done' })
+  await panel.toggle({ type: 'Collapsible', label: 'Done · 5' })
   const reloaded = await reloadPanel(panel, ORGS, {}, { module: NaturalGroups })
   assert.deepEqual(opens(reloaded.panel), [true, true])
 
@@ -240,12 +240,12 @@ test('a closed group draws no children', async () => {
   const open = countNodes(panel.tree())
   assert.ok(JSON.stringify(panel.tree()).includes('First PR'))
 
-  await panel.toggle({ type: 'Collapsible', label: 'Web' })
+  await panel.toggle({ type: 'Collapsible', label: 'Web · 2 PRs' })
   assert.equal(countNodes(panel.tree()), 1)
   assert.ok(!JSON.stringify(panel.tree()).includes('First PR'))
-  assert.deepEqual(panel.tree(), { type: 'Collapsible', props: { title: 'Web', description: '2 PRs', open: false, onChange: '[handler]' } })
+  assert.deepEqual(panel.tree(), { type: 'Collapsible', props: { title: 'Web · 2 PRs', open: false, onChange: '[handler]' } })
 
-  await panel.toggle({ type: 'Collapsible', label: 'Web' })
+  await panel.toggle({ type: 'Collapsible', label: 'Web · 2 PRs' })
   assert.equal(countNodes(panel.tree()), open)
   await closeCleanly(panel)
 })
@@ -262,12 +262,12 @@ test('a group title and hint over 1 KiB are cut to the label limit', async () =>
   const group = panel.find({ type: 'Collapsible' })
   const title = group?.props.title as string
   const description = group?.props.description as string
-  assert.equal(title, cutLabel(long))
-  assert.equal(description, cutLabel(`2 PRs · ${long}`))
+  assert.equal(title, cutLabel(`${long} · 2 PRs`))
+  assert.equal(description, cutLabel(long))
   assert.ok(utf8Length(title) <= MAX_LABEL_BYTES)
   assert.ok(utf8Length(description) <= MAX_LABEL_BYTES)
   assert.ok(title.endsWith('…') && description.endsWith('…'))
-  assert.ok(description.startsWith('2 PRs · é'))
+  assert.ok(title.startsWith('é') && description.startsWith('é'))
   await closeCleanly(panel)
 })
 
@@ -311,7 +311,7 @@ function groupOutline(tree: TreeSnapshot | string | null): string[] {
       return
     }
     const inner = node.type === 'Collapsible' ? depth + 1 : depth
-    if (node.type === 'Collapsible') lines.push(`${'  '.repeat(depth)}${node.props?.title} [${node.props?.description}]`)
+    if (node.type === 'Collapsible') lines.push(`${'  '.repeat(depth)}${node.props?.title}${node.props?.description ? ` [${node.props.description}]` : ''}`)
     for (const child of childrenOf(node)) walk(child, inner)
   }
   walk(tree, 0)
@@ -325,22 +325,22 @@ test('Groups draws Across projects first, then each project with its loose items
   ] as const) {
     const { panel } = await mountPanel(ORGS, {}, { module: spotGroups(prefix) })
     assert.deepEqual(groupOutline(panel.tree()), [
-      'Across projects [1 spot]',
+      'Across projects · 1 spot',
       '  e · project',
-      'Boards · boards [1 spot]',
+      'Boards · boards · 1 spot',
       '  f · no chip',
-      'Web · 2 repos [4 spots · holds a]',
+      'Web · 2 repos · 4 spots [holds a]',
       '  c · no chip',
-      '  Across repos [1 spot]',
+      '  Across repos · 1 spot',
       '    d · repo',
-      '  fabrikam-api [1 spot]',
+      '  fabrikam-api · 1 spot',
       '    b · no chip',
-      '  web-app [1 spot · holds a]',
+      '  web-app · 1 spot [holds a]',
       '    a · no chip'
     ])
 
-    await panel.toggle({ type: 'Collapsible', label: 'fabrikam-api' })
-    await panel.toggle({ type: 'Collapsible', label: 'Across projects' })
+    await panel.toggle({ type: 'Collapsible', label: 'fabrikam-api · 1 spot' })
+    await panel.toggle({ type: 'Collapsible', label: 'Across projects · 1 spot' })
     assert.deepEqual(foldsOf(panel)['contoso|prs'], { all: null, open: [], closed: [keyOf('project:p-web/repo:r-api'), keyOf('across-projects')] })
     await closeCleanly(panel)
   }

@@ -75,7 +75,7 @@ function outline(): string[] {
     if (node === null || typeof node === 'string') return
     let inner = depth
     if (node.type === 'Collapsible') {
-      lines.push(`${'  '.repeat(depth)}${node.props?.title} [${node.props?.description}]`)
+      lines.push(`${'  '.repeat(depth)}${node.props?.title}${node.props?.description ? ` [${node.props.description}]` : ''}`)
       inner += 1
     } else if (node.type === 'Card') {
       lines.push(`${'  '.repeat(depth)}#${/20261105\.(\d+)/.exec(textOf(node))?.[1]}`)
@@ -787,11 +787,11 @@ test('thirty runs with approvals across projects and repositories, all open, sta
   assert.deepEqual(
     groupStates(),
     [
-      ['Contoso Tools · web-app', true],
-      ['Fabrikam Boards · boards-app', true],
-      ['Fabrikam Web · 2 repos', true],
-      ['fabrikam-api', true],
-      ['web-app', true]
+      ['Contoso Tools · web-app · 7 runs', true],
+      ['Fabrikam Boards · boards-app · 7 runs', true],
+      ['Fabrikam Web · 2 repos · 16 runs', true],
+      ['fabrikam-api · 8 runs', true],
+      ['web-app · 8 runs', true]
     ]
   )
   const withinLimits = () => {
@@ -982,12 +982,12 @@ test('runPlaces gives each run its project and repository, or no repository', ()
 test('runs group by project, and a project with runs from several repositories splits into repository groups', async () => {
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP), runIn(4, WEB, WEB_APP)] }))
   assert.deepEqual(outline(), [
-    'Contoso Tools · web-app [1 run]',
+    'Contoso Tools · web-app · 1 run',
     '  #3',
-    'Fabrikam Web · 2 repos [3 runs]',
-    '  fabrikam-api [1 run]',
+    'Fabrikam Web · 2 repos · 3 runs',
+    '  fabrikam-api · 1 run',
     '    #2',
-    '  web-app [2 runs]',
+    '  web-app · 2 runs',
     '    #4',
     '    #1'
   ])
@@ -995,19 +995,19 @@ test('runs group by project, and a project with runs from several repositories s
 
 test('a project whose runs share one repository stays flat and names it in the header', async () => {
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_APP), runIn(3, TOOLS, null)] }))
-  assert.deepEqual(outline(), ['Contoso Tools [1 run]', '  #3', 'Fabrikam Web · web-app [2 runs]', '  #2', '  #1'])
+  assert.deepEqual(outline(), ['Contoso Tools · 1 run', '  #3', 'Fabrikam Web · web-app · 2 runs', '  #2', '  #1'])
 })
 
 test('pipelines named alike in different projects each sit under their own project', async () => {
   const alike = { pipeline: { id: 8, name: 'Build Pipeline' } }
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, null, alike), runIn(2, TOOLS, null, alike), runIn(3, BOARDS, null, alike)] }))
-  assert.deepEqual(outline(), ['Contoso Tools [1 run]', '  #2', 'Fabrikam Boards [1 run]', '  #3', 'Fabrikam Web [1 run]', '  #1'])
+  assert.deepEqual(outline(), ['Contoso Tools · 1 run', '  #2', 'Fabrikam Boards · 1 run', '  #3', 'Fabrikam Web · 1 run', '  #1'])
   assert.equal(panel.findAll({ type: 'Text', text: 'Build Pipeline' }).length, 3)
 })
 
 test('runs without a repository sit under their project before its repository groups', async () => {
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, null), runIn(2, WEB, WEB_APP), runIn(3, WEB, WEB_API), runIn(4, WEB, null)] }))
-  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos [4 runs]', '  #4', '  #1', '  fabrikam-api [1 run]', '    #3', '  web-app [1 run]', '    #2'])
+  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos · 4 runs', '  #4', '  #1', '  fabrikam-api · 1 run', '    #3', '  web-app · 1 run', '    #2'])
 })
 
 test('the project picker filters the runs, and the repository picker appears for a project with several repositories', async () => {
@@ -1022,7 +1022,7 @@ test('the project picker filters the runs, and the repository picker appears for
   assert.equal(repoSelect(), null)
 
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 run]', '  #3'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run', '  #3'])
   assert.equal(repoSelect(), null)
   assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-tools', repo: null } })
 
@@ -1034,18 +1034,18 @@ test('the project picker filters the runs, and the repository picker appears for
     ['repo-web-app', 'web-app']
   ])
   assert.equal(repoSelect()?.props.value, '*')
-  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos [2 runs]', '  fabrikam-api [1 run]', '    #2', '  web-app [1 run]', '    #1'])
+  assert.deepEqual(outline(), ['Fabrikam Web · 2 repos · 2 runs', '  fabrikam-api · 1 run', '    #2', '  web-app · 1 run', '    #1'])
 
   await panel.select({ type: 'Select', label: 'Repository' }, 'repo-api')
   assert.equal(repoSelect()?.props.value, 'repo-api')
-  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api [1 run]', '  #2'])
+  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api · 1 run', '  #2'])
   assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-web', repo: 'repo-api' } })
 
   await panel.select({ type: 'Select', label: 'Repository' }, '*')
   assert.deepEqual(panel.persisted.plugin.runsPrefs, { contoso: { project: 'proj-web', repo: null } })
   await panel.select({ type: 'Select', label: 'Project' }, '*')
   assert.equal(repoSelect(), null)
-  assert.deepEqual(outline().filter(line => !line.startsWith(' ')), ['Contoso Tools · web-app [1 run]', 'Fabrikam Web · 2 repos [2 runs]'])
+  assert.deepEqual(outline().filter(line => !line.startsWith(' ')), ['Contoso Tools · web-app · 1 run', 'Fabrikam Web · 2 repos · 2 runs'])
 })
 
 test('the chosen project and repository survive a reload, per organisation', async () => {
@@ -1058,7 +1058,7 @@ test('the chosen project and repository survive a reload, per organisation', asy
   const reloaded = await reloadPanel(panel, orgs, { 'runs.snapshot': everywhere(runs) })
   panel = reloaded.panel
   assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-web', 'repo-api'])
-  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api [1 run]', '  #2'])
+  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api · 1 run', '  #2'])
 
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.deepEqual([projectSelect()?.props.value, repoSelect()], ['*', null])
@@ -1078,7 +1078,7 @@ test('a remembered project with nothing in it now shows All projects', async () 
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, TOOLS, TOOLS_APP)] }), {}, { prefs: remembered })
   assert.equal(projectSelect()?.props.value, '*')
   assert.equal(repoSelect(), null)
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 run]', '  #2', 'Fabrikam Web · web-app [1 run]', '  #1'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run', '  #2', 'Fabrikam Web · web-app · 1 run', '  #1'])
   assert.equal(panel.find({ type: 'EmptyState' }), null)
   assert.deepEqual(panel.persisted.plugin.runsPrefs, remembered)
 
@@ -1086,7 +1086,7 @@ test('a remembered project with nothing in it now shows All projects', async () 
   const back = [runIn(1, WEB, WEB_APP), runIn(3, archive, { id: 'repo-gone', name: 'legacy-app' }), runIn(4, archive, { id: 'repo-other', name: 'legacy-api' })]
   await panel.post('runs.changed', runsSnapshotOf({ runs: back, updatedAt: NOW + 1 }))
   assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-gone', 'repo-gone'])
-  assert.deepEqual(outline(), ['Contoso Archive · legacy-app [1 run]', '  #3'])
+  assert.deepEqual(outline(), ['Contoso Archive · legacy-app · 1 run', '  #3'])
 })
 
 test('a chosen project stays chosen across filters and shows Nothing here when the filter is empty', async () => {
@@ -1102,7 +1102,7 @@ test('a chosen project stays chosen across filters and shows Nothing here when t
   assert.deepEqual(nothing(), ['Nothing here for Contoso Tools', CHOOSE_ALL, null])
 
   await panel.press({ type: 'Button', text: 'Running' })
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 run · 1 running]', '  #2'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 run [1 running]', '  #2'])
   for (const label of ['Needs me', 'Failed']) {
     await panel.press({ type: 'Button', text: label })
     assert.deepEqual(nothing(), ['Nothing here for Contoso Tools', CHOOSE_ALL, null], label)
@@ -1149,37 +1149,37 @@ test('a group header counts its runs and says when one needs you, else failed, e
   ]
   await open(runsSnapshotOf({ runs }))
   assert.deepEqual(groupHeaders(), [
-    ['Contoso Tools', '4 runs · 2 failed'],
-    ['Fabrikam Boards', '2 runs · 1 running'],
-    ['Fabrikam Data', '3 runs'],
-    ['Fabrikam Solo', '1 run'],
-    ['Fabrikam Web', '3 runs · 1 needs you']
+    ['Contoso Tools · 4 runs', '2 failed'],
+    ['Fabrikam Boards · 2 runs', '1 running'],
+    ['Fabrikam Data · 3 runs', undefined],
+    ['Fabrikam Solo · 1 run', undefined],
+    ['Fabrikam Web · 3 runs', '1 needs you']
   ])
 })
 
 test('Collapse all and Expand all close and open every project and repository group', async () => {
   await open(runsSnapshotOf({ runs: [runIn(1, WEB, WEB_APP), runIn(2, WEB, WEB_API), runIn(3, TOOLS, TOOLS_APP)] }))
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', true],
-    ['Fabrikam Web · 2 repos', true],
-    ['fabrikam-api', true],
-    ['web-app', true]
+    ['Contoso Tools · web-app · 1 run', true],
+    ['Fabrikam Web · 2 repos · 2 runs', true],
+    ['fabrikam-api · 1 run', true],
+    ['web-app · 1 run', true]
   ])
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', false],
-    ['Fabrikam Web · 2 repos', false]
+    ['Contoso Tools · web-app · 1 run', false],
+    ['Fabrikam Web · 2 repos · 2 runs', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|pipelines'], { all: 'closed', open: [], closed: [] })
   assert.equal(panel.find({ type: 'Card' }), null)
 
-  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos' })
+  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos · 2 runs' })
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', false],
-    ['Fabrikam Web · 2 repos', true],
-    ['fabrikam-api', false],
-    ['web-app', false]
+    ['Contoso Tools · web-app · 1 run', false],
+    ['Fabrikam Web · 2 repos · 2 runs', true],
+    ['fabrikam-api · 1 run', false],
+    ['web-app · 1 run', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|pipelines'], { all: 'closed', open: ['project:proj-web'], closed: [] })
 

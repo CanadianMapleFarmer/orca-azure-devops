@@ -60,8 +60,10 @@ const cardOf = (title: string): TestElement => {
   return card
 }
 
+const named = (name: string) => new RegExp(`^${name} · \\d+ \\S+$`)
+
 const groupOf = (title: string): TestElement => {
-  const group = panel.find({ type: 'Collapsible', label: title })
+  const group = panel.find({ type: 'Collapsible', label: named(title) })
   assert.ok(group, `${title} is drawn`)
   return group
 }
@@ -90,12 +92,12 @@ function nodesOf(type: string): TreeSnapshot[] {
   return found
 }
 
-const groups = () => nodesOf('Collapsible').map(group => [group.props?.title, group.props?.description])
+const groups = () => nodesOf('Collapsible').map(group => group.props?.title)
 
 const groupStates = () => nodesOf('Collapsible').map(group => [group.props?.title, group.props?.open])
 
 const columnIn = (lane: string, column: string): TestElement => {
-  const found = inside(groupOf(lane), { type: 'Collapsible', label: column })[0]
+  const found = inside(groupOf(lane), { type: 'Collapsible', label: named(column) })[0]
   assert.ok(found, `${column} in ${lane} is drawn`)
   return found
 }
@@ -142,12 +144,13 @@ test('groups follow board order and count their cards', async () => {
     })
   )
   assert.deepEqual(groups(), [
-    ['New', '2 items'],
-    ['Active', '2 items'],
-    ['Not on this board', '1 item'],
-    ['Feature', '1 item'],
-    ['No parent', '1 task']
+    'New · 2 items',
+    'Active · 2 items',
+    'Not on this board · 1 item',
+    'Feature · 1 item',
+    'No parent · 1 task'
   ])
+  assert.ok(nodesOf('Collapsible').every(group => group.props?.description === undefined))
   assert.deepEqual(titles(), ['Add export', 'Legacy import', 'Fix login redirect', 'Cache invalidation', 'Checkout revamp'])
   assert.deepEqual(cardsIn('New'), ['Add export', 'Legacy import'])
   assert.deepEqual(inside(groupOf('No parent'), { type: 'Row' }).map(row => row.text), ['#201 Update runbook Active'])
@@ -160,7 +163,7 @@ test('groups follow board order and count their cards', async () => {
 
 test('a column without items has no group and the snapshot is requested for the active org', async () => {
   const host = await open(snapshotOf({ mine: [item(101, { column: 'Done' })] }))
-  assert.deepEqual(groups(), [['Done', '1 item']])
+  assert.deepEqual(groups(), ['Done · 1 item'])
   assert.deepEqual(inputsTo(host, 'work.snapshot'), [{ org: 'contoso' }])
 })
 
@@ -221,7 +224,7 @@ test('300 items with four chips each and 25 nudges still render, with 10 nudges 
   )
   const nudges = Array.from({ length: 25 }, (_, index) => ({ itemId: index + 1, prId: index * 4 + 1, branch: 'main', toColumn: 'Done' }))
   await open(snapshotOf({ mine, nudges }))
-  assert.deepEqual(groups(), [['Active', '300 items']])
+  assert.deepEqual(groups(), ['Active · 300 items'])
   assert.equal(panel.findAll({ type: 'Card' }).length, 25)
   for (const target of targets) assert.equal(panel.findAll({ type: 'Badge', text: `${target} ✓` }).length, 25, target)
   assert.equal(panel.findAll({ type: 'Badge', text: /^\+/ }).length, 0)
@@ -339,7 +342,7 @@ test('a refused move shows the message and the list follows the worker post', as
   assert.equal(panel.valueOf({ type: 'Select', label: 'Move' }), '')
 
   await panel.post('work.changed', snapshotOf({ mine: [item(101, { rev: 8, column: 'Done', state: 'Done' })] }))
-  assert.deepEqual(groups(), [['Done', '1 item']])
+  assert.deepEqual(groups(), ['Done · 1 item'])
 })
 
 test('nudge Move and Dismiss call the right requests', async () => {
@@ -494,7 +497,7 @@ test('your task under a story keeps its Move', async () => {
     }
   )
   assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active', '#302 Update the copy Active Grace Hopper'])
-  assert.deepEqual(groups(), [['Active', '1 item']])
+  assert.deepEqual(groups(), ['Active · 1 item'])
   assert.equal(panel.findAll({ type: 'Link', text: /^#301 / }).length, 1)
   const moves = panel.findAll({ type: 'Select', label: 'Move' })
   assert.equal(moves.length, 2)
@@ -518,8 +521,8 @@ test("a task whose story isn't yours shows under that story, dimmed, in the stor
     })
   )
   assert.deepEqual(groups(), [
-    ['New', '1 item'],
-    ['Done', '1 item']
+    'New · 1 item',
+    'Done · 1 item'
   ])
   assert.deepEqual(cardsIn('Done'), ['#150 Checkout revamp'])
   const dimmed = cardOf('#150 Checkout revamp')
@@ -529,7 +532,7 @@ test("a task whose story isn't yours shows under that story, dimmed, in the stor
   assert.equal(tasksButton('#150 Checkout revamp')?.text, 'Tasks 1/2')
   assert.deepEqual(taskLines('#150 Checkout revamp'), ['#301 Write the tests Active', '#302 Update the copy Closed Grace Hopper'])
   assert.equal(panel.findAll({ type: 'Select', label: 'Move' }).length, 2)
-  assert.equal(panel.find({ type: 'Collapsible', label: 'No parent' }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: named('No parent') }), null)
 })
 
 test('a task-level parent shows in Not on this board under its type, with its tasks nested one level', async () => {
@@ -549,9 +552,9 @@ test('a task-level parent shows in Not on this board under its type, with its ta
     })
   )
   assert.deepEqual(groups(), [
-    ['Active', '1 item'],
-    ['Not on this board', '2 items'],
-    ['Task', '2 items']
+    'Active · 1 item',
+    'Not on this board · 2 items',
+    'Task · 2 items'
   ])
   assert.deepEqual(cardsIn('Task'), ['#301 Split the payment step', 'Plan the rollout'])
   assert.deepEqual(taskLines('Checkout revamp'), ['#301 Split the payment step Active'])
@@ -578,11 +581,11 @@ test('Not on this board groups items that move by state by type, with their task
     })
   )
   assert.deepEqual(groups(), [
-    ['Not on this board', '4 items'],
-    ['Bug', '1 item'],
-    ['Epic', '1 item'],
-    ['Feature', '1 item'],
-    ['User Story', '1 item']
+    'Not on this board · 4 items',
+    'Bug · 1 item',
+    'Epic · 1 item',
+    'Feature · 1 item',
+    'User Story · 1 item'
   ])
   assert.deepEqual(
     ['Broken export', 'Payments', 'Checkout revamp', 'Story with no column'].map(title => inside(cardOf(title), { type: 'IconButton' })[0]?.props.icon),
@@ -598,9 +601,9 @@ test('Not on this board groups items that move by state by type, with their task
 test("a task whose parent can't be read shows under a dimmed #id header in Unknown type", async () => {
   await open(snapshotOf({ mine: [item(101)], other: [task(301, { title: 'Write the tests', parentId: 999 })] }))
   assert.deepEqual(groups(), [
-    ['Active', '1 item'],
-    ['Not on this board', '1 item'],
-    ['Unknown type', '1 item']
+    'Active · 1 item',
+    'Not on this board · 1 item',
+    'Unknown type · 1 item'
   ])
   assert.deepEqual(cardsIn('Unknown type'), ['#999'])
   const [label] = inside(cardOf('#999'), { type: 'Text' })
@@ -618,10 +621,10 @@ test('No parent lists only tasks with no parent', async () => {
     })
   )
   assert.deepEqual(groups(), [
-    ['Active', '1 item'],
-    ['Not on this board', '1 item'],
-    ['Task', '1 item'],
-    ['No parent', '1 task']
+    'Active · 1 item',
+    'Not on this board · 1 item',
+    'Task · 1 item',
+    'No parent · 1 task'
   ])
   const noParent = groupOf('No parent')
   assert.deepEqual(
@@ -644,23 +647,23 @@ test('Collapse all and Expand all act on every group and every task list', async
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['New', false],
-    ['Active', false],
-    ['Not on this board', false],
-    ['No parent', false]
+    ['New · 1 item', false],
+    ['Active · 1 item', false],
+    ['Not on this board · 1 item', false],
+    ['No parent · 1 task', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: 'closed', open: [], closed: [] })
 
-  await panel.toggle({ type: 'Collapsible', label: 'Active' })
+  await panel.toggle({ type: 'Collapsible', label: named('Active') })
   assert.deepEqual(taskLines('Checkout revamp'), [])
 
   await panel.press({ type: 'IconButton', label: 'Expand all' })
   assert.deepEqual(groupStates(), [
-    ['New', true],
-    ['Active', true],
-    ['Not on this board', true],
-    ['Feature', true],
-    ['No parent', true]
+    ['New · 1 item', true],
+    ['Active · 1 item', true],
+    ['Not on this board · 1 item', true],
+    ['Feature · 1 item', true],
+    ['No parent · 1 task', true]
   ])
   assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active'])
   assert.deepEqual(taskLines('Add export'), ['#302 Review the export Active Grace Hopper'])
@@ -672,15 +675,15 @@ test('open groups and task lists survive a reload', async () => {
     families: { parents: [], lists: [listOf(101, [workTask(301, { title: 'Write the tests' })])] }
   })
   await open(snapshot)
-  await panel.toggle({ type: 'Collapsible', label: 'New' })
+  await panel.toggle({ type: 'Collapsible', label: named('New') })
   await panel.press(tasksButton('Checkout revamp')!)
   assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active Grace Hopper'])
 
   const reloaded = await reloadPanel(panel, [org('contoso')], { 'work.snapshot': snapshot })
   panel = reloaded.panel
   assert.deepEqual(groupStates(), [
-    ['New', false],
-    ['Active', true]
+    ['New · 1 item', false],
+    ['Active · 1 item', true]
   ])
   assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active Grace Hopper'])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: null, open: ['tasks:101'], closed: ['column:New'] })
@@ -725,26 +728,26 @@ const showLanes = () => panel.press({ type: 'Button', text: 'Lanes' })
 test('Lanes shows one group per swimlane in board order with a group per column inside', async () => {
   await open(laneSnapshot())
   assert.deepEqual(groups(), [
-    ['New', '2 items'],
-    ['Active', '2 items'],
-    ['Done', '1 item'],
-    ['Not on this board', '1 item'],
-    ['Feature', '1 item'],
-    ['No parent', '1 task']
+    'New · 2 items',
+    'Active · 2 items',
+    'Done · 1 item',
+    'Not on this board · 1 item',
+    'Feature · 1 item',
+    'No parent · 1 task'
   ])
 
   await showLanes()
   assert.deepEqual(groups(), [
-    ['Default lane', '3 items'],
-    ['New', '1 item'],
-    ['Active', '1 item'],
-    ['Done', '1 item'],
-    ['Expedite', '2 items'],
-    ['New', '1 item'],
-    ['Active', '1 item'],
-    ['Not on this board', '1 item'],
-    ['Feature', '1 item'],
-    ['No parent', '1 task']
+    'Default lane · 3 items',
+    'New · 1 item',
+    'Active · 1 item',
+    'Done · 1 item',
+    'Expedite · 2 items',
+    'New · 1 item',
+    'Active · 1 item',
+    'Not on this board · 1 item',
+    'Feature · 1 item',
+    'No parent · 1 task'
   ])
   assert.deepEqual(
     [cardsAt('Default lane', 'New'), cardsAt('Default lane', 'Active'), cardsAt('Default lane', 'Done'), cardsAt('Expedite', 'New'), cardsAt('Expedite', 'Active')],
@@ -759,9 +762,9 @@ test('Lanes shows one group per swimlane in board order with a group per column 
 test('a swimlane without items keeps its group, with nothing inside', async () => {
   await open(snapshotOf({ board: laneBoard(), mine: [item(101, { title: 'Fix login redirect', column: 'Active', lane: null })] }), {}, { persisted: IN_LANES })
   assert.deepEqual(groups(), [
-    ['Default lane', '1 item'],
-    ['Active', '1 item'],
-    ['Expedite', '0 items']
+    'Default lane · 1 item',
+    'Active · 1 item',
+    'Expedite · 0 items'
   ])
   assert.deepEqual(inside(groupOf('Expedite'), { type: 'Card' }), [])
 })
@@ -778,17 +781,17 @@ test('a dimmed parent sits in its own lane and column, with its tasks under it',
     { persisted: IN_LANES }
   )
   assert.deepEqual(groups(), [
-    ['Default lane', '1 item'],
-    ['Active', '1 item'],
-    ['Expedite', '1 item'],
-    ['New', '1 item']
+    'Default lane · 1 item',
+    'Active · 1 item',
+    'Expedite · 1 item',
+    'New · 1 item'
   ])
   assert.deepEqual(cardsAt('Expedite', 'New'), ['#150 Show the delivery estimate'])
   assert.deepEqual(taskLines('#150 Show the delivery estimate'), ['#301 Write the tests Active'])
 })
 
 test('a board without swimlanes shows the columns under Lanes with a note', async () => {
-  const columns = [['New', '1 item'], ['Active', '2 items']]
+  const columns = ['New · 1 item', 'Active · 2 items']
   const snapshot = (lanes: { id: string; name: string }[]) =>
     snapshotOf({
       board: board('contoso', { lanes }),
@@ -811,11 +814,11 @@ test('a board without swimlanes shows the columns under Lanes with a note', asyn
   await panel.post('work.changed', snapshot(LANES))
   assert.equal(noSwimlanes(), null)
   assert.deepEqual(groups(), [
-    ['Default lane', '2 items'],
-    ['New', '1 item'],
-    ['Active', '1 item'],
-    ['Expedite', '1 item'],
-    ['Active', '1 item']
+    'Default lane · 2 items',
+    'New · 1 item',
+    'Active · 1 item',
+    'Expedite · 1 item',
+    'Active · 1 item'
   ])
 
   await panel.press({ type: 'Button', text: 'Columns' })
@@ -838,14 +841,14 @@ test('the Columns and Lanes buttons switch the view, and the chosen one is outli
 
   await showLanes()
   assert.deepEqual(views(), ['ghost', 'outline'])
-  assert.equal(groupOf('Default lane').props.title, 'Default lane')
+  assert.equal(groupOf('Default lane').props.title, 'Default lane · 3 items')
   await showLanes()
   assert.deepEqual(views(), ['ghost', 'outline'])
 
   await panel.press({ type: 'Button', text: 'Columns' })
   assert.deepEqual(views(), ['outline', 'ghost'])
-  assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
-  assert.equal(panel.find({ type: 'Collapsible', label: 'Expedite' }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: named('Default lane') }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: named('Expedite') }), null)
 })
 
 test('the chosen view is remembered per board and survives a reload', async () => {
@@ -860,8 +863,8 @@ test('the chosen view is remembered per board and survives a reload', async () =
   assert.deepEqual(
     groups().slice(0, 2),
     [
-      ['Default lane', '3 items'],
-      ['New', '1 item']
+      'Default lane · 3 items',
+      'New · 1 item'
     ]
   )
 
@@ -869,7 +872,7 @@ test('the chosen view is remembered per board and survives a reload', async () =
   const elsewhere = await reloadPanel(panel, [org('contoso', { boards: otherBoard })], { 'work.snapshot': snapshot })
   panel = elsewhere.panel
   assert.deepEqual(views(), ['outline', 'ghost'])
-  assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: named('Default lane') }), null)
   await showLanes()
   assert.deepEqual(panel.persisted.plugin.workViews, { [VIEW_KEY]: 'lanes', 'contoso/proj-web/team-other': 'lanes' })
 
@@ -882,13 +885,13 @@ test('the chosen view is remembered per board and survives a reload', async () =
 test('a remembered view that is neither columns nor lanes falls back to Columns', async () => {
   await open(laneSnapshot(), {}, { persisted: { plugin: { workViews: { [VIEW_KEY]: 'sideways' } } } })
   assert.deepEqual(views(), ['outline', 'ghost'])
-  assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: named('Default lane') }), null)
 })
 
 test('open lanes and column groups survive a reload', async () => {
   const snapshot = laneSnapshot()
   await open(snapshot, {}, { persisted: IN_LANES })
-  await panel.toggle({ type: 'Collapsible', label: 'Expedite' })
+  await panel.toggle({ type: 'Collapsible', label: named('Expedite') })
   await panel.toggle(columnIn('Default lane', 'Done'))
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], {
     all: null,
@@ -899,12 +902,12 @@ test('open lanes and column groups survive a reload', async () => {
   const reloaded = await reloadPanel(panel, [org('contoso')], { 'work.snapshot': snapshot })
   panel = reloaded.panel
   assert.deepEqual(groupStates().slice(0, 6), [
-    ['Default lane', true],
-    ['New', true],
-    ['Active', true],
-    ['Done', false],
-    ['Expedite', false],
-    ['Not on this board', true]
+    ['Default lane · 3 items', true],
+    ['New · 1 item', true],
+    ['Active · 1 item', true],
+    ['Done · 1 item', false],
+    ['Expedite · 2 items', false],
+    ['Not on this board · 1 item', true]
   ])
 })
 
@@ -912,48 +915,48 @@ test('Collapse all closes the lanes and their column groups too', async () => {
   await open(laneSnapshot())
   await showLanes()
   assert.deepEqual(
-    groupStates().filter(([title]) => title !== 'Not on this board' && title !== 'Feature' && title !== 'No parent'),
+    groupStates().filter(([title]) => !/^(Not on this board|Feature|No parent) · /.test(String(title))),
     [
-      ['Default lane', true],
-      ['New', true],
-      ['Active', true],
-      ['Done', true],
-      ['Expedite', true],
-      ['New', true],
-      ['Active', true]
+      ['Default lane · 3 items', true],
+      ['New · 1 item', true],
+      ['Active · 1 item', true],
+      ['Done · 1 item', true],
+      ['Expedite · 2 items', true],
+      ['New · 1 item', true],
+      ['Active · 1 item', true]
     ]
   )
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['Default lane', false],
-    ['Expedite', false],
-    ['Not on this board', false],
-    ['No parent', false]
+    ['Default lane · 3 items', false],
+    ['Expedite · 2 items', false],
+    ['Not on this board · 1 item', false],
+    ['No parent · 1 task', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: 'closed', open: [], closed: [] })
 
-  await panel.toggle({ type: 'Collapsible', label: 'Default lane' })
+  await panel.toggle({ type: 'Collapsible', label: named('Default lane') })
   assert.deepEqual(groupStates().slice(0, 5), [
-    ['Default lane', true],
-    ['New', false],
-    ['Active', false],
-    ['Done', false],
-    ['Expedite', false]
+    ['Default lane · 3 items', true],
+    ['New · 1 item', false],
+    ['Active · 1 item', false],
+    ['Done · 1 item', false],
+    ['Expedite · 2 items', false]
   ])
   assert.deepEqual(cardsAt('Default lane', 'New'), [])
 
   await panel.press({ type: 'IconButton', label: 'Expand all' })
   assert.deepEqual(
-    groupStates().filter(([title]) => title !== 'Not on this board' && title !== 'Feature' && title !== 'No parent'),
+    groupStates().filter(([title]) => !/^(Not on this board|Feature|No parent) · /.test(String(title))),
     [
-      ['Default lane', true],
-      ['New', true],
-      ['Active', true],
-      ['Done', true],
-      ['Expedite', true],
-      ['New', true],
-      ['Active', true]
+      ['Default lane · 3 items', true],
+      ['New · 1 item', true],
+      ['Active · 1 item', true],
+      ['Done · 1 item', true],
+      ['Expedite · 2 items', true],
+      ['New · 1 item', true],
+      ['Active · 1 item', true]
     ]
   )
   assert.deepEqual(cardsAt('Expedite', 'Active'), ['Cache invalidation'])
@@ -973,7 +976,7 @@ test('a lane name over 1 KiB is cut to the label limit, and the fold keys use th
   assert.ok(utf8Length(cut!) <= MAX_LABEL_BYTES && cut!.endsWith('…'), `${utf8Length(cut!)} bytes`)
   assert.deepEqual(cardsAt('Default lane', 'Active'), ['Add export'])
   const longLane = panel.find({ type: 'Collapsible', label: cut! })!
-  assert.deepEqual(inside(inside(longLane, { type: 'Collapsible', label: 'Active' })[0]!, { type: 'Card' }).map(titleOf), ['Fix login redirect'])
+  assert.deepEqual(inside(inside(longLane, { type: 'Collapsible', label: named('Active') })[0]!, { type: 'Card' }).map(titleOf), ['Fix login redirect'])
   await panel.toggle(columnIn('Default lane', 'Active'))
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: null, open: [], closed: ['lane:lane-default/column:Active'] })
   assert.deepEqual(cardsAt('Default lane', 'Active'), [])
@@ -1258,8 +1261,8 @@ test('a long group shows 25 cards and Show N more reveals the next ones', async 
   await open(snapshotOf({ mine: [...many(1000, 60, { column: 'Active' }), ...many(2000, 25, { column: 'New' })] }))
   const showIn = (title: string) => inside(groupOf(title), { type: 'Button', text: /^Show \d+ more$/ })
   assert.deepEqual(groups(), [
-    ['New', '25 items'],
-    ['Active', '60 items']
+    'New · 25 items',
+    'Active · 60 items'
   ])
   assert.deepEqual(cardsIn('New'), Array.from({ length: 25 }, (_, index) => `Story ${2000 + index}`))
   assert.equal(showIn('New').length, 0)
@@ -1316,7 +1319,7 @@ test("150 items with 300 tasks, all expanded, stay within Orca's limits and say 
   assert.equal(cardsIn('New').length, 25)
   const showMoreIn = (title: string) => inside(groupOf(title), { type: 'Button', text: /^Show \d+ more$/ })
   assert.equal(showMoreIn('Active').length, 1)
-  assert.deepEqual(groups().find(([title]) => title === 'Done'), ['Done', '28 items'])
+  assert.deepEqual(groups().find(title => /^Done · /.test(String(title))), 'Done · 28 items')
   assert.equal(showMoreIn('Done').length, 0)
   assert.ok(panel.findAll({ type: 'Link', text: /^#\d+ Review the copy/ }).length > 0)
 
@@ -1328,9 +1331,9 @@ test("150 items with 300 tasks, all expanded, stay within Orca's limits and say 
 test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits", async () => {
   await open(largeWork(), {}, { persisted: IN_LANES })
   assert.deepEqual(views(), ['ghost', 'outline'])
-  assert.deepEqual(groups().filter(([title]) => title === 'Default lane' || title === 'Expedite'), [
-    ['Default lane', '70 items'],
-    ['Expedite', '70 items']
+  assert.deepEqual(groups().filter(title => /^(Default lane|Expedite) · /.test(String(title))), [
+    'Default lane · 70 items',
+    'Expedite · 70 items'
   ])
   withinLimits()
 
@@ -1338,9 +1341,9 @@ test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits
   withinLimits()
   const note = panel.find({ type: 'Text', text: SOME_HIDDEN })
   assert.deepEqual([note?.props.size, note?.props.muted], ['sm', true])
-  assert.deepEqual(groups().filter(([title]) => title === 'Default lane' || title === 'Expedite'), [
-    ['Default lane', '70 items'],
-    ['Expedite', '70 items']
+  assert.deepEqual(groups().filter(title => /^(Default lane|Expedite) · /.test(String(title))), [
+    'Default lane · 70 items',
+    'Expedite · 70 items'
   ])
   assert.equal(cardsAt('Default lane', 'New').length, 14)
   assert.ok(panel.findAll({ type: 'Link', text: /^#\d+ Review the copy/ }).length > 0)
@@ -1348,7 +1351,7 @@ test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.equal(panel.find({ type: 'Text', text: SOME_HIDDEN }), null)
   withinLimits()
-  await panel.toggle({ type: 'Collapsible', label: 'Expedite' })
+  await panel.toggle({ type: 'Collapsible', label: named('Expedite') })
   withinLimits()
 })
 
@@ -1413,7 +1416,7 @@ test('work.changed post replaces the list', async () => {
   assert.deepEqual(titles(), ['Story 101'])
   await panel.post('work.changed', snapshotOf({ mine: [item(102, { title: 'Posted story', column: 'New' })], updatedAt: NOW + 1000 }))
   assert.deepEqual(titles(), ['Posted story'])
-  assert.deepEqual(groups(), [['New', '1 item']])
+  assert.deepEqual(groups(), ['New · 1 item'])
 })
 
 test('work.changed for another org is ignored', async () => {
@@ -1457,10 +1460,10 @@ test('switching organization loads that org and drops the old list', async () =>
     {},
     { orgs: [org('contoso'), org('fabrikam')] }
   )
-  const column = () => panel.find({ type: 'Collapsible', label: 'Active' })?.props.open
+  const column = () => panel.find({ type: 'Collapsible', label: named('Active') })?.props.open
   assert.deepEqual(titles(), ['contoso story'])
   assert.equal(column(), true)
-  await panel.toggle({ type: 'Collapsible', label: 'Active' })
+  await panel.toggle({ type: 'Collapsible', label: named('Active') })
   assert.equal(column(), false)
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.deepEqual(titles(), ['fabrikam story'])
@@ -1550,8 +1553,8 @@ test('leaving the Work tab and coming back keeps the open item, its draft and th
   const host = await open(snapshotOf({ mine: [item(101), item(102, { column: 'New' })] }), { 'work.details': detailsOf() })
   const calls = () => inputsTo(host, 'ui.visibility').map(input => input as { surface: string; visible: boolean })
   const since = (count: number) => calls().slice(count).sort((a, b) => a.surface.localeCompare(b.surface))
-  const column = (title: string) => panel.find({ type: 'Collapsible', label: title })
-  await panel.toggle({ type: 'Collapsible', label: 'New' })
+  const column = (title: string) => panel.find({ type: 'Collapsible', label: named(title) })
+  await panel.toggle({ type: 'Collapsible', label: named('New') })
   assert.equal(column('New')?.props.open, false)
   await openCard()
   await panel.toggle({ type: 'Collapsible', label: 'Acceptance criteria' })

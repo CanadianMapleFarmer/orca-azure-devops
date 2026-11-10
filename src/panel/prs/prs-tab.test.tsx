@@ -78,7 +78,7 @@ function outline(): string[] {
   const lines: string[] = []
   walk((node, depth) => {
     const indent = '  '.repeat(depth)
-    if (node.type === 'Collapsible') lines.push(`${indent}${node.props?.title} [${node.props?.description}]`)
+    if (node.type === 'Collapsible') lines.push(`${indent}${node.props?.title}${node.props?.description ? ` [${node.props.description}]` : ''}`)
     if (node.type === 'Card') lines.push(`${indent}${node.props?.title}`)
     if (node.type === 'ListItem') lines.push(`${indent}- ${node.props?.title}`)
     return node.type === 'Collapsible'
@@ -481,7 +481,7 @@ test('Reviewed by you lists the PRs I voted on with my vote', async () => {
     'reviews.open': input => reviewOf({ key: input, pr: reviewed[0] })
   })
   await showToReview()
-  assert.deepEqual(headers().at(-1), ['Reviewed by you', '4 pull requests'])
+  assert.deepEqual(headers().at(-1), ['Reviewed by you · 4 pull requests', undefined])
   const rowsOf = (label: string) => {
     const list = panel.find({ type: 'List', label })
     assert.ok(list, `${label} is drawn`)
@@ -516,7 +516,7 @@ test('Reviewed by you shows at most 50 pull requests and is absent when empty', 
   await showToReview()
   assert.equal(panel.findAll({ type: 'ListItem' }).length, 51)
   await panel.post('prs.changed', snapshotOf({ toReview: [prOf(80)], toReviewCount: 1, updatedAt: NOW + 1 }))
-  assert.equal(panel.find({ type: 'Collapsible', label: 'Reviewed by you' }), null)
+  assert.equal(panel.find({ type: 'Collapsible', label: /^Reviewed by you/ }), null)
   assert.equal(panel.find({ type: 'List', label: 'Reviewed by you' }), null)
 })
 
@@ -573,7 +573,7 @@ test('a chosen project with nothing in the shown view says Nothing here and poin
   assert.deepEqual(empty(), ['Nothing here for Fabrikam Web', CHOOSE_ALL])
 
   await panel.select({ type: 'Select', label: 'Project' }, '*')
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 pull request]', '  - Tools review'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 pull request', '  - Tools review'])
 })
 
 test('more than 30 sets shows the cap note', async () => {
@@ -842,9 +842,9 @@ test('release sets group by project, flat with the repository named for a one-re
     })
   )
   assert.deepEqual(outline(), [
-    'Contoso Tools · web-app [1 set]',
+    'Contoso Tools · web-app · 1 set',
     '  Add CSV export',
-    'Fabrikam Web · web-app [2 sets]',
+    'Fabrikam Web · web-app · 2 sets',
     '  Fix the sign-in redirect',
     '  Cache the lookups'
   ])
@@ -868,12 +868,12 @@ test('a project with sets from several repositories gets one group per repositor
     })
   )
   assert.deepEqual(outline(), [
-    'Fabrikam Web · 2 repos [4 sets]',
-    '  Across repos [1 set]',
+    'Fabrikam Web · 2 repos · 4 sets',
+    '  Across repos · 1 set',
     '    Both repos',
-    '  fabrikam-api [1 set]',
+    '  fabrikam-api · 1 set',
     '    Api only',
-    '  web-app [2 sets]',
+    '  web-app · 2 sets',
     '    App only',
     '    App again'
   ])
@@ -900,13 +900,13 @@ test('a set spanning projects shows once, in Across projects at the top, with pr
     })
   )
   assert.deepEqual(outline(), [
-    'Across projects [1 set · 1 needs you]',
+    'Across projects · 1 set [1 needs you]',
     '  Rename the tenant setting',
-    'Contoso Tools · web-app [1 set]',
+    'Contoso Tools · web-app · 1 set',
     '  Tools set',
-    'Fabrikam Boards · boards-app [1 set]',
+    'Fabrikam Boards · boards-app · 1 set',
     '  Boards set',
-    'Fabrikam Web · web-app [1 set]',
+    'Fabrikam Web · web-app · 1 set',
     '  Web set'
   ])
   assert.equal(titles().filter(title => title === 'Rename the tenant setting').length, 1)
@@ -915,9 +915,9 @@ test('a set spanning projects shows once, in Across projects at the top, with pr
   assert.deepEqual(badgesIn('Rename the tenant setting')[0], ['Fabrikam Web / web-app', 'neutral'])
 
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
-  assert.deepEqual(outline(), ['Across projects [1 set · 1 needs you]', '  Rename the tenant setting', 'Contoso Tools · web-app [1 set]', '  Tools set'])
+  assert.deepEqual(outline(), ['Across projects · 1 set [1 needs you]', '  Rename the tenant setting', 'Contoso Tools · web-app · 1 set', '  Tools set'])
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-boards')
-  assert.deepEqual(outline(), ['Fabrikam Boards · boards-app [1 set]', '  Boards set'])
+  assert.deepEqual(outline(), ['Fabrikam Boards · boards-app · 1 set', '  Boards set'])
 })
 
 test('merged rows after the first two fold behind + N merged · show', async () => {
@@ -983,23 +983,23 @@ test('Mine and To review switch the list; To review groups its rows by project a
   assert.deepEqual(views(), ['ghost', 'outline'])
   assert.equal(panel.find({ type: 'Card' }), null)
   assert.deepEqual(outline(), [
-    'Contoso Tools · web-app [3 pull requests]',
+    'Contoso Tools · web-app · 3 pull requests',
     '  - Tools review 1',
     '  - Tools review 2',
     '  - Tools review 3',
-    'Fabrikam Web · 2 repos [9 pull requests]',
-    '  fabrikam-api [4 pull requests]',
+    'Fabrikam Web · 2 repos · 9 pull requests',
+    '  fabrikam-api · 4 pull requests',
     '    - Api review 1',
     '    - Api review 2',
     '    - Api review 3',
     '    - Api review 4',
-    '  web-app [5 pull requests]',
+    '  web-app · 5 pull requests',
     '    - Web review 1',
     '    - Web review 2',
     '    - Web review 3',
     '    - Web review 4',
     '    - Web review 5',
-    'Reviewed by you [2 pull requests]',
+    'Reviewed by you · 2 pull requests',
     '  - Voted on the API',
     '  - Voted on the tools'
   ])
@@ -1008,17 +1008,17 @@ test('Mine and To review switch the list; To review groups its rows by project a
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
   assert.equal(reviewButton()?.text, 'To review · 3 of 12')
   assert.deepEqual(outline(), [
-    'Contoso Tools · web-app [3 pull requests]',
+    'Contoso Tools · web-app · 3 pull requests',
     '  - Tools review 1',
     '  - Tools review 2',
     '  - Tools review 3',
-    'Reviewed by you [1 pull request]',
+    'Reviewed by you · 1 pull request',
     '  - Voted on the tools'
   ])
 
   await panel.press({ type: 'Button', text: 'Mine' })
   assert.deepEqual(views(), ['outline', 'ghost'])
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 set]', '  Tools set'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 set', '  Tools set'])
   assert.deepEqual(panel.persisted.plugin.prsPrefs, { contoso: { view: 'mine', project: 'proj-tools', repo: null } })
 })
 
@@ -1049,9 +1049,9 @@ test('the pickers come from sets, To review and Reviewed by you whatever the vie
   assert.deepEqual(panel.find({ type: 'EmptyState' })?.label, 'Nothing here for Fabrikam Web')
   await showToReview()
   assert.deepEqual(options(projectSelect()), projects)
-  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api [1 pull request]', '  - Api review'])
+  assert.deepEqual(outline(), ['Fabrikam Web · fabrikam-api · 1 pull request', '  - Api review'])
   await panel.select({ type: 'Select', label: 'Repository' }, 'repo-web')
-  assert.deepEqual(outline(), ['Fabrikam Web · web-app [1 pull request]', '  - Web review'])
+  assert.deepEqual(outline(), ['Fabrikam Web · web-app · 1 pull request', '  - Web review'])
 })
 
 test('the chosen view, project and repository survive a reload, per organisation', async () => {
@@ -1065,7 +1065,7 @@ test('the chosen view, project and repository survive a reload, per organisation
   await showToReview()
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-web')
   await panel.select({ type: 'Select', label: 'Repository' }, 'repo-api')
-  const apiOnly = ['Fabrikam Web · fabrikam-api [1 pull request]', '  - Api review']
+  const apiOnly = ['Fabrikam Web · fabrikam-api · 1 pull request', '  - Api review']
   assert.deepEqual(outline(), apiOnly)
 
   const reloaded = await reloadPanel(panel, orgs, { 'prs.snapshot': data })
@@ -1094,7 +1094,7 @@ test('a remembered project with nothing in it now shows All projects', async () 
   await open(snapshotOf({ sets: [setOf([prIn(55, WEB, WEB_APP)], { title: 'Web set' }), setOf([prIn(60, TOOLS, TOOLS_APP)], { title: 'Tools set' })] }), {}, { prefs: remembered })
   assert.equal(projectSelect()?.props.value, '*')
   assert.equal(repoSelect(), null)
-  assert.deepEqual(outline(), ['Contoso Tools · web-app [1 set]', '  Tools set', 'Fabrikam Web · web-app [1 set]', '  Web set'])
+  assert.deepEqual(outline(), ['Contoso Tools · web-app · 1 set', '  Tools set', 'Fabrikam Web · web-app · 1 set', '  Web set'])
   assert.equal(panel.find({ type: 'EmptyState' }), null)
   assert.deepEqual(panel.persisted.plugin.prsPrefs, remembered)
 
@@ -1109,7 +1109,7 @@ test('a remembered project with nothing in it now shows All projects', async () 
     })
   )
   assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-gone', 'repo-gone'])
-  assert.deepEqual(outline(), ['Contoso Archive · legacy-app [1 set]', '  Archive set'])
+  assert.deepEqual(outline(), ['Contoso Archive · legacy-app · 1 set', '  Archive set'])
 })
 
 test('a project header says how many sets need you', async () => {
@@ -1130,11 +1130,11 @@ test('a project header says how many sets need you', async () => {
     })
   )
   assert.deepEqual(headers(), [
-    ['Contoso Tools · web-app', '1 set · 1 needs you'],
-    ['Fabrikam Boards · boards-app', '1 set'],
-    ['Fabrikam Web · 2 repos', '8 sets · 6 need you'],
-    ['fabrikam-api', '1 set · 1 needs you'],
-    ['web-app', '7 sets · 5 need you']
+    ['Contoso Tools · web-app · 1 set', '1 needs you'],
+    ['Fabrikam Boards · boards-app · 1 set', undefined],
+    ['Fabrikam Web · 2 repos · 8 sets', '6 need you'],
+    ['fabrikam-api · 1 set', '1 needs you'],
+    ['web-app · 7 sets', '5 need you']
   ])
 })
 
@@ -1148,36 +1148,36 @@ test('Collapse all and Expand all close and open every group in both views', asy
     })
   )
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', true],
-    ['Fabrikam Web · 2 repos', true],
-    ['fabrikam-api', true],
-    ['web-app', true]
+    ['Contoso Tools · web-app · 1 set', true],
+    ['Fabrikam Web · 2 repos · 2 sets', true],
+    ['fabrikam-api · 1 set', true],
+    ['web-app · 1 set', true]
   ])
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', false],
-    ['Fabrikam Web · 2 repos', false]
+    ['Contoso Tools · web-app · 1 set', false],
+    ['Fabrikam Web · 2 repos · 2 sets', false]
   ])
   assert.equal(panel.find({ type: 'Card' }), null)
-  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos' })
+  await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos · 2 sets' })
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', false],
-    ['Fabrikam Web · 2 repos', true],
-    ['fabrikam-api', false],
-    ['web-app', false]
+    ['Contoso Tools · web-app · 1 set', false],
+    ['Fabrikam Web · 2 repos · 2 sets', true],
+    ['fabrikam-api · 1 set', false],
+    ['web-app · 1 set', false]
   ])
 
   await showToReview()
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', false],
-    ['Fabrikam Web · web-app', false],
-    ['Reviewed by you', false]
+    ['Contoso Tools · web-app · 1 pull request', false],
+    ['Fabrikam Web · web-app · 1 pull request', false],
+    ['Reviewed by you · 1 pull request', false]
   ])
   await panel.press({ type: 'IconButton', label: 'Expand all' })
   assert.deepEqual(groupStates(), [
-    ['Contoso Tools · web-app', true],
-    ['Fabrikam Web · web-app', true],
-    ['Reviewed by you', true]
+    ['Contoso Tools · web-app · 1 pull request', true],
+    ['Fabrikam Web · web-app · 1 pull request', true],
+    ['Reviewed by you · 1 pull request', true]
   ])
   assert.equal(panel.findAll({ type: 'ListItem' }).length, 3)
   await panel.press({ type: 'Button', text: 'Mine' })
@@ -1199,8 +1199,8 @@ test("fifty pull requests in sets across projects, with To review full, stay wit
   assert.equal(titles().length, 20)
   assert.equal(panel.findAll({ type: 'Link', text: /^!\d+$/ }).length, 50)
   const top = outline().filter(line => !line.startsWith('  ') && line.includes('['))
-  assert.equal(top[0], 'Across projects [1 set · 1 needs you]')
-  assert.ok(outline().some(line => line.startsWith('  Across repos [')))
+  assert.equal(top[0], 'Across projects · 1 set [1 needs you]')
+  assert.ok(outline().some(line => line.startsWith('  Across repos · ')))
   assert.ok(groupStates().every(([, open]) => open === true))
   withinLimits()
 

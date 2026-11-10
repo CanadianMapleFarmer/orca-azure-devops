@@ -24,8 +24,8 @@ export function Group({ org, tab, foldKey, title, count, hint, natural = true, c
   const open = isFoldOpen(org, tab, foldKey, natural)
   return (
     <Collapsible
-      title={cutLabel(title)}
-      description={cutLabel(hint ? `${count} · ${hint}` : count)}
+      title={cutLabel(`${title} · ${count}`)}
+      description={hint ? cutLabel(hint) : undefined}
       open={open}
       onChange={next => setFoldOpen(org, tab, foldKey, next)}
     >
