@@ -569,7 +569,7 @@ test('Reviewed by you lists the PRs I voted on with my vote', async () => {
     assert.ok(list, `${label} is drawn`)
     return panel.findAll({ type: 'ListItem' }).filter(item => item.path.startsWith(`${list.path}/`)).map(item => [item.label, item.props.description])
   }
-  assert.deepEqual(rowsOf('To review'), [['Cache the lookups', '!80 · Ada Lovelace']])
+  assert.deepEqual(rowsOf('To review in Fabrikam Web · web-app'), [['Cache the lookups', '!80 · Ada Lovelace']])
   assert.deepEqual(rowsOf('Reviewed by you'), [
     ['Add the health endpoint', '!90 · Fabrikam Web / fabrikam-api · Grace Hopper · you: Approved with suggestions'],
     ['Rework the cache', '!91 · Fabrikam Web / web-app · Grace Hopper · you: Waiting for author'],
@@ -587,7 +587,7 @@ test('To review shows reviewed pull requests alone, and its switch reads just To
   await open(snapshotOf({ reviewed }))
   assert.equal(reviewButton()?.text, 'To review')
   await showToReview()
-  assert.equal(panel.find({ type: 'List', label: 'To review' }), null)
+  assert.equal(panel.find({ type: 'List', label: /^To review/ }), null)
   assert.equal(panel.find({ type: 'EmptyState' }), null)
   assert.deepEqual(panel.findAll({ type: 'ListItem' }).map(item => item.label), ['Add the health endpoint'])
 })
@@ -604,11 +604,38 @@ test('Reviewed by you shows at most 50 pull requests and is absent when empty', 
 
 test('a long title and a long name are cut to the label limit', async () => {
   const title = '界'.repeat(400)
-  await open(snapshotOf({ toReview: [prOf(80, { title, createdBy: { id: 'u-grace', name: 'G'.repeat(2_000) } })], toReviewCount: 1 }))
+  await open(snapshotOf({ toReview: [prOf(80, { title, projectName: 'P'.repeat(2_000), createdBy: { id: 'u-grace', name: 'G'.repeat(2_000) } })], toReviewCount: 1 }))
   await showToReview()
   const [item] = panel.findAll({ type: 'ListItem' })
   assert.ok(item.label && item.label.endsWith('…') && new TextEncoder().encode(item.label).length <= 1024)
   assert.ok(String(item.props.description).endsWith('…') && new TextEncoder().encode(String(item.props.description)).length <= 1024)
+  const [list] = panel.findAll({ type: 'List' })
+  assert.ok(list.label?.startsWith('To review in PPP') && list.label.endsWith('…') && new TextEncoder().encode(list.label).length <= 1024)
+})
+
+test("each To review group's list is named after its project and repository, and Reviewed by you keeps its name", async () => {
+  await open(
+    snapshotOf({
+      toReview: [
+        prIn(80, WEB, WEB_API, { title: 'Api review' }),
+        prIn(81, WEB, WEB_APP, { title: 'Web review' }),
+        prIn(82, TOOLS, TOOLS_APP, { title: 'Tools review' }),
+        prIn(83, TOOLS, TOOLS_APP, { title: 'Tools follow-up' })
+      ],
+      toReviewCount: 4,
+      reviewed: [prIn(90, WEB, WEB_APP, { title: 'Voted', reviewers: [myVote(10)] })]
+    })
+  )
+  await showToReview()
+  assert.deepEqual(
+    panel.findAll({ type: 'List' }).map(list => [list.label, inside(list, { type: 'ListItem' }).map(item => item.label)]),
+    [
+      ['To review in Contoso Tools · web-app', ['Tools review', 'Tools follow-up']],
+      ['To review in Fabrikam Web · fabrikam-api', ['Api review']],
+      ['To review in Fabrikam Web · web-app', ['Web review']],
+      ['Reviewed by you', ['Voted']]
+    ]
+  )
 })
 
 test('To review shows at most 50 pull requests and says how many there are', async () => {

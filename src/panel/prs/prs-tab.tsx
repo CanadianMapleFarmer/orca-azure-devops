@@ -25,6 +25,8 @@ const MAX_REVIEWED = 50
 
 const prPlaces = (pr: PrSummary): Place[] => [prPlace(pr)]
 
+const toReviewLabel = ([first]: readonly PrSummary[]): string => cutLabel(`To review in ${first.projectName} · ${first.repoName}`)
+
 interface View {
   org: string
   current: PrSnapshot
@@ -94,7 +96,7 @@ function ToReview({ org, current, choices }: View): OrcaNode {
     count: items => counted(items.length, 'pull request', 'pull requests'),
     hint: () => undefined,
     draw: items => (
-      <List label="To review">
+      <List label={toReviewLabel(items)}>
         {items.map(pr => (
           <ListItem key={pr.prId} title={cutLabel(pr.title)} description={cutLabel(`!${pr.prId} · ${pr.createdBy.name}`)} onPress={() => showReview(org, pr)} />
         ))}
