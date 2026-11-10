@@ -48,19 +48,36 @@ async function open(snapshot: MockRequests['work.snapshot'], more: MockRequests 
 
 const inputsTo = (host: TestHost, name: string) => requestsTo(host, name).map(call => call.input)
 
-const inside = (parent: TestElement, query: TestQuery) => panel.findAll(query).filter(each => each.path.startsWith(`${parent.path}/`))
+type Scope = Pick<TestElement, 'path'>
 
-const titleOf = (card: TestElement) => (inside(card, { type: 'Link' })[0] ?? inside(card, { type: 'Text' })[0])?.text
+const inside = (parent: Scope, query: TestQuery) => panel.findAll(query).filter(each => each.path.startsWith(`${parent.path}/`))
 
-const titles = () => panel.findAll({ type: 'Card' }).map(titleOf)
+const cardNodes = () => nodesOf('Box').filter(box => box.props?.border === true)
 
-const cardOf = (title: string): TestElement => {
-  const card = panel.findAll({ type: 'Card' }).find(each => titleOf(each) === title)
+const CARD_SEGMENT = /^#\d+\.(?:item|parent|unknown):\d+$/
+
+const cardsUnder = (parent?: Scope): Scope[] => {
+  const paths: string[] = []
+  for (const leaf of parent ? inside(parent, {}) : panel.findAll({})) {
+    const segments = leaf.path.split('/')
+    const at = segments.findIndex(segment => CARD_SEGMENT.test(segment))
+    const path = segments.slice(0, at + 1).join('/')
+    if (at >= 0 && !paths.includes(path)) paths.push(path)
+  }
+  return paths.map(path => ({ path }))
+}
+
+const titleOf = (card: Scope) => inside(card, { type: 'ListItem' })[0]?.label ?? inside(card, { type: 'Text' })[0]?.text
+
+const titles = () => cardsUnder().map(titleOf)
+
+const cardOf = (title: string): Scope => {
+  const card = cardsUnder().find(each => titleOf(each) === title)
   assert.ok(card, `${title} is drawn`)
   return card
 }
 
-const named = (name: string) => new RegExp(`^${name} · \\d+ \\S+$`)
+const named = (name: string) => new RegExp(`^${name} · \\d+$`)
 
 const groupOf = (title: string): TestElement => {
   const group = panel.find({ type: 'Collapsible', label: named(title) })
@@ -68,16 +85,13 @@ const groupOf = (title: string): TestElement => {
   return group
 }
 
-const cardsIn = (title: string) => inside(groupOf(title), { type: 'Card' }).map(titleOf)
+const cardsIn = (title: string) => cardsUnder(groupOf(title)).map(titleOf)
 
-const taskLines = (title: string) => {
-  const card = cardOf(title)
-  const block = card.path.slice(0, card.path.lastIndexOf('/'))
-  return panel
-    .findAll({ type: 'Row' })
-    .filter(row => row.path.startsWith(`${block}/`) && !row.path.startsWith(`${card.path}/`))
-    .map(row => row.text)
-}
+const taskRows = (parent: Scope) => inside(parent, { type: 'Row' }).filter(row => inside(row, { type: 'Link' }).length > 0)
+
+const taskLines = (title: string) => taskRows(cardOf(title)).map(row => row.text)
+
+const insets = () => nodesOf('Box').filter(box => box.props?.background === 'muted' && box.props?.radius === 'sm')
 
 const tasksButton = (title: string) => inside(cardOf(title), { type: 'Button', text: /^Tasks / })[0]
 
@@ -102,7 +116,7 @@ const columnIn = (lane: string, column: string): TestElement => {
   return found
 }
 
-const cardsAt = (lane: string, column: string) => inside(columnIn(lane, column), { type: 'Card' }).map(titleOf)
+const cardsAt = (lane: string, column: string) => cardsUnder(columnIn(lane, column)).map(titleOf)
 
 const columnsButton = () => panel.find({ type: 'Button', text: 'Columns' })
 
@@ -112,9 +126,14 @@ const views = () => [columnsButton()?.props.variant, lanesButton()?.props.varian
 
 const noSwimlanes = () => panel.find({ type: 'Text', text: NO_SWIMLANES })
 
-const openCard = (title = 'Story 101') => panel.press({ type: 'Link', text: title })
+const openCard = (title = 'Story 101') => panel.press({ type: 'ListItem', label: title })
 
-const movesIn = (parent: TestElement) => inside(parent, { type: 'Select', label: 'Move' })
+const movesIn = (parent: Scope) => inside(parent, { type: 'Select', label: 'Move' })
+
+const cardMoves = (card: Scope) => {
+  const rows = taskRows(card)
+  return movesIn(card).filter(move => !rows.some(row => move.path.startsWith(`${row.path}/`)))
+}
 
 const chips = (text: RegExp) => panel.findAll({ type: 'Badge', text }).map(badge => ({ text: badge.text, tone: badge.props.tone }))
 
@@ -131,7 +150,7 @@ function withinLimits(): void {
 
 const mineTask = (id: number, title: string, over: Parameters<typeof workTask>[1] = {}) => workTask(id, { title, mine: true, assignee: 'Ada Lovelace', ...over })
 
-test('groups follow board order and count their cards', async () => {
+test('groups follow board order and count their cards on one line, and only No parent has a hint', async () => {
   await open(
     snapshotOf({
       mine: [
@@ -144,16 +163,19 @@ test('groups follow board order and count their cards', async () => {
     })
   )
   assert.deepEqual(groups(), [
-    'New · 2 items',
-    'Active · 2 items',
-    'Not on this board · 1 item',
-    'Feature · 1 item',
-    'No parent · 1 task'
+    'New · 2',
+    'Active · 2',
+    'Not on this board · 1',
+    'Feature · 1',
+    'No parent · 1'
   ])
-  assert.ok(nodesOf('Collapsible').every(group => group.props?.description === undefined))
+  assert.deepEqual(
+    nodesOf('Collapsible').map(group => group.props?.description),
+    [undefined, undefined, undefined, undefined, 'tasks with no parent']
+  )
   assert.deepEqual(titles(), ['Add export', 'Legacy import', 'Fix login redirect', 'Cache invalidation', 'Checkout revamp'])
   assert.deepEqual(cardsIn('New'), ['Add export', 'Legacy import'])
-  assert.deepEqual(inside(groupOf('No parent'), { type: 'Row' }).map(row => row.text), ['#201 Update runbook Active'])
+  assert.deepEqual(taskRows(groupOf('No parent')).map(row => row.text), ['#201 Update runbook'])
   assert.deepEqual(
     [inside(cardOf('Add export'), { type: 'IconButton' })[0]?.label, inside(cardOf('Add export'), { type: 'Text' })[0]?.text],
     ['User Story', '#102']
@@ -163,7 +185,7 @@ test('groups follow board order and count their cards', async () => {
 
 test('a column without items has no group and the snapshot is requested for the active org', async () => {
   const host = await open(snapshotOf({ mine: [item(101, { column: 'Done' })] }))
-  assert.deepEqual(groups(), ['Done · 1 item'])
+  assert.deepEqual(groups(), ['Done · 1'])
   assert.deepEqual(inputsTo(host, 'work.snapshot'), [{ org: 'contoso' }])
 })
 
@@ -224,8 +246,8 @@ test('300 items with four chips each and 25 nudges still render, with 10 nudges 
   )
   const nudges = Array.from({ length: 25 }, (_, index) => ({ itemId: index + 1, prId: index * 4 + 1, branch: 'main', toColumn: 'Done' }))
   await open(snapshotOf({ mine, nudges }))
-  assert.deepEqual(groups(), ['Active · 300 items'])
-  assert.equal(panel.findAll({ type: 'Card' }).length, 25)
+  assert.deepEqual(groups(), ['Active · 300'])
+  assert.equal(cardsUnder().length, 25)
   for (const target of targets) assert.equal(panel.findAll({ type: 'Badge', text: `${target} ✓` }).length, 25, target)
   assert.equal(panel.findAll({ type: 'Badge', text: /^\+/ }).length, 0)
   assert.ok(panel.find({ type: 'Button', text: 'Show 25 more' }))
@@ -342,7 +364,7 @@ test('a refused move shows the message and the list follows the worker post', as
   assert.equal(panel.valueOf({ type: 'Select', label: 'Move' }), '')
 
   await panel.post('work.changed', snapshotOf({ mine: [item(101, { rev: 8, column: 'Done', state: 'Done' })] }))
-  assert.deepEqual(groups(), ['Done · 1 item'])
+  assert.deepEqual(groups(), ['Done · 1'])
 })
 
 test('nudge Move and Dismiss call the right requests', async () => {
@@ -353,7 +375,14 @@ test('nudge Move and Dismiss call the right requests', async () => {
   })
   const callout = calloutTitled('#101 — PR 55 merged into main')
   assert.equal(callout?.props.tone, 'accent')
-  assert.equal(panel.find({ type: 'Button', text: 'Dismiss' })?.props.variant, 'ghost')
+  assert.ok(panel.find({ type: 'Text', text: 'Story 101' }))
+  assert.deepEqual(
+    ['Move to Done', 'Dismiss'].map(text => panel.find({ type: 'Button', text })).map(button => [button?.props.size, button?.props.variant, button?.props.tone]),
+    [
+      ['xs', 'solid', 'accent'],
+      ['xs', 'ghost', undefined]
+    ]
+  )
 
   await panel.press({ text: 'Move to Done' })
   assert.deepEqual(inputsTo(host, 'work.move'), [{ org: 'contoso', id: 101, rev: 12, to: { column: 'Done' } }])
@@ -389,22 +418,36 @@ test('a card is a pressable title, then the type, id, chips, Tasks n/m and a com
     })
   )
   const cut = `${[...long].slice(0, 90).join('')}…`
+  const [drawn] = cardNodes()
+  assert.deepEqual(shapeOf(drawn!), [
+    'Box',
+    ['List', ['ListItem']],
+    ['Box', ['Row', ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release ● build'], ['Button', 'Tasks 1/3']], ['Box', ['Select']]]]
+  ])
+  const [list, meta] = drawn!.children as TreeSnapshot[]
+  const [row] = meta!.children as TreeSnapshot[]
+  const [left, compact] = row!.children as TreeSnapshot[]
   assert.deepEqual(
-    nodesOf('Card').map(shapeOf),
-    [['Card', ['Link', cut], ['Row', ['IconButton'], ['Text', '#101'], ['Badge', 'main ✓'], ['Badge', 'release ● build'], ['Button', 'Tasks 1/3'], ['Box', ['Select']]]]]
+    [drawn!.props, list!.props, meta!.props, row!.props, left!.props, compact!.props],
+    [
+      { border: true, radius: 'md', background: 'card', padding: 'xs', gap: 'none' },
+      { label: 'User Story #101' },
+      { paddingX: 'sm', paddingY: 'xs', gap: 'xs' },
+      { justify: 'between', align: 'center', gap: 'xs' },
+      { gap: 'xs', align: 'center', wrap: true },
+      { width: 112, shrink: false }
+    ]
   )
   const card = cardOf(cut)
-  assert.deepEqual([card.props.title, card.props.description], [undefined, undefined])
-  const [row] = inside(card, { type: 'Row' })
-  assert.deepEqual([row?.props.gap, row?.props.align, row?.props.wrap], ['xs', 'center', true])
+  assert.equal(inside(card, { type: 'ListItem' })[0]?.label, cut)
   const [type] = inside(card, { type: 'IconButton' })
   assert.deepEqual([type?.label, type?.props.icon, type?.props.variant, type?.props.size], ['User Story', 'book', 'ghost', 'xs'])
   const [id] = inside(card, { type: 'Text' })
-  assert.deepEqual([id?.text, id?.props.size, id?.props.muted], ['#101', 'sm', true])
+  assert.deepEqual([id?.text, id?.props.size, id?.props.muted], ['#101', 'xs', true])
   const toggle = tasksButton(cut)
-  assert.deepEqual([toggle?.props.variant, toggle?.props.size, toggle?.props.tooltip], ['ghost', 'xs', '1 of 3 tasks done'])
-  const [box] = inside(card, { type: 'Box' })
-  assert.deepEqual([box?.props.width, box?.props.shrink], [112, false])
+  assert.deepEqual([toggle?.props.variant, toggle?.props.size, toggle?.props.icon, toggle?.props.tooltip], ['ghost', 'xs', 'next', '1 of 3 tasks done'])
+  await panel.press(toggle!)
+  assert.equal(tasksButton(cut)?.props.icon, 'expand')
   const [move] = movesIn(card)
   assert.deepEqual([move?.props.labelHidden, move?.props.placeholder], [true, 'Move'])
   assert.equal(panel.find({ type: 'Button', text: 'Details' }), null)
@@ -431,7 +474,7 @@ test("pressing a card's title or type opens its details", async () => {
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Broken export')
 })
 
-test("Tasks n/m opens the tasks under the story with state and other people's names, Unassigned for nobody, done ones muted, and + N more", async () => {
+test("Tasks n/m opens the tasks inside the card, one line each, with state and other people's names, Unassigned for nobody, done ones muted, and + N more", async () => {
   const host = await open(
     snapshotOf({
       mine: [item(101, { title: 'Checkout revamp' })],
@@ -458,36 +501,75 @@ test("Tasks n/m opens the tasks under the story with state and other people's na
 
   await panel.press(toggle!)
   assert.deepEqual(taskLines('Checkout revamp'), [
-    '#301 Write the tests Active Grace Hopper',
-    '#302 Update the copy Active Unassigned',
-    '#303 Draft the plan Closed Alan Turing'
+    '#301 Write the tests · Grace Hopper Active',
+    '#302 Update the copy · Unassigned Active',
+    '#303 Draft the plan · Alan Turing Closed'
   ])
-  assert.ok(panel.find({ type: 'Link', text: '#301 Write the tests' }))
-  assert.equal(panel.find({ type: 'Link', text: '#303 Draft the plan' }), null)
-  const done = panel.find({ type: 'Text', text: '#303 Draft the plan' })
-  assert.deepEqual([done?.props.size, done?.props.muted], ['sm', true])
-  const nobody = panel.find({ type: 'Text', text: 'Unassigned' })
-  assert.deepEqual([nobody?.props.size, nobody?.props.muted], ['sm', true])
-  const more = panel.find({ type: 'Text', text: '+ 2 more' })
-  assert.deepEqual([more?.props.size, more?.props.muted], ['sm', true])
-  const box = panel.findAll({ type: 'Box' }).find(each => more?.path.startsWith(`${each.path}/`))
-  assert.deepEqual([box?.props.paddingX, box?.props.gap], ['sm', 'xs'])
-  assert.equal(movesIn(box!).length, 0)
+  const [, meta] = cardNodes()[0]!.children as TreeSnapshot[]
+  const inset = (meta!.children as TreeSnapshot[])[1]
+  assert.deepEqual(inset?.props, { background: 'muted', radius: 'sm', padding: 'xs', gap: 'xs' })
+  assert.deepEqual(insets(), [inset])
+  const card = cardOf('Checkout revamp')
+  for (const row of taskRows(card)) {
+    assert.deepEqual([row.props.justify, row.props.align, row.props.wrap], ['between', 'center', undefined])
+    assert.deepEqual(
+      inside(row, { type: 'Box' }).map(box => [box.props.shrink, box.props.grow, box.props.minWidth]),
+      [
+        [false, undefined, undefined],
+        [undefined, true, 0],
+        [false, undefined, undefined]
+      ]
+    )
+  }
+  assert.deepEqual(
+    inside(card, { type: 'Link' }).map(link => link.text),
+    ['#301', '#302', '#303']
+  )
+  assert.deepEqual(
+    inside(card, { type: 'Text' }).map(text => [text.text, text.props.size, text.props.truncate, text.props.muted]),
+    [
+      ['#101', 'xs', undefined, true],
+      ['Write the tests · Grace Hopper', 'sm', true, false],
+      ['Update the copy · Unassigned', 'sm', true, false],
+      ['Draft the plan · Alan Turing', 'sm', true, true],
+      ['+ 2 more', 'xs', undefined, true]
+    ]
+  )
+  assert.deepEqual(
+    inside(card, { type: 'Badge' }).map(badge => [badge.text, badge.props.tone]),
+    [
+      ['Active', 'neutral'],
+      ['Active', 'neutral'],
+      ['Closed', 'success']
+    ]
+  )
+  assert.equal(taskRows(card).flatMap(movesIn).length, 0)
 
-  await panel.press({ type: 'Link', text: '#301 Write the tests' })
-  assert.deepEqual(inputsTo(host, 'work.details'), [{ org: 'contoso', id: 301 }])
+  await panel.press({ type: 'Link', text: '#301' })
+  await panel.press({ label: 'Back' })
+  await panel.press({ type: 'Link', text: '#303' })
+  assert.deepEqual(inputsTo(host, 'work.details'), [
+    { org: 'contoso', id: 301 },
+    { org: 'contoso', id: 303 }
+  ])
   await panel.press({ label: 'Back' })
   await panel.press(tasksButton('Checkout revamp')!)
   assert.deepEqual(taskLines('Checkout revamp'), [])
 })
 
-test('your task under a story keeps its Move', async () => {
+test('your task under a story has its Move in place of the state, and your done task shows its state', async () => {
   const sent: unknown[] = []
   await open(
     snapshotOf({
       mine: [item(101, { title: 'Checkout revamp' })],
-      other: [task(301, { title: 'Write the tests', parentId: 101, parentTitle: 'Checkout revamp', rev: 5 })],
-      families: { parents: [], lists: [listOf(101, [mineTask(301, 'Write the tests'), workTask(302, { title: 'Update the copy' })])] }
+      other: [
+        task(301, { title: 'Write the tests', parentId: 101, parentTitle: 'Checkout revamp', rev: 5 }),
+        task(303, { title: 'Ship the fix', parentId: 101, parentTitle: 'Checkout revamp', state: 'Closed' })
+      ],
+      families: {
+        parents: [],
+        lists: [listOf(101, [mineTask(301, 'Write the tests'), workTask(302, { title: 'Update the copy' }), mineTask(303, 'Ship the fix', { state: 'Closed', done: true })])]
+      }
     }),
     {
       'work.move': input => {
@@ -496,9 +578,23 @@ test('your task under a story keeps its Move', async () => {
       }
     }
   )
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active', '#302 Update the copy Active Grace Hopper'])
-  assert.deepEqual(groups(), ['Active · 1 item'])
-  assert.equal(panel.findAll({ type: 'Link', text: /^#301 / }).length, 1)
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests', '#302 Update the copy · Grace Hopper Active', '#303 Ship the fix Closed'])
+  assert.deepEqual(groups(), ['Active · 1'])
+  assert.equal(panel.findAll({ type: 'Link', text: '#301' }).length, 1)
+  const [mine, , done] = taskRows(cardOf('Checkout revamp'))
+  assert.deepEqual([inside(mine!, { type: 'Badge' }).length, movesIn(mine!).length, mine!.props.wrap], [0, 1, undefined])
+  assert.deepEqual(
+    inside(mine!, { type: 'Box' }).map(box => [box.props.width, box.props.shrink]),
+    [
+      [undefined, false],
+      [undefined, undefined],
+      [112, false]
+    ]
+  )
+  assert.deepEqual(
+    [inside(done!, { type: 'Badge' }).map(badge => [badge.text, badge.props.tone]), movesIn(done!).length],
+    [[['Closed', 'success']], 0]
+  )
   const moves = panel.findAll({ type: 'Select', label: 'Move' })
   assert.equal(moves.length, 2)
   assert.deepEqual(
@@ -507,6 +603,18 @@ test('your task under a story keeps its Move', async () => {
   )
   await panel.select(moves[1]!, 'Closed')
   assert.deepEqual(sent, [{ org: 'contoso', id: 301, rev: 5, to: { state: 'Closed' } }])
+})
+
+test('your task with nowhere to move shows its state instead of a Move', async () => {
+  await open(
+    snapshotOf({
+      mine: [item(101, { title: 'Checkout revamp' })],
+      other: [task(301, { title: 'Write the tests', parentId: 101, targets: { columns: [], states: ['Active'] } })]
+    })
+  )
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active'])
+  const [row] = taskRows(cardOf('Checkout revamp'))
+  assert.deepEqual([movesIn(row!).length, inside(row!, { type: 'Badge' })[0]?.props.tone], [0, 'neutral'])
 })
 
 test("a task whose story isn't yours shows under that story, dimmed, in the story's column", async () => {
@@ -521,16 +629,36 @@ test("a task whose story isn't yours shows under that story, dimmed, in the stor
     })
   )
   assert.deepEqual(groups(), [
-    'New · 1 item',
-    'Done · 1 item'
+    'New · 1',
+    'Done · 1'
   ])
   assert.deepEqual(cardsIn('Done'), ['#150 Checkout revamp'])
   const dimmed = cardOf('#150 Checkout revamp')
+  assert.deepEqual(cardNodes().at(-1)?.props, { border: true, radius: 'md', padding: 'sm', gap: 'xs' })
+  assert.deepEqual(
+    cardNodes()
+      .filter(box => box.props?.background === undefined)
+      .map(shapeOf),
+    [
+      [
+        'Box',
+        ['Text', '#150 Checkout revamp'],
+        ['Row', ['Box', ['Progress']], ['Button', 'Tasks 1/2']],
+        [
+          'Box',
+          ['Row', ['Box', ['Link', '#301']], ['Box', ['Text', 'Write the tests']], ['Box', ['Select']]],
+          ['Row', ['Box', ['Link', '#302']], ['Box', ['Text', 'Update the copy · Grace Hopper']], ['Box', ['Badge', 'Closed']]]
+        ]
+      ]
+    ]
+  )
   const [label] = inside(dimmed, { type: 'Text' })
-  assert.deepEqual([label?.props.muted, label?.props.weight], [true, 'medium'])
-  assert.deepEqual([inside(dimmed, { type: 'Link' }).length, movesIn(dimmed).length], [0, 0])
-  assert.equal(tasksButton('#150 Checkout revamp')?.text, 'Tasks 1/2')
-  assert.deepEqual(taskLines('#150 Checkout revamp'), ['#301 Write the tests Active', '#302 Update the copy Closed Grace Hopper'])
+  assert.deepEqual([label?.props.muted, label?.props.size], [true, 'sm'])
+  assert.deepEqual([inside(dimmed, { type: 'ListItem' }).length, cardMoves(dimmed).length], [0, 0])
+  const [progress] = inside(dimmed, { type: 'Progress' })
+  assert.deepEqual([progress?.props.label, progress?.props.labelHidden, progress?.props.value], ['1 of 2 tasks done', true, 50])
+  assert.equal(inside(dimmed, { type: 'Box' }).find(box => progress?.path.startsWith(`${box.path}/`))?.props.width, 64)
+  assert.deepEqual(taskLines('#150 Checkout revamp'), ['#301 Write the tests', '#302 Update the copy · Grace Hopper Closed'])
   assert.equal(panel.findAll({ type: 'Select', label: 'Move' }).length, 2)
   assert.equal(panel.find({ type: 'Collapsible', label: named('No parent') }), null)
 })
@@ -552,18 +680,18 @@ test('a task-level parent shows in Not on this board under its type, with its ta
     })
   )
   assert.deepEqual(groups(), [
-    'Active · 1 item',
-    'Not on this board · 2 items',
-    'Task · 2 items'
+    'Active · 1',
+    'Not on this board · 2',
+    'Task · 2'
   ])
   assert.deepEqual(cardsIn('Task'), ['#301 Split the payment step', 'Plan the rollout'])
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Split the payment step Active'])
-  assert.deepEqual(taskLines('#301 Split the payment step'), ['#302 Move the card form Active', '#305 Pair on the form Active Grace Hopper'])
-  assert.deepEqual(taskLines('Plan the rollout'), ['#304 Check the flags Active'])
-  assert.equal(movesIn(cardOf('#301 Split the payment step')).length, 0)
-  assert.equal(movesIn(cardOf('Plan the rollout')).length, 1)
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Split the payment step'])
+  assert.deepEqual(taskLines('#301 Split the payment step'), ['#302 Move the card form', '#305 Pair on the form · Grace Hopper Active'])
+  assert.deepEqual(taskLines('Plan the rollout'), ['#304 Check the flags'])
+  assert.equal(cardMoves(cardOf('#301 Split the payment step')).length, 0)
+  assert.equal(cardMoves(cardOf('Plan the rollout')).length, 1)
   assert.equal(panel.findAll({ type: 'Select', label: 'Move' }).length, 5)
-  assert.equal(panel.findAll({ type: 'Link', text: /^#302 / }).length, 1)
+  assert.equal(panel.findAll({ type: 'Link', text: '#302' }).length, 1)
 })
 
 test('Not on this board groups items that move by state by type, with their tasks nested', async () => {
@@ -581,17 +709,17 @@ test('Not on this board groups items that move by state by type, with their task
     })
   )
   assert.deepEqual(groups(), [
-    'Not on this board · 4 items',
-    'Bug · 1 item',
-    'Epic · 1 item',
-    'Feature · 1 item',
-    'User Story · 1 item'
+    'Not on this board · 4',
+    'Bug · 1',
+    'Epic · 1',
+    'Feature · 1',
+    'User Story · 1'
   ])
   assert.deepEqual(
     ['Broken export', 'Payments', 'Checkout revamp', 'Story with no column'].map(title => inside(cardOf(title), { type: 'IconButton' })[0]?.props.icon),
     ['bug', 'flag', 'layers', 'book']
   )
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active', '#302 Update the copy Active Grace Hopper'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests', '#302 Update the copy · Grace Hopper Active'])
   assert.deepEqual(
     (movesIn(cardOf('Broken export'))[0]?.props.options as { value: string }[]).map(option => option.value),
     ['New', 'Closed']
@@ -601,14 +729,15 @@ test('Not on this board groups items that move by state by type, with their task
 test("a task whose parent can't be read shows under a dimmed #id header in Unknown type", async () => {
   await open(snapshotOf({ mine: [item(101)], other: [task(301, { title: 'Write the tests', parentId: 999 })] }))
   assert.deepEqual(groups(), [
-    'Active · 1 item',
-    'Not on this board · 1 item',
-    'Unknown type · 1 item'
+    'Active · 1',
+    'Not on this board · 1',
+    'Unknown type · 1'
   ])
   assert.deepEqual(cardsIn('Unknown type'), ['#999'])
   const [label] = inside(cardOf('#999'), { type: 'Text' })
-  assert.deepEqual([label?.props.muted, label?.props.weight], [true, 'medium'])
-  assert.deepEqual(taskLines('#999'), ['#301 Write the tests Active'])
+  assert.deepEqual([label?.text, label?.props.muted, label?.props.size], ['#999', true, 'sm'])
+  assert.equal(inside(cardOf('#999'), { type: 'Progress' })[0]?.props.value, 0)
+  assert.deepEqual(taskLines('#999'), ['#301 Write the tests'])
   assert.equal(panel.findAll({ type: 'Select', label: 'Move' }).length, 2)
 })
 
@@ -621,18 +750,24 @@ test('No parent lists only tasks with no parent', async () => {
     })
   )
   assert.deepEqual(groups(), [
-    'Active · 1 item',
-    'Not on this board · 1 item',
-    'Task · 1 item',
-    'No parent · 1 task'
+    'Active · 1',
+    'Not on this board · 1',
+    'Task · 1',
+    'No parent · 1'
   ])
   const noParent = groupOf('No parent')
+  assert.equal(noParent.props.description, 'tasks with no parent')
+  assert.deepEqual(shapeOf(nodesOf('Collapsible').find(group => group.props?.title === 'No parent · 1')!), [
+    'Collapsible',
+    ['Stack', ['Box', ['Row', ['Box', ['Link', '#301']], ['Box', ['Text', 'Update the runbook']], ['Box', ['Select']]]]]
+  ])
+  assert.deepEqual(insets().map(box => box.props).at(-1), { background: 'muted', radius: 'sm', padding: 'xs', gap: 'xs' })
   assert.deepEqual(
-    inside(noParent, { type: 'Row' }).map(row => row.text),
-    ['#301 Update the runbook Active']
+    taskRows(noParent).map(row => row.text),
+    ['#301 Update the runbook']
   )
   assert.equal(movesIn(noParent).length, 1)
-  assert.deepEqual(taskLines('Checkout revamp'), ['#302 Write the tests Active'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#302 Write the tests'])
 })
 
 test('Collapse all and Expand all act on every group and every task list', async () => {
@@ -647,10 +782,10 @@ test('Collapse all and Expand all act on every group and every task list', async
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['New · 1 item', false],
-    ['Active · 1 item', false],
-    ['Not on this board · 1 item', false],
-    ['No parent · 1 task', false]
+    ['New · 1', false],
+    ['Active · 1', false],
+    ['Not on this board · 1', false],
+    ['No parent · 1', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: 'closed', open: [], closed: [] })
 
@@ -659,14 +794,14 @@ test('Collapse all and Expand all act on every group and every task list', async
 
   await panel.press({ type: 'IconButton', label: 'Expand all' })
   assert.deepEqual(groupStates(), [
-    ['New · 1 item', true],
-    ['Active · 1 item', true],
-    ['Not on this board · 1 item', true],
-    ['Feature · 1 item', true],
-    ['No parent · 1 task', true]
+    ['New · 1', true],
+    ['Active · 1', true],
+    ['Not on this board · 1', true],
+    ['Feature · 1', true],
+    ['No parent · 1', true]
   ])
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active'])
-  assert.deepEqual(taskLines('Add export'), ['#302 Review the export Active Grace Hopper'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests'])
+  assert.deepEqual(taskLines('Add export'), ['#302 Review the export · Grace Hopper Active'])
 })
 
 test('open groups and task lists survive a reload', async () => {
@@ -677,15 +812,15 @@ test('open groups and task lists survive a reload', async () => {
   await open(snapshot)
   await panel.toggle({ type: 'Collapsible', label: named('New') })
   await panel.press(tasksButton('Checkout revamp')!)
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active Grace Hopper'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests · Grace Hopper Active'])
 
   const reloaded = await reloadPanel(panel, [org('contoso')], { 'work.snapshot': snapshot })
   panel = reloaded.panel
   assert.deepEqual(groupStates(), [
-    ['New · 1 item', false],
-    ['Active · 1 item', true]
+    ['New · 1', false],
+    ['Active · 1', true]
   ])
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active Grace Hopper'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests · Grace Hopper Active'])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: null, open: ['tasks:101'], closed: ['column:New'] })
 })
 
@@ -697,7 +832,7 @@ test('a task list closed by hand stays closed after your last task in it is done
       families: { parents: [], lists: [listOf(101, [mineTask(301, 'Write the tests', { done, state: done ? 'Closed' : 'Active' })])] }
     })
   await open(listed(false))
-  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests Active'])
+  assert.deepEqual(taskLines('Checkout revamp'), ['#301 Write the tests'])
   await panel.press(tasksButton('Checkout revamp')!)
   assert.deepEqual(taskLines('Checkout revamp'), [])
 
@@ -728,33 +863,33 @@ const showLanes = () => panel.press({ type: 'Button', text: 'Lanes' })
 test('Lanes shows one group per swimlane in board order with a group per column inside', async () => {
   await open(laneSnapshot())
   assert.deepEqual(groups(), [
-    'New · 2 items',
-    'Active · 2 items',
-    'Done · 1 item',
-    'Not on this board · 1 item',
-    'Feature · 1 item',
-    'No parent · 1 task'
+    'New · 2',
+    'Active · 2',
+    'Done · 1',
+    'Not on this board · 1',
+    'Feature · 1',
+    'No parent · 1'
   ])
 
   await showLanes()
   assert.deepEqual(groups(), [
-    'Default lane · 3 items',
-    'New · 1 item',
-    'Active · 1 item',
-    'Done · 1 item',
-    'Expedite · 2 items',
-    'New · 1 item',
-    'Active · 1 item',
-    'Not on this board · 1 item',
-    'Feature · 1 item',
-    'No parent · 1 task'
+    'Default lane · 3',
+    'New · 1',
+    'Active · 1',
+    'Done · 1',
+    'Expedite · 2',
+    'New · 1',
+    'Active · 1',
+    'Not on this board · 1',
+    'Feature · 1',
+    'No parent · 1'
   ])
   assert.deepEqual(
     [cardsAt('Default lane', 'New'), cardsAt('Default lane', 'Active'), cardsAt('Default lane', 'Done'), cardsAt('Expedite', 'New'), cardsAt('Expedite', 'Active')],
     [['Add export'], ['Fix login redirect'], ['Legacy import'], ['Hotfix the header'], ['Cache invalidation']]
   )
   assert.deepEqual(cardsIn('Feature'), ['Checkout revamp'])
-  assert.deepEqual(inside(groupOf('No parent'), { type: 'Row' }).map(row => row.text), ['#301 Update the runbook Active'])
+  assert.deepEqual(inside(groupOf('No parent'), { type: 'Row' }).map(row => row.text), ['#301 Update the runbook'])
   assert.equal(noSwimlanes(), null)
   assert.equal(panel.findAll({ type: 'Select', label: 'Move' }).length, 7)
 })
@@ -762,11 +897,11 @@ test('Lanes shows one group per swimlane in board order with a group per column 
 test('a swimlane without items keeps its group, with nothing inside', async () => {
   await open(snapshotOf({ board: laneBoard(), mine: [item(101, { title: 'Fix login redirect', column: 'Active', lane: null })] }), {}, { persisted: IN_LANES })
   assert.deepEqual(groups(), [
-    'Default lane · 1 item',
-    'Active · 1 item',
-    'Expedite · 0 items'
+    'Default lane · 1',
+    'Active · 1',
+    'Expedite · 0'
   ])
-  assert.deepEqual(inside(groupOf('Expedite'), { type: 'Card' }), [])
+  assert.deepEqual(cardsUnder(groupOf('Expedite')), [])
 })
 
 test('a dimmed parent sits in its own lane and column, with its tasks under it', async () => {
@@ -781,17 +916,17 @@ test('a dimmed parent sits in its own lane and column, with its tasks under it',
     { persisted: IN_LANES }
   )
   assert.deepEqual(groups(), [
-    'Default lane · 1 item',
-    'Active · 1 item',
-    'Expedite · 1 item',
-    'New · 1 item'
+    'Default lane · 1',
+    'Active · 1',
+    'Expedite · 1',
+    'New · 1'
   ])
   assert.deepEqual(cardsAt('Expedite', 'New'), ['#150 Show the delivery estimate'])
-  assert.deepEqual(taskLines('#150 Show the delivery estimate'), ['#301 Write the tests Active'])
+  assert.deepEqual(taskLines('#150 Show the delivery estimate'), ['#301 Write the tests'])
 })
 
 test('a board without swimlanes shows the columns under Lanes with a note', async () => {
-  const columns = ['New · 1 item', 'Active · 2 items']
+  const columns = ['New · 1', 'Active · 2']
   const snapshot = (lanes: { id: string; name: string }[]) =>
     snapshotOf({
       board: board('contoso', { lanes }),
@@ -814,11 +949,11 @@ test('a board without swimlanes shows the columns under Lanes with a note', asyn
   await panel.post('work.changed', snapshot(LANES))
   assert.equal(noSwimlanes(), null)
   assert.deepEqual(groups(), [
-    'Default lane · 2 items',
-    'New · 1 item',
-    'Active · 1 item',
-    'Expedite · 1 item',
-    'Active · 1 item'
+    'Default lane · 2',
+    'New · 1',
+    'Active · 1',
+    'Expedite · 1',
+    'Active · 1'
   ])
 
   await panel.press({ type: 'Button', text: 'Columns' })
@@ -841,7 +976,7 @@ test('the Columns and Lanes buttons switch the view, and the chosen one is outli
 
   await showLanes()
   assert.deepEqual(views(), ['ghost', 'outline'])
-  assert.equal(groupOf('Default lane').props.title, 'Default lane · 3 items')
+  assert.equal(groupOf('Default lane').props.title, 'Default lane · 3')
   await showLanes()
   assert.deepEqual(views(), ['ghost', 'outline'])
 
@@ -863,8 +998,8 @@ test('the chosen view is remembered per board and survives a reload', async () =
   assert.deepEqual(
     groups().slice(0, 2),
     [
-      'Default lane · 3 items',
-      'New · 1 item'
+      'Default lane · 3',
+      'New · 1'
     ]
   )
 
@@ -902,12 +1037,12 @@ test('open lanes and column groups survive a reload', async () => {
   const reloaded = await reloadPanel(panel, [org('contoso')], { 'work.snapshot': snapshot })
   panel = reloaded.panel
   assert.deepEqual(groupStates().slice(0, 6), [
-    ['Default lane · 3 items', true],
-    ['New · 1 item', true],
-    ['Active · 1 item', true],
-    ['Done · 1 item', false],
-    ['Expedite · 2 items', false],
-    ['Not on this board · 1 item', true]
+    ['Default lane · 3', true],
+    ['New · 1', true],
+    ['Active · 1', true],
+    ['Done · 1', false],
+    ['Expedite · 2', false],
+    ['Not on this board · 1', true]
   ])
 })
 
@@ -917,32 +1052,32 @@ test('Collapse all closes the lanes and their column groups too', async () => {
   assert.deepEqual(
     groupStates().filter(([title]) => !/^(Not on this board|Feature|No parent) · /.test(String(title))),
     [
-      ['Default lane · 3 items', true],
-      ['New · 1 item', true],
-      ['Active · 1 item', true],
-      ['Done · 1 item', true],
-      ['Expedite · 2 items', true],
-      ['New · 1 item', true],
-      ['Active · 1 item', true]
+      ['Default lane · 3', true],
+      ['New · 1', true],
+      ['Active · 1', true],
+      ['Done · 1', true],
+      ['Expedite · 2', true],
+      ['New · 1', true],
+      ['Active · 1', true]
     ]
   )
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.deepEqual(groupStates(), [
-    ['Default lane · 3 items', false],
-    ['Expedite · 2 items', false],
-    ['Not on this board · 1 item', false],
-    ['No parent · 1 task', false]
+    ['Default lane · 3', false],
+    ['Expedite · 2', false],
+    ['Not on this board · 1', false],
+    ['No parent · 1', false]
   ])
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: 'closed', open: [], closed: [] })
 
   await panel.toggle({ type: 'Collapsible', label: named('Default lane') })
   assert.deepEqual(groupStates().slice(0, 5), [
-    ['Default lane · 3 items', true],
-    ['New · 1 item', false],
-    ['Active · 1 item', false],
-    ['Done · 1 item', false],
-    ['Expedite · 2 items', false]
+    ['Default lane · 3', true],
+    ['New · 1', false],
+    ['Active · 1', false],
+    ['Done · 1', false],
+    ['Expedite · 2', false]
   ])
   assert.deepEqual(cardsAt('Default lane', 'New'), [])
 
@@ -950,13 +1085,13 @@ test('Collapse all closes the lanes and their column groups too', async () => {
   assert.deepEqual(
     groupStates().filter(([title]) => !/^(Not on this board|Feature|No parent) · /.test(String(title))),
     [
-      ['Default lane · 3 items', true],
-      ['New · 1 item', true],
-      ['Active · 1 item', true],
-      ['Done · 1 item', true],
-      ['Expedite · 2 items', true],
-      ['New · 1 item', true],
-      ['Active · 1 item', true]
+      ['Default lane · 3', true],
+      ['New · 1', true],
+      ['Active · 1', true],
+      ['Done · 1', true],
+      ['Expedite · 2', true],
+      ['New · 1', true],
+      ['Active · 1', true]
     ]
   )
   assert.deepEqual(cardsAt('Expedite', 'Active'), ['Cache invalidation'])
@@ -976,11 +1111,11 @@ test('a lane name over 1 KiB is cut to the label limit, and the fold keys use th
   assert.ok(utf8Length(cut!) <= MAX_LABEL_BYTES && cut!.endsWith('…'), `${utf8Length(cut!)} bytes`)
   assert.deepEqual(cardsAt('Default lane', 'Active'), ['Add export'])
   const longLane = panel.find({ type: 'Collapsible', label: cut! })!
-  assert.deepEqual(inside(inside(longLane, { type: 'Collapsible', label: named('Active') })[0]!, { type: 'Card' }).map(titleOf), ['Fix login redirect'])
+  assert.deepEqual(cardsUnder(inside(longLane, { type: 'Collapsible', label: named('Active') })[0]!).map(titleOf), ['Fix login redirect'])
   await panel.toggle(columnIn('Default lane', 'Active'))
   assert.deepEqual((panel.persisted.plugin.folds as Record<string, unknown>)['contoso|work'], { all: null, open: [], closed: ['lane:lane-default/column:Active'] })
   assert.deepEqual(cardsAt('Default lane', 'Active'), [])
-  assert.equal(inside(longLane, { type: 'Card' }).length, 1)
+  assert.equal(cardsUnder(longLane).length, 1)
 })
 
 test('ten nudges are all shown without a note', async () => {
@@ -1261,14 +1396,14 @@ test('a long group shows 25 cards and Show N more reveals the next ones', async 
   await open(snapshotOf({ mine: [...many(1000, 60, { column: 'Active' }), ...many(2000, 25, { column: 'New' })] }))
   const showIn = (title: string) => inside(groupOf(title), { type: 'Button', text: /^Show \d+ more$/ })
   assert.deepEqual(groups(), [
-    'New · 25 items',
-    'Active · 60 items'
+    'New · 25',
+    'Active · 60'
   ])
   assert.deepEqual(cardsIn('New'), Array.from({ length: 25 }, (_, index) => `Story ${2000 + index}`))
   assert.equal(showIn('New').length, 0)
   assert.deepEqual(cardsIn('Active'), Array.from({ length: 25 }, (_, index) => `Story ${1000 + index}`))
   const [more] = showIn('Active')
-  assert.deepEqual([more?.text, more?.props.variant, more?.props.size], ['Show 25 more', 'ghost', 'sm'])
+  assert.deepEqual([more?.text, more?.props.variant, more?.props.size], ['Show 25 more', 'ghost', 'xs'])
 
   await panel.press(more!)
   assert.equal(cardsIn('Active').length, 50)
@@ -1319,9 +1454,9 @@ test("150 items with 300 tasks, all expanded, stay within Orca's limits and say 
   assert.equal(cardsIn('New').length, 25)
   const showMoreIn = (title: string) => inside(groupOf(title), { type: 'Button', text: /^Show \d+ more$/ })
   assert.equal(showMoreIn('Active').length, 1)
-  assert.deepEqual(groups().find(title => /^Done · /.test(String(title))), 'Done · 28 items')
+  assert.deepEqual(groups().find(title => /^Done · /.test(String(title))), 'Done · 28')
   assert.equal(showMoreIn('Done').length, 0)
-  assert.ok(panel.findAll({ type: 'Link', text: /^#\d+ Review the copy/ }).length > 0)
+  assert.ok(panel.findAll({ type: 'Text', text: /^Review the copy/ }).length > 0)
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.equal(panel.find({ type: 'Text', text: SOME_HIDDEN }), null)
@@ -1332,8 +1467,8 @@ test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits
   await open(largeWork(), {}, { persisted: IN_LANES })
   assert.deepEqual(views(), ['ghost', 'outline'])
   assert.deepEqual(groups().filter(title => /^(Default lane|Expedite) · /.test(String(title))), [
-    'Default lane · 70 items',
-    'Expedite · 70 items'
+    'Default lane · 70',
+    'Expedite · 70'
   ])
   withinLimits()
 
@@ -1342,11 +1477,11 @@ test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits
   const note = panel.find({ type: 'Text', text: SOME_HIDDEN })
   assert.deepEqual([note?.props.size, note?.props.muted], ['sm', true])
   assert.deepEqual(groups().filter(title => /^(Default lane|Expedite) · /.test(String(title))), [
-    'Default lane · 70 items',
-    'Expedite · 70 items'
+    'Default lane · 70',
+    'Expedite · 70'
   ])
   assert.equal(cardsAt('Default lane', 'New').length, 14)
-  assert.ok(panel.findAll({ type: 'Link', text: /^#\d+ Review the copy/ }).length > 0)
+  assert.ok(panel.findAll({ type: 'Text', text: /^Review the copy/ }).length > 0)
 
   await panel.press({ type: 'IconButton', label: 'Collapse all' })
   assert.equal(panel.find({ type: 'Text', text: SOME_HIDDEN }), null)
@@ -1416,7 +1551,7 @@ test('work.changed post replaces the list', async () => {
   assert.deepEqual(titles(), ['Story 101'])
   await panel.post('work.changed', snapshotOf({ mine: [item(102, { title: 'Posted story', column: 'New' })], updatedAt: NOW + 1000 }))
   assert.deepEqual(titles(), ['Posted story'])
-  assert.deepEqual(groups(), ['New · 1 item'])
+  assert.deepEqual(groups(), ['New · 1'])
 })
 
 test('work.changed for another org is ignored', async () => {
@@ -1447,7 +1582,7 @@ test('a snapshot that cannot load shows the message and Try again loads it', asy
   })
   assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
   assert.equal(panel.find({ type: 'Callout' })?.text, "Couldn't load work items.")
-  assert.equal(panel.findAll({ type: 'Card' }).length, 0)
+  assert.equal(cardsUnder().length, 0)
   failing = false
   await panel.press({ text: 'Try again' })
   assert.deepEqual(titles(), ['Story 101'])

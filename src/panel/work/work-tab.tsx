@@ -3,7 +3,7 @@ import { MAX_CHIPS } from '../../shared/chips'
 import { NO_BOARDS } from '../../shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../shared/types'
 import type { WorkSnapshot } from '../../shared/work'
-import { counted, showMore } from '../copy'
+import { showMore } from '../copy'
 import { isFoldOpen } from '../folds'
 import { Group } from '../group'
 import { cutLabel } from '../label'
@@ -18,13 +18,15 @@ import { dismiss, load, move, notice, openBoard, openItem, pages, refresh, refre
 import { TaskRows } from './task-rows'
 
 const MAX_NUDGES = 10
-const CARD_NODES = 12
+const CARD_NODES = 13
 const BADGE_NODES = 2
-const ROW_NODES = 8
+const ROW_NODES = 10
+const LIST_NODES = 3
 const GROUP_NODES = 4
 const NOT_ON_BOARD = 'Not on this board'
 const UNKNOWN_TYPE = 'Unknown type'
 const NO_PARENT = 'No parent'
+const NO_PARENT_HINT = 'tasks with no parent'
 const SOME_HIDDEN = 'Some items are hidden. Collapse a group to see others.'
 const NO_SWIMLANES = 'This board has no swimlanes, so Lanes shows the columns.'
 
@@ -95,11 +97,11 @@ function Nudges({ org, current }: { org: string; current: WorkSnapshot }): OrcaN
         <Callout key={`${nudge.itemId}:${nudge.prId}`} tone="accent" title={`#${nudge.itemId} — PR ${nudge.prId} merged into ${nudge.branch}`}>
           <Stack gap="xs">
             <Text size="sm">{item.title}</Text>
-            <Row gap="sm" wrap>
-              <Button size="sm" onPress={() => move(org, item.id, item.rev, { column: nudge.toColumn })}>
+            <Row gap="xs" wrap>
+              <Button size="xs" variant="solid" tone="accent" onPress={() => move(org, item.id, item.rev, { column: nudge.toColumn })}>
                 {`Move to ${nudge.toColumn}`}
               </Button>
-              <Button size="sm" variant="ghost" onPress={() => dismiss(org, nudge)}>
+              <Button size="xs" variant="ghost" onPress={() => dismiss(org, nudge)}>
                 Dismiss
               </Button>
             </Row>
@@ -128,12 +130,21 @@ function cardBlock(draw: Draw, card: WorkCard): OrcaNode {
   if (!fits(draw, cardNodes(card))) return null
   const open = card.total > 0 && isFoldOpen(draw.org, 'work', tasksKey(card.id), tasksOpenByDefault(card))
   const rows = open ? fitting(draw, card.tasks, ROW_NODES) : []
-  return (
-    <Stack key={card.key} gap="xs">
-      {card.item ? <ItemCard org={draw.org} item={card.item} card={card} open={open} /> : <ParentCard org={draw.org} card={card} open={open} />}
-      {rows.length > 0 || (open && card.more > 0) ? <TaskRows org={draw.org} rows={rows} more={card.more} /> : null}
-    </Stack>
+  const tasks = rows.length > 0 || (open && card.more > 0) ? taskList(draw, rows, card.more) : null
+  return card.item ? (
+    <ItemCard key={card.key} org={draw.org} item={card.item} card={card} open={open}>
+      {tasks}
+    </ItemCard>
+  ) : (
+    <ParentCard key={card.key} org={draw.org} card={card} open={open}>
+      {tasks}
+    </ParentCard>
   )
+}
+
+function taskList(draw: Draw, rows: readonly TaskRow[], more: number): OrcaNode {
+  draw.left -= LIST_NODES
+  return <TaskRows org={draw.org} rows={rows} more={more} />
 }
 
 function paged<T>(draw: Draw, key: string, items: readonly T[], drawEach: (shown: readonly T[]) => OrcaNode): OrcaNode {
@@ -141,10 +152,10 @@ function paged<T>(draw: Draw, key: string, items: readonly T[], drawEach: (shown
   const body = drawEach(items.slice(0, limit))
   const left = items.length - limit
   return (
-    <Stack gap="sm">
+    <Stack gap="xs">
       {body}
       {left > 0 && !draw.hidden ? (
-        <Button size="sm" variant="ghost" onPress={() => showNextPage(key)}>
+        <Button size="xs" variant="ghost" onPress={() => showNextPage(key)}>
           {showMore(Math.min(GROUP_PAGE, left))}
         </Button>
       ) : null}
@@ -152,24 +163,24 @@ function paged<T>(draw: Draw, key: string, items: readonly T[], drawEach: (shown
   )
 }
 
-function drawGroup(draw: Draw, key: string, title: string, count: string, body: () => OrcaNode): OrcaNode {
+function drawGroup(draw: Draw, key: string, title: string, count: number, body: () => OrcaNode, hint?: string): OrcaNode {
   draw.left -= GROUP_NODES
   const open = isFoldOpen(draw.org, 'work', key)
   return (
-    <Group key={key} org={draw.org} tab="work" foldKey={key} title={title} count={count}>
+    <Group key={key} org={draw.org} tab="work" foldKey={key} title={title} count={String(count)} hint={hint}>
       {open ? body() : null}
     </Group>
   )
 }
 
 function cardGroup(draw: Draw, key: string, title: string, cards: readonly WorkCard[]): OrcaNode {
-  return drawGroup(draw, key, title, counted(cards.length, 'item', 'items'), () => paged(draw, key, cards, shown => shown.map(card => cardBlock(draw, card))))
+  return drawGroup(draw, key, title, cards.length, () => paged(draw, key, cards, shown => shown.map(card => cardBlock(draw, card))))
 }
 
 function laneGroup(draw: Draw, lane: LaneGroup): OrcaNode {
   const count = lane.columns.reduce((sum, column) => sum + column.cards.length, 0)
   const key = `lane:${lane.id}`
-  return drawGroup(draw, key, lane.name, counted(count, 'item', 'items'), () => (
+  return drawGroup(draw, key, lane.name, count, () => (
     <Stack gap="sm">{lane.columns.map(column => cardGroup(draw, `${key}/column:${column.name}`, column.name, column.cards))}</Stack>
   ))
 }
@@ -177,7 +188,7 @@ function laneGroup(draw: Draw, lane: LaneGroup): OrcaNode {
 function offBoardGroup(draw: Draw, plan: WorkPlan): OrcaNode {
   const total = plan.offBoard.reduce((sum, type) => sum + type.cards.length, 0) + plan.unknown.length
   if (total === 0) return null
-  return drawGroup(draw, 'offboard', NOT_ON_BOARD, counted(total, 'item', 'items'), () => (
+  return drawGroup(draw, 'offboard', NOT_ON_BOARD, total, () => (
     <Stack gap="sm">
       {plan.offBoard.map(type => cardGroup(draw, `offboard/type:${type.type}`, type.type, type.cards))}
       {plan.unknown.length > 0 ? cardGroup(draw, 'offboard/unknown', UNKNOWN_TYPE, plan.unknown) : null}
@@ -187,12 +198,12 @@ function offBoardGroup(draw: Draw, plan: WorkPlan): OrcaNode {
 
 function noParentGroup(draw: Draw, rows: readonly TaskRow[]): OrcaNode {
   if (rows.length === 0) return null
-  return drawGroup(draw, 'noparent', NO_PARENT, counted(rows.length, 'task', 'tasks'), () =>
+  const body = () =>
     paged(draw, 'noparent', rows, shown => {
       const drawn = fitting(draw, shown, ROW_NODES)
-      return drawn.length > 0 ? <TaskRows org={draw.org} rows={drawn} more={0} /> : null
+      return drawn.length > 0 ? taskList(draw, drawn, 0) : null
     })
-  )
+  return drawGroup(draw, 'noparent', NO_PARENT, rows.length, body, NO_PARENT_HINT)
 }
 
 function Groups({ org, current, view }: { org: string; current: WorkSnapshot; view: WorkView }): OrcaNode {
