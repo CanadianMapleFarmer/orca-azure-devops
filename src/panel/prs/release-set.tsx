@@ -1,32 +1,41 @@
-import { Button, Callout, Card, Link, Row, Stack, Text, type OrcaNode, type Tone } from 'orca'
+import { Badge, Box, Button, Callout, Link, Row, Stack, Text, type OrcaNode, type Tone } from 'orca'
 import { MERGE_STRATEGY_LABELS, type AutoCompleteOptions, type PrSummary, type ReleaseSet, type RowResult } from '../../shared/prs'
 import { prShareItem } from '../../shared/share/pr-items'
 import { PR_TEMPLATE, PR_VARS } from '../../shared/share/template'
 import type { Identity } from '../../shared/types'
-import { Chips } from '../chips'
 import type { PlaceChip } from '../grouping'
 import { cutLabel } from '../label'
 import { openComposer } from '../share/state'
-import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, prChips, waitingOn } from './rows'
+import { branchPattern, MERGED_SHOWN, needsApprove, needsAutoComplete, placeChip, statusChip, waitingOn } from './rows'
 import { act, isActing, isMergedShown, outcomeOf, toggleMerged, type Outcome } from './state'
 
 const optionsLine = (options: AutoCompleteOptions): string =>
   `Auto-complete uses ${MERGE_STRATEGY_LABELS[options.mergeStrategy]}, ${options.deleteSourceBranch ? 'deletes' : 'keeps'} the source branch, ${options.transitionWorkItems ? 'completes linked work items' : 'leaves work items alone'}. Change this in Settings → Azure DevOps.`
 
 function PrRow({ pr, place }: { pr: PrSummary; place: PlaceChip }): OrcaNode {
-  const chips = prChips(pr, place)
+  const where = placeChip(pr, place)
+  const status = statusChip(pr)
   const waiting = waitingOn(pr)
   return (
-    <Row gap="sm" align="center" wrap>
-      <Link href={pr.url}>{`!${pr.prId}`}</Link>
-      <Text>{`→ ${pr.target}`}</Text>
-      {chips.length > 0 ? <Chips chips={chips} /> : null}
+    <>
+      <Row justify="between" align="center" gap="xs" wrap>
+        <Box direction="row" gap="xs" align="center" shrink={false} wrap maxWidth="100%">
+          <Link href={pr.url}>{`!${pr.prId}`}</Link>
+          <Text size="sm">{`→ ${pr.target}`}</Text>
+          {where ? <Badge tone={where.tone}>{where.text}</Badge> : null}
+        </Box>
+        {status ? (
+          <Box direction="row" shrink={false}>
+            <Badge tone={status.tone}>{status.text}</Badge>
+          </Box>
+        ) : null}
+      </Row>
       {waiting ? (
-        <Text size="sm" muted>
+        <Text size="xs" muted>
           {waiting}
         </Text>
       ) : null}
-    </Row>
+    </>
   )
 }
 
@@ -103,33 +112,46 @@ export function ReleaseSetCard({ org, me, options, set, limit = set.prs.length, 
   const ids = set.prs.map(pr => pr.prId)
   const busy = isActing(ids)
   const outcome = outcomeOf(ids)
+  const branch = branchPattern(set.sources)
   return (
-    <Card title={cutLabel(set.title)} description={cutLabel(branchPattern(set.sources))}>
+    <Box border radius="md" background="card" padding="sm" gap="xs">
+      <Text weight="semibold" size="sm">
+        {cutLabel(set.title)}
+      </Text>
+      {branch ? (
+        <Text size="xs" muted>
+          {cutLabel(branch)}
+        </Text>
+      ) : null}
       {(showMerged ? shown : rows).map(pr => (
         <PrRow key={pr.prId} pr={pr} place={place} />
       ))}
-      {folded > 0 ? <Link onPress={() => toggleMerged(set.key)}>{showMerged ? 'Hide merged' : `+ ${folded} merged · show`}</Link> : null}
+      {folded > 0 ? (
+        <Row>
+          <Link onPress={() => toggleMerged(set.key)}>{showMerged ? 'Hide merged' : `+ ${folded} merged · show`}</Link>
+        </Row>
+      ) : null}
       {shown.length < set.prs.length ? (
-        <Text size="sm" muted>
+        <Text size="xs" muted>
           {`Showing ${shown.length} of ${set.prs.length} pull requests in this set.`}
         </Text>
       ) : null}
-      <Row gap="sm" wrap>
-        <Button size="sm" variant="solid" onPress={() => shareSet(org, me, set)}>
+      <Row gap="xs" wrap>
+        <Button size="xs" variant="solid" tone="accent" onPress={() => shareSet(org, me, set)}>
           Share…
         </Button>
         {set.prs.some(pr => needsApprove(pr, me)) ? (
-          <Button size="sm" variant="outline" disabled={busy} onPress={() => act('prs.approve', org, active)}>
+          <Button size="xs" variant="outline" disabled={busy} onPress={() => act('prs.approve', org, active)}>
             Approve
           </Button>
         ) : null}
         {set.prs.some(needsAutoComplete) ? (
-          <Button size="sm" variant="outline" tooltip={optionsLine(options)} disabled={busy} onPress={() => act('prs.autoComplete', org, active)}>
+          <Button size="xs" variant="outline" tooltip={optionsLine(options)} disabled={busy} onPress={() => act('prs.autoComplete', org, active)}>
             Auto-complete
           </Button>
         ) : null}
       </Row>
       {outcome ? <Result outcome={outcome} /> : null}
-    </Card>
+    </Box>
   )
 }

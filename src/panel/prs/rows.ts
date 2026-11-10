@@ -37,7 +37,7 @@ function worstCheck(pr: PrSummary): Chip | null {
   return null
 }
 
-function statusChip(pr: PrSummary): Chip | null {
+export function statusChip(pr: PrSummary): Chip | null {
   if (pr.status === 'completed') return { tone: 'success', text: 'merged' }
   if (pr.status === 'abandoned') return { tone: 'neutral', text: 'abandoned' }
   const check = worstCheck(pr)
@@ -46,14 +46,10 @@ function statusChip(pr: PrSummary): Chip | null {
   return { tone: check?.tone ?? (pr.autoComplete ? 'accent' : 'neutral'), text: parts.join(' · ') }
 }
 
-function placeChip(pr: PrSummary, place: PlaceChip): Chip | null {
+export function placeChip(pr: PrSummary, place: PlaceChip): Chip | null {
   if (place === 'repo') return { tone: 'neutral', text: pr.repoName }
   if (place === 'project') return { tone: 'neutral', text: `${pr.projectName} / ${pr.repoName}` }
   return null
-}
-
-export function prChips(pr: PrSummary, place: PlaceChip): Chip[] {
-  return [placeChip(pr, place), statusChip(pr)].filter(chip => chip !== null)
 }
 
 const isWaitedFor = (reviewer: PrReviewer): boolean => reviewer.isRequired && !reviewer.hasDeclined && reviewer.vote === 0

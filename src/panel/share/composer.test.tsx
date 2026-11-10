@@ -92,7 +92,7 @@ async function chooseChat(person = 'Grace Hopper'): Promise<void> {
 test("Share opens the composer with the set's active PRs checked and the reference preview", async () => {
   const host = await share()
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Share pull requests')
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.equal(panel.find({ type: 'Button', text: 'Share…' }), null)
   assert.deepEqual(requestsTo(host, 'share.prefs').map(call => call.input), [{ org: 'contoso', kind: 'pr' }])
   assert.deepEqual(itemBoxes(), [
     ['Pull Request 55 → develop', true],
@@ -524,7 +524,7 @@ test('the Teams hint shows only in the first composer of a session, and Back ret
   assert.equal(panel.find({ type: 'Text', text: HINT })?.props.muted, true)
   await panel.press({ type: 'Button', text: 'Back' })
   assert.equal(panel.find({ type: 'Heading' }), null)
-  assert.equal(panel.findAll({ type: 'Card' }).length, 1)
+  assert.equal(panel.findAll({ type: 'Button', text: 'Share…' }).length, 1)
   await panel.press({ type: 'Button', text: 'Share…' })
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Share pull requests')
   assert.equal(panel.find({ type: 'Text', text: HINT }), null)
@@ -535,7 +535,7 @@ test('the composer closes when the active org changes', async () => {
   assert.equal(panel.find({ type: 'Heading' })?.text, 'Share pull requests')
   await panel.select({ label: 'Organization' }, 'fabrikam')
   assert.equal(panel.find({ type: 'Heading' }), null)
-  assert.equal(panel.findAll({ type: 'Card' }).length, 1)
+  assert.equal(panel.findAll({ type: 'Button', text: 'Share…' }).length, 1)
   await panel.select({ label: 'Organization' }, 'contoso')
   assert.equal(panel.find({ type: 'Heading' }), null)
 })

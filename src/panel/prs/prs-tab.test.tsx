@@ -29,23 +29,56 @@ async function open(snapshot: MockRequests['prs.snapshot'], more: MockRequests =
 
 const inputsTo = (host: TestHost, name: string) => requestsTo(host, name).map(call => call.input)
 
-const titles = () => panel.findAll({ type: 'Card' }).map(card => card.label)
+const inside = (parent: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${parent.path}/`))
+
+const isCardBox = (props: Readonly<Record<string, unknown>> | undefined) => props?.background === 'card' && props.border === true
+
+function cards(): TestElement[] {
+  const keys: string[] = []
+  walk(node => {
+    if (node.type === 'Box' && isCardBox(node.props) && node.key) keys.push(node.key)
+    return false
+  })
+  return keys.map(key => {
+    const card = panel.find({ testId: key })
+    assert.ok(card, `the card keyed ${key} is found`)
+    return card
+  })
+}
+
+const linesOf = (card: TestElement) => inside(card, { type: 'Text' })
+
+const titleOf = (card: TestElement) => linesOf(card)[0]?.text
+
+const titles = () => cards().map(titleOf)
 
 const cardOf = (title: string): TestElement => {
-  const card = panel.findAll({ type: 'Card' }).find(item => item.label === title)
+  const card = cards().find(item => titleOf(item) === title)
   assert.ok(card, `${title} is drawn`)
   return card
 }
 
-const inside = (parent: TestElement, query: TestQuery) => panel.findAll(query).filter(item => item.path.startsWith(`${parent.path}/`))
+const branchOf = (card: TestElement) => {
+  const line = linesOf(card)[1]
+  return [line?.text, line?.props.size, line?.props.muted]
+}
 
-const rowText = (prId: number) => panel.find({ type: 'Row', text: new RegExp(`^!${prId} →`) })?.text
+const nextPath = (path: string) => path.replace(/\d+$/, digits => String(Number(digits) + 1))
+
+const rowOf = (prId: number) => panel.find({ type: 'Row', text: new RegExp(`^!${prId} →`) })
+
+const rowText = (prId: number) => {
+  const row = rowOf(prId)
+  if (!row) return undefined
+  const waiting = panel.findAll({ type: 'Text', text: /^waiting for / }).find(line => line.path === nextPath(row.path))
+  return waiting ? `${row.text} ${waiting.text}` : row.text
+}
 
 const badgesIn = (title: string) => inside(cardOf(title), { type: 'Badge' }).map(badge => [badge.text, badge.props.tone])
 
 const linksIn = (title: string) => inside(cardOf(title), { type: 'Link' }).map(link => link.text)
 
-const buttonsIn = (title: string) => inside(cardOf(title), { type: 'Button' }).map(button => [button.text, button.props.variant, button.props.size])
+const buttonsIn = (title: string) => inside(cardOf(title), { type: 'Button' }).map(button => [button.text, button.props.variant, button.props.tone, button.props.size])
 
 const mineButton = () => panel.find({ type: 'Button', text: 'Mine' })
 
@@ -65,6 +98,8 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const urlOf = (prId: number) => `https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/${prId}`
 
+const textOf = (node: TreeSnapshot | string): string => (typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''))
+
 function walk(visit: (node: TreeSnapshot, depth: number) => boolean): void {
   const step = (node: TreeSnapshot | string | null, depth: number): void => {
     if (node === null || typeof node === 'string') return
@@ -79,7 +114,7 @@ function outline(): string[] {
   walk((node, depth) => {
     const indent = '  '.repeat(depth)
     if (node.type === 'Collapsible') lines.push(`${indent}${node.props?.title}${node.props?.description ? ` [${node.props.description}]` : ''}`)
-    if (node.type === 'Card') lines.push(`${indent}${node.props?.title}`)
+    if (node.type === 'Box' && isCardBox(node.props) && node.children?.[0]) lines.push(`${indent}${textOf(node.children[0])}`)
     if (node.type === 'ListItem') lines.push(`${indent}- ${node.props?.title}`)
     return node.type === 'Collapsible'
   })
@@ -169,7 +204,10 @@ const mixedSet = () =>
 test('a set card shows the branch pattern and one row per pull request with its chips and who it waits for', async () => {
   await open(snapshotOf({ sets: [mixedSet()] }))
   assert.deepEqual(titles(), ['Fix the sign-in redirect'])
-  assert.equal(cardOf('Fix the sign-in redirect').props.description, 'feature/log*')
+  const card = cardOf('Fix the sign-in redirect')
+  assert.deepEqual([card.props.border, card.props.radius, card.props.background, card.props.padding, card.props.gap], [true, 'md', 'card', 'sm', 'xs'])
+  assert.deepEqual([linesOf(card)[0]?.props.weight, linesOf(card)[0]?.props.size], ['semibold', 'sm'])
+  assert.deepEqual(branchOf(card), ['feature/log*', 'xs', true])
   assert.deepEqual(
     panel.findAll({ type: 'Link' }).map(link => [link.text, link.props.href]),
     [55, 56, 57, 58, 59].map(id => [`!${id}`, urlOf(id)])
@@ -189,7 +227,51 @@ test('a set card shows the branch pattern and one row per pull request with its 
   const waiting = panel.findAll({ type: 'Text', text: /^waiting for/ })
   assert.deepEqual(
     waiting.map(line => [line.text, line.props.size, line.props.muted]),
-    [['waiting for Edsger Dijkstra', 'sm', true]]
+    [['waiting for Edsger Dijkstra', 'xs', true]]
+  )
+})
+
+test('a pull request row keeps its id, target and place chip together and its status chip apart, so neither breaks mid-word', async () => {
+  await open(
+    snapshotOf({
+      sets: [
+        setOf(
+          [
+            prIn(70, WEB, WEB_APP, { target: 'release/2026.11-hotfix', checks: { build: 'failed', policies: 'none' } }),
+            prIn(71, TOOLS, TOOLS_APP, { reviewers: [reviewerOf('Grace Hopper', 0, { isRequired: true })] })
+          ],
+          { title: 'Rename the tenant setting' }
+        )
+      ]
+    })
+  )
+  const row = rowOf(70)
+  assert.ok(row)
+  assert.deepEqual([row.props.justify, row.props.align, row.props.gap, row.props.wrap], ['between', 'center', 'xs', true])
+  const parts = (prId: number) => {
+    const found = rowOf(prId)
+    assert.ok(found, `!${prId} is drawn`)
+    return inside(found, { type: 'Box' }).map(part => [part.text, part.props.direction, part.props.shrink])
+  }
+  assert.deepEqual(parts(70), [
+    ['!70 → release/2026.11-hotfix Fabrikam Web / web-app', 'row', false],
+    ['✗ build', 'row', false]
+  ])
+  const [left] = inside(row, { type: 'Box' })
+  assert.deepEqual([left?.props.wrap, left?.props.maxWidth], [true, '100%'])
+  assert.deepEqual(
+    inside(row, { type: 'Text' }).map(text => [text.text, text.props.size]),
+    [['→ release/2026.11-hotfix', 'sm']]
+  )
+  assert.deepEqual(parts(71), [['!71 → develop Contoso Tools / web-app', 'row', false]])
+  assert.equal(rowText(71), '!71 → develop Contoso Tools / web-app waiting for Grace Hopper')
+})
+
+test('a set with no source branch draws no empty branch line', async () => {
+  await open(snapshotOf({ sets: [setOf([prOf(55)], { sources: [] })] }))
+  assert.deepEqual(
+    linesOf(cardOf('Change 55')).map(line => line.text),
+    ['Change 55', '→ develop']
   )
 })
 
@@ -328,7 +410,7 @@ test('both buttons are disabled while an action runs and absent when no pull req
   const buttons = (text: string) => panel.findAll({ type: 'Button', text }).map(button => button.disabled)
   assert.deepEqual(buttons('Approve'), [false, false])
   assert.deepEqual(buttons('Auto-complete'), [false, false])
-  assert.deepEqual(buttonsIn('Merged'), [['Share…', 'solid', 'sm']])
+  assert.deepEqual(buttonsIn('Merged'), [['Share…', 'solid', 'accent', 'xs']])
   const pending = panel.press(panel.findAll({ type: 'Button', text: 'Approve' })[0])
   await pause(10)
   assert.deepEqual(buttons('Approve'), [true, false])
@@ -548,7 +630,7 @@ test('To review with nothing waiting shows its empty state', async () => {
     ['Nothing to review', 'Pull requests that name you as a reviewer show up here until you vote.']
   )
   assert.equal(panel.find({ type: 'Collapsible' }), null)
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(cards(), [])
 })
 
 test('no sets shows the empty state', async () => {
@@ -556,7 +638,7 @@ test('no sets shows the empty state', async () => {
   const empty = panel.find({ type: 'EmptyState' })
   assert.equal(empty?.label, 'No open pull requests of yours')
   assert.equal(empty?.props.description, "Pull requests you create in this organization's code projects show up here.")
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(cards(), [])
   assert.equal(panel.find({ type: 'Text', text: /^Auto-complete uses/ }), null)
 })
 
@@ -565,7 +647,7 @@ test('a chosen project with nothing in the shown view says Nothing here and poin
   const empty = () => [panel.find({ type: 'EmptyState' })?.label, panel.find({ type: 'EmptyState' })?.props.description]
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
   assert.deepEqual(empty(), ['Nothing here for Contoso Tools', CHOOSE_ALL])
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(cards(), [])
 
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-web')
   await showToReview()
@@ -849,7 +931,7 @@ test('release sets group by project, flat with the repository named for a one-re
     '  Cache the lookups'
   ])
   assert.deepEqual(
-    panel.findAll({ type: 'Card' }).map(card => card.props.description),
+    cards().map(card => branchOf(card)[0]),
     ['feature/login', 'feature/login', 'feature/cache*']
   )
   assert.equal(rowText(55), '!55 → develop')
@@ -929,6 +1011,7 @@ test('merged rows after the first two fold behind + N merged · show', async () 
   assert.deepEqual(linksIn('First'), folded)
   assert.deepEqual(linksIn('Second'), ['!70', '!71', '!72', '+ 1 merged · show'])
 
+  assert.equal(panel.findAll({ type: 'Row', text: '+ 2 merged · show' }).length, 1, 'the fold link sits left in its own row')
   await panel.press({ type: 'Link', text: '+ 2 merged · show' })
   const unfolded = ['!55', '!56', '!57', '!58', '!59', '!60', 'Hide merged']
   assert.deepEqual(linksIn('First'), unfolded)
@@ -954,12 +1037,16 @@ test('Share… comes first, and Approve and Auto-complete show only when some pu
       ]
     })
   )
-  const share = ['Share…', 'solid', 'sm']
-  assert.deepEqual(buttonsIn('Both'), [share, ['Approve', 'outline', 'sm'], ['Auto-complete', 'outline', 'sm']])
+  const share = ['Share…', 'solid', 'accent', 'xs']
+  const approve = ['Approve', 'outline', undefined, 'xs']
+  const autoComplete = ['Auto-complete', 'outline', undefined, 'xs']
+  assert.deepEqual(buttonsIn('Both'), [share, approve, autoComplete])
   assert.deepEqual(buttonsIn('Neither'), [share])
   assert.deepEqual(buttonsIn('Draft and merged'), [share])
-  assert.deepEqual(buttonsIn('Approve only'), [share, ['Approve', 'outline', 'sm']])
-  assert.deepEqual(buttonsIn('Auto-complete only'), [share, ['Auto-complete', 'outline', 'sm']])
+  assert.deepEqual(buttonsIn('Approve only'), [share, approve])
+  assert.deepEqual(buttonsIn('Auto-complete only'), [share, autoComplete])
+  const actions = inside(cardOf('Both'), { type: 'Row' }).find(row => row.text === 'Share… Approve Auto-complete')
+  assert.deepEqual([actions?.props.gap, actions?.props.wrap], ['xs', true])
 })
 
 test('Mine and To review switch the list; To review groups its rows by project and keeps Reviewed by you', async () => {
@@ -981,7 +1068,7 @@ test('Mine and To review switch the list; To review groups its rows by project a
 
   await showToReview()
   assert.deepEqual(views(), ['ghost', 'outline'])
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(cards(), [])
   assert.deepEqual(outline(), [
     'Contoso Tools · web-app · 3 pull requests',
     '  - Tools review 1',
@@ -1158,7 +1245,7 @@ test('Collapse all and Expand all close and open every group in both views', asy
     ['Contoso Tools · web-app · 1 set', false],
     ['Fabrikam Web · 2 repos · 2 sets', false]
   ])
-  assert.equal(panel.find({ type: 'Card' }), null)
+  assert.deepEqual(cards(), [])
   await panel.toggle({ type: 'Collapsible', label: 'Fabrikam Web · 2 repos · 2 sets' })
   assert.deepEqual(groupStates(), [
     ['Contoso Tools · web-app · 1 set', false],
@@ -1181,7 +1268,7 @@ test('Collapse all and Expand all close and open every group in both views', asy
   ])
   assert.equal(panel.findAll({ type: 'ListItem' }).length, 3)
   await panel.press({ type: 'Button', text: 'Mine' })
-  assert.equal(panel.findAll({ type: 'Card' }).length, 3)
+  assert.equal(cards().length, 3)
 })
 
 test("fifty pull requests in sets across projects, with To review full, stay within Orca's limits in both views", async () => {

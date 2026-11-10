@@ -1,18 +1,18 @@
 import { assert, test } from 'orca/testing'
 import type { PrChecks, PrSummary } from '../../shared/prs'
 import { NOW, prOf, reviewerOf, setOf } from './fixtures'
-import { branchPattern, MERGED_SHOWN, MIN_BRANCH_PREFIX, needsApprove, needsAutoComplete, needsYou, prChips, prPlace, setPlaces, waitingOn } from './rows'
+import { branchPattern, MERGED_SHOWN, MIN_BRANCH_PREFIX, needsApprove, needsAutoComplete, needsYou, placeChip, prPlace, setPlaces, statusChip, waitingOn } from './rows'
 
 const checks = (build: PrChecks['build'], policies: PrChecks['policies']): PrChecks => ({ build, policies })
 
 const voted = (...votes: number[]) => votes.map((vote, index) => reviewerOf(`Reviewer ${index}`, vote))
 
-const statusOf = (over: Partial<PrSummary>) => prChips(prOf(1, over), null)
+const statusOf = (over: Partial<PrSummary>) => statusChip(prOf(1, over))
 
-test('prChips gives the place chip and one status chip: merged alone, else draft, the worst check and auto-complete in one text with the check\'s tone', () => {
+test('statusChip gives one chip: merged alone, else draft, the worst check and auto-complete in one text with the check\'s tone', () => {
   const everything: Partial<PrSummary> = { isDraft: true, autoComplete: true, mergeStatus: 'conflicts', checks: checks('failed', 'rejected'), reviewers: voted(-10, -5) }
-  assert.deepEqual(statusOf({ ...everything, status: 'completed', closedAt: NOW }), [{ tone: 'success', text: 'merged' }])
-  assert.deepEqual(statusOf({ ...everything, status: 'abandoned', closedAt: NOW }), [{ tone: 'neutral', text: 'abandoned' }])
+  assert.deepEqual(statusOf({ ...everything, status: 'completed', closedAt: NOW }), { tone: 'success', text: 'merged' })
+  assert.deepEqual(statusOf({ ...everything, status: 'abandoned', closedAt: NOW }), { tone: 'neutral', text: 'abandoned' })
 
   const worst: [Partial<PrSummary>, string, string][] = [
     [{ mergeStatus: 'conflicts', checks: checks('failed', 'rejected'), reviewers: voted(-10, -5) }, 'danger', 'conflicts'],
@@ -25,22 +25,26 @@ test('prChips gives the place chip and one status chip: merged alone, else draft
     [{ checks: checks('succeeded', 'none') }, 'success', '✓ build'],
     [{ checks: checks('none', 'approved') }, 'success', '✓ build']
   ]
-  for (const [over, tone, text] of worst) assert.deepEqual(statusOf(over), [{ tone, text }], text)
+  for (const [over, tone, text] of worst) assert.deepEqual(statusOf(over), { tone, text }, text)
 
-  assert.deepEqual(statusOf({ isDraft: true, checks: checks('running', 'pending') }), [{ tone: 'warning', text: 'draft · ● build' }])
-  assert.deepEqual(statusOf({ autoComplete: true, checks: checks('succeeded', 'approved') }), [{ tone: 'success', text: '✓ build · auto-complete' }])
-  assert.deepEqual(statusOf({ isDraft: true, autoComplete: true, mergeStatus: 'conflicts' }), [{ tone: 'danger', text: 'draft · conflicts · auto-complete' }])
-  assert.deepEqual(statusOf({ autoComplete: true }), [{ tone: 'accent', text: 'auto-complete' }])
-  assert.deepEqual(statusOf({ isDraft: true, autoComplete: true, checks: checks('none', 'none') }), [{ tone: 'accent', text: 'draft · auto-complete' }])
-  assert.deepEqual(statusOf({ isDraft: true }), [{ tone: 'neutral', text: 'draft' }])
-  assert.deepEqual(statusOf({}), [])
-  assert.deepEqual(statusOf({ checks: checks('none', 'none'), reviewers: voted(10, 5, 0) }), [])
+  assert.deepEqual(statusOf({ isDraft: true, checks: checks('running', 'pending') }), { tone: 'warning', text: 'draft · ● build' })
+  assert.deepEqual(statusOf({ autoComplete: true, checks: checks('succeeded', 'approved') }), { tone: 'success', text: '✓ build · auto-complete' })
+  assert.deepEqual(statusOf({ isDraft: true, autoComplete: true, mergeStatus: 'conflicts' }), { tone: 'danger', text: 'draft · conflicts · auto-complete' })
+  assert.deepEqual(statusOf({ autoComplete: true }), { tone: 'accent', text: 'auto-complete' })
+  assert.deepEqual(statusOf({ isDraft: true, autoComplete: true, checks: checks('none', 'none') }), { tone: 'accent', text: 'draft · auto-complete' })
+  assert.deepEqual(statusOf({ isDraft: true }), { tone: 'neutral', text: 'draft' })
+  assert.equal(statusOf({}), null)
+  assert.equal(statusOf({ checks: checks('none', 'none'), reviewers: voted(10, 5, 0) }), null)
+})
 
+test('placeChip names the repository in Across repos and the project / repository in Across projects, and nothing elsewhere', () => {
   const api = prOf(2, { repoId: 'repo-api', repoName: 'fabrikam-api', checks: checks('failed', 'none') })
-  assert.deepEqual(prChips(api, 'repo'), [{ tone: 'neutral', text: 'fabrikam-api' }, { tone: 'danger', text: '✗ build' }])
-  assert.deepEqual(prChips(api, 'project'), [{ tone: 'neutral', text: 'Fabrikam Web / fabrikam-api' }, { tone: 'danger', text: '✗ build' }])
-  assert.deepEqual(prChips(prOf(3), 'project'), [{ tone: 'neutral', text: 'Fabrikam Web / web-app' }])
-  assert.deepEqual(prChips(prOf(4, { status: 'completed', closedAt: NOW }), 'repo'), [{ tone: 'neutral', text: 'web-app' }, { tone: 'success', text: 'merged' }])
+  assert.deepEqual(placeChip(api, 'repo'), { tone: 'neutral', text: 'fabrikam-api' })
+  assert.deepEqual(placeChip(api, 'project'), { tone: 'neutral', text: 'Fabrikam Web / fabrikam-api' })
+  assert.equal(placeChip(api, null), null)
+  assert.deepEqual(placeChip(prOf(3), 'project'), { tone: 'neutral', text: 'Fabrikam Web / web-app' })
+  assert.deepEqual(placeChip(prOf(4, { status: 'completed', closedAt: NOW }), 'repo'), { tone: 'neutral', text: 'web-app' })
+  assert.deepEqual(statusChip(api), { tone: 'danger', text: '✗ build' })
 })
 
 test('waitingOn names required reviewers who have not voted or declined', () => {
