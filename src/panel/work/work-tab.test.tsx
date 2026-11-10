@@ -256,8 +256,8 @@ test('the board label names the team and the board, and Refresh replaces the sna
   assert.deepEqual(
     panel.findAll({ type: 'Button', text: /^(Columns|Lanes)$/ }).map(button => [button.text, button.props.size, button.props.variant]),
     [
-      ['Columns', 'sm', 'solid'],
-      ['Lanes', 'sm', 'ghost']
+      ['Columns', 'xs', 'outline'],
+      ['Lanes', 'xs', 'ghost']
     ]
   )
   assert.deepEqual(titles(), ['Story 101'])
@@ -802,7 +802,7 @@ test('a board without swimlanes shows the columns under Lanes with a note', asyn
   assert.deepEqual(groups(), columns)
   const note = noSwimlanes()
   assert.deepEqual([note?.props.size, note?.props.muted], ['sm', true])
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
 
   await panel.post('work.changed', snapshot([{ id: 'lane-default', name: '' }]))
   assert.deepEqual(groups(), columns)
@@ -823,27 +823,27 @@ test('a board without swimlanes shows the columns under Lanes with a note', asyn
   assert.equal(noSwimlanes(), null)
 })
 
-test('the Columns and Lanes buttons switch the view, and the chosen one is solid', async () => {
+test('the Columns and Lanes buttons switch the view, and the chosen one is outline', async () => {
   await open(laneSnapshot())
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.deepEqual(
     [columnsButton(), lanesButton()].map(button => [button?.text, button?.props.size]),
     [
-      ['Columns', 'sm'],
-      ['Lanes', 'sm']
+      ['Columns', 'xs'],
+      ['Lanes', 'xs']
     ]
   )
   const label = nodesOf('Row').find(row => row.children?.some(child => typeof child !== 'string' && child.type === 'Badge' && child.children?.includes('Web Team · Stories')))
-  assert.deepEqual(shapeOf(label!), ['Row', ['Badge', 'Web Team · Stories'], ['Row', ['Button', 'Columns'], ['Button', 'Lanes']]])
+  assert.deepEqual(shapeOf(label!), ['Row', ['Badge', 'Web Team · Stories'], ['Box', ['Toolbar', ['Button', 'Columns'], ['Button', 'Lanes']]]])
 
   await showLanes()
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.equal(groupOf('Default lane').props.title, 'Default lane')
   await showLanes()
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
 
   await panel.press({ type: 'Button', text: 'Columns' })
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
   assert.equal(panel.find({ type: 'Collapsible', label: 'Expedite' }), null)
 })
@@ -856,7 +856,7 @@ test('the chosen view is remembered per board and survives a reload', async () =
 
   const reloaded = await reloadPanel(panel, [org('contoso')], { 'work.snapshot': snapshot })
   panel = reloaded.panel
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.deepEqual(
     groups().slice(0, 2),
     [
@@ -868,7 +868,7 @@ test('the chosen view is remembered per board and survives a reload', async () =
   const otherBoard = { ...BOARDS, teamId: 'team-other', teamName: 'Other Team' }
   const elsewhere = await reloadPanel(panel, [org('contoso', { boards: otherBoard })], { 'work.snapshot': snapshot })
   panel = elsewhere.panel
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
   await showLanes()
   assert.deepEqual(panel.persisted.plugin.workViews, { [VIEW_KEY]: 'lanes', 'contoso/proj-web/team-other': 'lanes' })
@@ -881,7 +881,7 @@ test('the chosen view is remembered per board and survives a reload', async () =
 
 test('a remembered view that is neither columns nor lanes falls back to Columns', async () => {
   await open(laneSnapshot(), {}, { persisted: { plugin: { workViews: { [VIEW_KEY]: 'sideways' } } } })
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.equal(panel.find({ type: 'Collapsible', label: 'Default lane' }), null)
 })
 
@@ -1327,7 +1327,7 @@ test("150 items with 300 tasks, all expanded, stay within Orca's limits and say 
 
 test("150 items with 300 tasks in Lanes, all expanded, stay within Orca's limits", async () => {
   await open(largeWork(), {}, { persisted: IN_LANES })
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.deepEqual(groups().filter(([title]) => title === 'Default lane' || title === 'Expedite'), [
     ['Default lane', '70 items'],
     ['Expedite', '70 items']

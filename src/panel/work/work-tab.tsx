@@ -10,7 +10,7 @@ import { cutLabel } from '../label'
 import { openSettings } from '../org-settings'
 import { chooseWorkView, workViewIn, workViewKey, workViews, type WorkView } from '../prefs'
 import { LoadFailure } from '../snapshot-parts'
-import { foldActions, TabToolbar, type ToolAction } from '../toolbar'
+import { foldActions, Segmented, TabToolbar, type ToolAction } from '../toolbar'
 import { ItemCard, ParentCard } from './item-card'
 import { ItemDetails } from './item-details'
 import { byColumn, byLane, GROUP_PAGE, planWork, tasksKey, tasksOpenByDefault, WORK_NODE_BUDGET, type LaneGroup, type TaskRow, type WorkCard, type WorkPlan } from './plan'
@@ -59,20 +59,20 @@ function Toolbar({ org, boards, viewKey, current, view }: { org: string; boards:
     { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
     { icon: 'open-external', label: 'Open board', onPress: () => openBoard(org) }
   ]
-  const variantOf = (next: WorkView) => (view === next ? 'solid' : 'ghost')
   return (
     <TabToolbar
       left={
         <>
           {current.board ? <Badge>{cutLabel(`${boards.teamName} · ${current.board.boardName}`)}</Badge> : null}
-          <Row gap="xs">
-            <Button size="sm" variant={variantOf('columns')} onPress={() => chooseWorkView(viewKey, 'columns')}>
-              Columns
-            </Button>
-            <Button size="sm" variant={variantOf('lanes')} onPress={() => chooseWorkView(viewKey, 'lanes')}>
-              Lanes
-            </Button>
-          </Row>
+          <Segmented<WorkView>
+            label="Work view"
+            value={view}
+            options={[
+              { value: 'columns', label: 'Columns' },
+              { value: 'lanes', label: 'Lanes' }
+            ]}
+            onChange={next => chooseWorkView(viewKey, next)}
+          />
         </>
       }
       actions={actions}

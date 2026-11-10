@@ -1,4 +1,4 @@
-import { Box, IconButton, RelativeTime, Row, Select, Stack, Text, type Atom, type IconName, type OrcaNode } from 'orca'
+import { Box, Button, IconButton, RelativeTime, Row, Select, Stack, Text, Toolbar, type Atom, type IconName, type OrcaNode } from 'orca'
 import { ALL_PROJECTS, ALL_REPOS, COLLAPSE_ALL, EXPAND_ALL } from './copy'
 import { setAllFolds, type FoldTab } from './folds'
 import type { Choices, Scope } from './grouping'
@@ -59,24 +59,50 @@ export function ScopePickers<S extends Scope>({ org, choices, prefs }: ScopePick
   )
 }
 
+export interface SegmentOption<V extends string> {
+  value: V
+  label: string
+}
+
+interface SegmentedProps<V extends string> {
+  label: string
+  value: V
+  options: readonly SegmentOption<V>[]
+  onChange: (value: V) => void
+}
+
+export function Segmented<V extends string>({ label, value, options, onChange }: SegmentedProps<V>): OrcaNode {
+  return (
+    <Box direction="row" background="muted" radius="md" padding="xs" shrink={false}>
+      <Toolbar label={label} gap="xs">
+        {options.map(option => (
+          <Button key={option.value} size="xs" variant={option.value === value ? 'outline' : 'ghost'} onPress={() => onChange(option.value)}>
+            {option.label}
+          </Button>
+        ))}
+      </Toolbar>
+    </Box>
+  )
+}
+
 export function TabToolbar({ left, actions, updatedAt, message, stale }: TabToolbarProps): OrcaNode {
   return (
     <Stack gap="xs">
-      <Row justify="between" align="center" gap="sm" wrap>
-        <Box grow shrink minWidth={0}>
-          <Row gap="xs" wrap>
-            {left}
-          </Row>
-        </Box>
-        <Row gap="xs">
+      {left ? (
+        <Row justify="between" align="center" gap="xs" wrap>
+          {left}
+        </Row>
+      ) : null}
+      <Row justify="between" align="center" gap="sm">
+        <Text muted size="xs">
+          Updated <RelativeTime at={updatedAt} />
+        </Text>
+        <Row gap="none">
           {actions.map(action => (
-            <IconButton key={action.label} icon={action.icon} label={action.label} variant="ghost" size="sm" disabled={action.disabled} onPress={action.onPress} />
+            <IconButton key={action.label} icon={action.icon} label={action.label} variant="ghost" size="xs" disabled={action.disabled} onPress={action.onPress} />
           ))}
         </Row>
       </Row>
-      <Text muted size="sm">
-        Updated <RelativeTime at={updatedAt} />
-      </Text>
       <SnapshotMessage message={message} stale={stale} />
     </Stack>
   )

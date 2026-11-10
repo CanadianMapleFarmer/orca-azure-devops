@@ -404,18 +404,18 @@ test('the toolbar holds the pickers, Mine and To review, then Collapse all, Expa
   assert.deepEqual(
     toolbar.map(button => [button.label, button.props.icon, button.props.variant, button.props.size]),
     [
-      ['Collapse all', 'collapse', 'ghost', 'sm'],
-      ['Expand all', 'expand', 'ghost', 'sm'],
-      ['Refresh', 'refresh', 'ghost', 'sm'],
-      ['Teams channels', 'settings', 'ghost', 'sm']
+      ['Collapse all', 'collapse', 'ghost', 'xs'],
+      ['Expand all', 'expand', 'ghost', 'xs'],
+      ['Refresh', 'refresh', 'ghost', 'xs'],
+      ['Teams channels', 'settings', 'ghost', 'xs']
     ]
   )
   assert.equal(projectSelect()?.props.labelHidden, true)
   assert.deepEqual(
     [mineButton(), reviewButton()].map(button => [button?.text, button?.props.size, button?.props.variant]),
     [
-      ['Mine', 'sm', 'solid'],
-      ['To review', 'sm', 'ghost']
+      ['Mine', 'xs', 'outline'],
+      ['To review', 'xs', 'ghost']
     ]
   )
   await panel.press({ label: 'Teams channels' })
@@ -723,7 +723,7 @@ test('To review stays chosen when the tab is left and shown again', async () => 
   await panel.select({ type: 'Tabs' }, 'work')
   await panel.select({ type: 'Tabs' }, 'prs')
   assert.ok(panel.find({ type: 'ListItem' }))
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
 })
 
 test('a second press before the buttons redraw sends nothing', async () => {
@@ -818,14 +818,14 @@ test("switching organization loads that org and drops the other one's results", 
   await panel.press({ type: 'Button', text: 'Approve' })
   assert.equal(resultLines().length, 1)
   await showToReview()
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   await panel.select({ label: 'Organization' }, 'fabrikam')
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.deepEqual(titles(), ['fabrikam change'])
   assert.equal(panel.find({ type: 'Callout' }), null)
   assert.deepEqual(inputsTo(host, 'prs.snapshot'), [{ org: 'contoso' }, { org: 'fabrikam' }])
   await panel.select({ label: 'Organization' }, 'contoso')
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   await panel.press({ type: 'Button', text: 'Mine' })
   assert.deepEqual(titles(), ['contoso change'])
   assert.equal(resultLines().length, 0)
@@ -974,13 +974,13 @@ test('Mine and To review switch the list; To review groups its rows by project a
   ]
   const sets = [setOf([prIn(55, WEB, WEB_APP)], { title: 'Web set' }), setOf([prIn(60, TOOLS, TOOLS_APP)], { title: 'Tools set' })]
   await open(snapshotOf({ sets, toReview, toReviewCount: 12, reviewed }))
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.equal(reviewButton()?.text, 'To review · 12')
   assert.deepEqual(titles(), ['Tools set', 'Web set'])
   assert.equal(panel.find({ type: 'ListItem' }), null)
 
   await showToReview()
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.equal(panel.find({ type: 'Card' }), null)
   assert.deepEqual(outline(), [
     'Contoso Tools · web-app [3 pull requests]',
@@ -1017,7 +1017,7 @@ test('Mine and To review switch the list; To review groups its rows by project a
   ])
 
   await panel.press({ type: 'Button', text: 'Mine' })
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.deepEqual(outline(), ['Contoso Tools · web-app [1 set]', '  Tools set'])
   assert.deepEqual(panel.persisted.plugin.prsPrefs, { contoso: { view: 'mine', project: 'proj-tools', repo: null } })
 })
@@ -1070,18 +1070,18 @@ test('the chosen view, project and repository survive a reload, per organisation
 
   const reloaded = await reloadPanel(panel, orgs, { 'prs.snapshot': data })
   panel = reloaded.panel
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-web', 'repo-api'])
   assert.deepEqual(outline(), apiOnly)
 
   await panel.select({ label: 'Organization' }, 'fabrikam')
-  assert.deepEqual(views(), ['solid', 'ghost'])
+  assert.deepEqual(views(), ['outline', 'ghost'])
   assert.deepEqual([projectSelect()?.props.value, repoSelect()], ['*', null])
   assert.equal(titles().length, 3)
   await panel.select({ type: 'Select', label: 'Project' }, 'proj-tools')
 
   await panel.select({ label: 'Organization' }, 'contoso')
-  assert.deepEqual(views(), ['ghost', 'solid'])
+  assert.deepEqual(views(), ['ghost', 'outline'])
   assert.deepEqual([projectSelect()?.props.value, repoSelect()?.props.value], ['proj-web', 'repo-api'])
   assert.deepEqual(panel.persisted.plugin.prsPrefs, {
     contoso: { view: 'review', project: 'proj-web', repo: 'repo-api' },

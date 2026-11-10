@@ -1,4 +1,4 @@
-import { Button, Callout, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Callout, read, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { RunFilter, RunsSnapshot, RunSummary } from '../../shared/pipelines'
 import { failedRuns, isActive, needsMe, runCounts, runsFor } from '../../shared/runs'
 import type { OrgStatus } from '../../shared/types'
@@ -10,7 +10,7 @@ import { Channels, openChannels } from '../share/channels'
 import { Composer } from '../share/composer'
 import { shareView } from '../share/state'
 import { LoadFailure } from '../snapshot-parts'
-import { foldActions, ScopePickers, TabToolbar, type ToolAction } from '../toolbar'
+import { foldActions, ScopePickers, Segmented, TabToolbar, type ToolAction } from '../toolbar'
 import { RunCard } from './run-card'
 import { load, notice, refresh, refreshing, retryLoad, runFilter, runPlaces, selectFilter, snapshot } from './state'
 
@@ -43,13 +43,12 @@ function Filters({ filter, current, now }: { filter: RunFilter; current: RunsSna
   const counts = runCounts(current.runs, now)
   const numbers: Partial<Record<RunFilter, number>> = { needsMe: counts.approvals, failed: counts.failedRuns }
   return (
-    <Row gap="xs" wrap>
-      {FILTERS.map(({ id, label }) => (
-        <Button key={id} size="sm" variant={id === filter ? 'solid' : 'ghost'} onPress={() => selectFilter(id)}>
-          {(numbers[id] ?? 0) > 0 ? `${label} · ${numbers[id]}` : label}
-        </Button>
-      ))}
-    </Row>
+    <Segmented<RunFilter>
+      label="Runs filter"
+      value={filter}
+      options={FILTERS.map(({ id, label }) => ({ value: id, label: (numbers[id] ?? 0) > 0 ? `${label} · ${numbers[id]}` : label }))}
+      onChange={selectFilter}
+    />
   )
 }
 

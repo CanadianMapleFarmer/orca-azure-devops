@@ -75,50 +75,51 @@ function OneGroup(): OrcaNode {
   )
 }
 
-test('the toolbar puts the scope controls first and the icon buttons last, with Updated under it', async () => {
+test('the toolbar puts the scope controls in a first row, then Updated beside the icon buttons, then the message', async () => {
   const { panel } = await mountPanel(ORGS, {}, { module: Scoped })
 
   const tree = panel.tree() as TreeSnapshot
   assert.equal(tree.type, 'Stack')
-  const [bar, updated, message, ...rest] = childrenOf(tree) as TreeSnapshot[]
+  const [controls, bar, message, ...rest] = childrenOf(tree) as TreeSnapshot[]
   assert.deepEqual(rest, [])
+  assert.deepEqual(controls, {
+    type: 'Row',
+    props: { justify: 'between', align: 'center', gap: 'xs', wrap: true },
+    children: [{ type: 'Text', props: { size: 'sm' }, children: ['Scope'] }]
+  })
   assert.deepEqual(bar, {
     type: 'Row',
-    props: { justify: 'between', align: 'center', gap: 'sm', wrap: true },
+    props: { justify: 'between', align: 'center', gap: 'sm' },
     children: [
-      {
-        type: 'Box',
-        props: { grow: true, shrink: true, minWidth: 0 },
-        children: [{ type: 'Row', props: { gap: 'xs', wrap: true }, children: [{ type: 'Text', props: { size: 'sm' }, children: ['Scope'] }] }]
-      },
+      { type: 'Text', props: { muted: true, size: 'xs' }, children: ['Updated ', { type: 'RelativeTime', props: { at: NOW } }] },
       {
         type: 'Row',
-        props: { gap: 'xs' },
+        props: { gap: 'none' },
         children: [
-          { type: 'IconButton', key: REFRESH_LABEL, props: { icon: 'refresh', label: REFRESH_LABEL, variant: 'ghost', size: 'sm', onPress: '[handler]' } },
-          { type: 'IconButton', key: 'Collapse all', props: { icon: 'collapse', label: 'Collapse all', variant: 'ghost', size: 'sm', onPress: '[handler]' } },
-          { type: 'IconButton', key: 'Expand all', props: { icon: 'expand', label: 'Expand all', variant: 'ghost', size: 'sm', onPress: '[handler]' } }
+          { type: 'IconButton', key: REFRESH_LABEL, props: { icon: 'refresh', label: REFRESH_LABEL, variant: 'ghost', size: 'xs', onPress: '[handler]' } },
+          { type: 'IconButton', key: 'Collapse all', props: { icon: 'collapse', label: 'Collapse all', variant: 'ghost', size: 'xs', onPress: '[handler]' } },
+          { type: 'IconButton', key: 'Expand all', props: { icon: 'expand', label: 'Expand all', variant: 'ghost', size: 'xs', onPress: '[handler]' } }
         ]
       }
     ]
   })
-  assert.deepEqual(updated, { type: 'Text', props: { muted: true, size: 'sm' }, children: ['Updated ', { type: 'RelativeTime', props: { at: NOW } }] })
   assert.deepEqual(message, { type: 'Text', props: { size: 'sm', tone: 'warning' }, children: ['Showing the last good copy.'] })
   await closeCleanly(panel)
 })
 
-test('a toolbar with no scope controls and no message keeps its buttons to the right and Updated under them', async () => {
+test('a toolbar with no scope controls and no message is a single row with Updated on the left and its buttons on the right', async () => {
   const Bare = () => <TabToolbar actions={foldActions('contoso', 'pipelines')} updatedAt={NOW} stale={false} />
   const { panel } = await mountPanel(ORGS, {}, { module: Bare })
 
-  const [bar, updated, ...rest] = childrenOf(panel.tree() as TreeSnapshot) as TreeSnapshot[]
+  const [bar, ...rest] = childrenOf(panel.tree() as TreeSnapshot) as TreeSnapshot[]
   assert.deepEqual(rest, [])
+  assert.equal(bar.type, 'Row')
   assert.deepEqual(
     childrenOf(bar).map(child => (child as TreeSnapshot).type),
-    ['Box', 'Row']
+    ['Text', 'Row']
   )
-  assert.deepEqual((childrenOf(bar)[0] as TreeSnapshot).props, { grow: true, shrink: true, minWidth: 0 })
-  assert.equal((updated as TreeSnapshot).type, 'Text')
+  assert.deepEqual((childrenOf(bar)[0] as TreeSnapshot).props, { muted: true, size: 'xs' })
+  assert.deepEqual((childrenOf(bar)[1] as TreeSnapshot).props, { gap: 'none' })
   assert.ok(panel.find({ type: 'RelativeTime' }))
   await closeCleanly(panel)
 })

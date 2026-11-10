@@ -1,4 +1,4 @@
-import { Button, Callout, List, ListItem, read, Row, Skeleton, Stack, Text, type OrcaNode } from 'orca'
+import { Callout, List, ListItem, read, Skeleton, Stack, Text, type OrcaNode } from 'orca'
 import type { PrSnapshot, PrSummary, ReleaseSet } from '../../shared/prs'
 import { votePhrase } from '../../shared/reviews'
 import type { OrgStatus } from '../../shared/types'
@@ -11,7 +11,7 @@ import { Channels, openChannels } from '../share/channels'
 import { Composer } from '../share/composer'
 import { shareView } from '../share/state'
 import { LoadFailure } from '../snapshot-parts'
-import { foldActions, ScopePickers, TabToolbar, type ToolAction } from '../toolbar'
+import { foldActions, ScopePickers, Segmented, TabToolbar, type ToolAction } from '../toolbar'
 import { ReleaseSetCard } from './release-set'
 import { ReviewView } from './review/review-view'
 import { openReview, showReview } from './review/state'
@@ -140,20 +140,20 @@ function Toolbar({ view, shown }: { view: View; shown: PrsView }): OrcaNode {
     { icon: 'refresh', label: 'Refresh', disabled: read(refreshing), onPress: () => refresh(org) },
     { icon: 'settings', label: 'Teams channels', onPress: () => openChannels('prs') }
   ]
-  const variantOf = (next: PrsView) => (shown === next ? 'solid' : 'ghost')
   return (
     <TabToolbar
       left={
         <>
           <ScopePickers org={org} choices={choices} prefs={prsPrefs} />
-          <Row gap="xs">
-            <Button size="sm" variant={variantOf('mine')} onPress={() => choosePrsView(org, 'mine')}>
-              Mine
-            </Button>
-            <Button size="sm" variant={variantOf('review')} onPress={() => choosePrsView(org, 'review')}>
-              {reviewLabel(view)}
-            </Button>
-          </Row>
+          <Segmented<PrsView>
+            label="Pull requests view"
+            value={shown}
+            options={[
+              { value: 'mine', label: 'Mine' },
+              { value: 'review', label: reviewLabel(view) }
+            ]}
+            onChange={next => choosePrsView(org, next)}
+          />
         </>
       }
       actions={actions}

@@ -325,13 +325,13 @@ test('filters switch the list and show the counts', async () => {
   const filterButtons = () => panel.findAll({ type: 'Button' }).map(button => button.text).filter(text => /^(Mine|Running|Needs me|Failed)/.test(text))
   assert.deepEqual(filterButtons(), ['Mine', 'Running', 'Needs me · 2', 'Failed · 1'])
   const variantOf = (text: string) => panel.find({ type: 'Button', text })?.props.variant
-  assert.equal(variantOf('Mine'), 'solid')
+  assert.equal(variantOf('Mine'), 'outline')
   assert.equal(variantOf('Running'), 'ghost')
   assert.deepEqual(ids(), [3, 1])
 
   await panel.press({ type: 'Button', text: 'Running' })
   assert.deepEqual(ids(), [4, 3, 2])
-  assert.equal(variantOf('Running'), 'solid')
+  assert.equal(variantOf('Running'), 'outline')
   assert.equal(variantOf('Mine'), 'ghost')
 
   await panel.press({ type: 'Button', text: 'Needs me · 2' })
@@ -340,27 +340,33 @@ test('filters switch the list and show the counts', async () => {
 
   await panel.press({ type: 'Button', text: 'Failed · 1' })
   assert.deepEqual(ids(), [1])
-  assert.equal(variantOf('Failed · 1'), 'solid')
+  assert.equal(variantOf('Failed · 1'), 'outline')
 })
 
-test('the filter buttons wrap and carry no count at zero', async () => {
+test('the filters are one labelled switch of small buttons inside the toolbar row that wraps, with no count at zero', async () => {
   await open(runsSnapshotOf({ runs: [runOf(1)] }))
-  assert.equal(panel.find({ type: 'Button', text: 'Needs me' })?.props.size, 'sm')
+  assert.equal(panel.find({ type: 'Button', text: 'Needs me' })?.props.size, 'xs')
   assert.ok(panel.find({ type: 'Button', text: 'Failed' }))
-  const row = panel.find({ type: 'Row', text: /^Mine/ })
-  assert.equal(row?.props.wrap, true)
+  const filters = panel.find({ type: 'Toolbar', label: 'Runs filter' })
+  assert.ok(filters)
+  assert.deepEqual(
+    panel.findAll({ type: 'Button' }).filter(button => button.path.startsWith(`${filters.path}/`)).map(button => button.text),
+    ['Mine', 'Running', 'Needs me', 'Failed']
+  )
+  const rows = panel.findAll({ type: 'Row' }).filter(row => filters.path.startsWith(`${row.path}/`))
+  assert.ok(rows.some(row => row.props.wrap === true))
 })
 
 test('the chosen filter is remembered for the workspace', async () => {
   await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'failed' })
   assert.deepEqual(ids(), [1])
-  assert.equal(panel.find({ type: 'Button', text: 'Failed · 1' })?.props.variant, 'solid')
+  assert.equal(panel.find({ type: 'Button', text: 'Failed · 1' })?.props.variant, 'outline')
 })
 
 test('an unknown remembered filter falls back to Mine', async () => {
   await open(runsSnapshotOf({ runs: mixed() }), {}, { filter: 'everything' })
   assert.deepEqual(ids(), [3, 1])
-  assert.equal(panel.find({ type: 'Button', text: 'Mine' })?.props.variant, 'solid')
+  assert.equal(panel.find({ type: 'Button', text: 'Mine' })?.props.variant, 'outline')
   await panel.press({ type: 'Button', text: 'Failed · 1' })
   assert.deepEqual(ids(), [1])
   assert.equal(panel.persisted.workspace.pipelinesFilter, 'failed')
@@ -939,10 +945,10 @@ test('the toolbar has a Teams channels button that opens the manager and Back re
   assert.deepEqual(
     toolbar.map(button => [button.label, button.props.icon, button.props.variant, button.props.size]),
     [
-      ['Collapse all', 'collapse', 'ghost', 'sm'],
-      ['Expand all', 'expand', 'ghost', 'sm'],
-      ['Refresh', 'refresh', 'ghost', 'sm'],
-      ['Teams channels', 'settings', 'ghost', 'sm']
+      ['Collapse all', 'collapse', 'ghost', 'xs'],
+      ['Expand all', 'expand', 'ghost', 'xs'],
+      ['Refresh', 'refresh', 'ghost', 'xs'],
+      ['Teams channels', 'settings', 'ghost', 'xs']
     ]
   )
   await panel.press({ label: 'Teams channels' })
