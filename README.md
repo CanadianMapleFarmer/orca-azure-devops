@@ -4,11 +4,11 @@ Azure DevOps work items, boards, pull requests, pipelines and wikis in the [Orca
 
 Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Microsoft.
 
-## Try the preview
+## Install
 
-This is a preview for testers. It isn't in Orca's plugin catalog yet.
+Orca's community plugin catalog picks up each release of this plugin from its version tag. Its catalog page is [onorca.dev/plugins/CanadianMapleFarmer/orca-azure-devops](https://onorca.dev/plugins/CanadianMapleFarmer/orca-azure-devops). Community plugins are checked by machine, not reviewed by the Orca team, and this one runs its own code with your account's access, so read Permissions below before you approve it.
 
-1. Install it from GitHub:
+1. Install it from Orca's plugin list, or from a terminal:
 
    ```bash
    orca plugin install CanadianMapleFarmer/orca-azure-devops
@@ -17,7 +17,7 @@ This is a preview for testers. It isn't in Orca's plugin catalog yet.
 2. Orca lists what the plugin will be allowed to do and prints the same command with `--approve <fingerprint>`. Read the list (Permissions below explains each item), then run that command.
 3. Open Azure DevOps in Orca's sidebar and connect an organisation (see Connecting an organisation).
 
-`orca plugin update` fetches newer versions. Report problems and ideas in [Issues](https://github.com/CanadianMapleFarmer/orca-azure-devops/issues). Never paste a token, a sign-in code or a Teams webhook URL there. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+`orca plugin update` fetches newer versions: the newest release, or the newest commit on `main` if you installed before the first release. Report problems and ideas in [Issues](https://github.com/CanadianMapleFarmer/orca-azure-devops/issues). Never paste a token, a sign-in code or a Teams webhook URL there. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 | Works now |
 | --- |
