@@ -3,7 +3,7 @@ import { assert, test } from 'orca/testing'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { MAX_COMMENTS_SHOWN, MAX_FILE_ROWS, MAX_THREAD_CARDS } from '../src/panel/prs/review/fit'
 import { MERGED_SHOWN } from '../src/panel/prs/rows'
-import { GROUP_PAGE } from '../src/panel/work/plan'
+import { GROUP_PAGE, MAX_TITLE_CHARS } from '../src/panel/work/plan'
 import { MAX_DIFF_BYTES } from '../src/shared/diff'
 import { MAX_STAGE_CHIPS } from '../src/shared/pipelines'
 import { MAX_REVIEW_COMMENT } from '../src/shared/reviews'
@@ -112,7 +112,7 @@ test('the review and wiki sections, the Reviewed by you list and the Wiki scope 
 test('the README says where Publish is, how a draft status ages, where an image link leads and what a -2 branch means', async () => {
   const text = await readme()
   const wiki = section(text, 'The Wiki tab')
-  assert.match(wiki, /Publish, \*\*Open\*\* and \*\*Discard\*\* are on the draft's card under \*\*Drafts \(N\)\*\*, above the page tree/)
+  assert.match(wiki, /\*\*Publish\*\*, \*\*Open\*\* and \*\*Discard…\*\* are on the draft's row under \*\*Drafts · N\*\*, above the page tree/)
   assert.match(wiki, /On a page, press the back link above its title to reach them/)
   assert.match(wiki, /status is as of the last time the list loaded; Publish always reads the saved file/)
   assert.match(wiki, /an attachment image links to the page in Azure DevOps, where it shows/)
@@ -409,4 +409,108 @@ test("the README says the Open in tab copy is the sidebar's cleaned Markdown tha
     .split('\n')
     .find(line => line.startsWith('- My work:'))
   assert.match(work ?? '', /the parents of your tasks and the child tasks of your items and of those parents\./)
+})
+
+test('each toolbar is two rows, the controls then Updated and the icon buttons, and its views are one switch', async () => {
+  const text = await readme()
+  const toolbars: [string, RegExp, string][] = [
+    ['The Work tab', /The first has the board's label and a \*\*Columns\*\* and \*\*Lanes\*\* switch\./, 'Open board'],
+    ['The PRs tab', /The first has the pickers \(see Projects and repositories\) and the \*\*Mine\*\* and \*\*To review\*\* switch\./, 'Teams channels'],
+    ['The Pipelines tab', /The first has the pickers and the filters \(see Filters\)\./, 'Teams channels']
+  ]
+  for (const [title, controls, last] of toolbars) {
+    const body = section(text, title)
+    assert.match(body, /The toolbar has two rows\./)
+    assert.match(body, controls)
+    assert.ok(
+      body.includes(`The second has \`Updated …\` in muted text on the left and four icon buttons on the right: **Collapse all**, **Expand all**, **Refresh** and **${last}**.`),
+      `${title}: the second row is Updated and the icon buttons`
+    )
+    assert.ok(!body.includes('under the toolbar'), `${title}: Updated isn't under the toolbar`)
+  }
+  assert.ok(section(text, 'The Pipelines tab').includes('The four filters are one switch in the toolbar.'), 'the run filters are one switch')
+  assert.ok(!text.includes('is filled'), 'a chosen button is not called filled')
+})
+
+test('a group header carries its count and only the hint sits under it', async () => {
+  const text = await readme()
+  const prs = section(text, 'The PRs tab')
+  for (const phrase of [
+    "Its header line has the project's name and a count such as `3 sets`.",
+    'a hint such as `1 needs you` sits under the header when something does',
+    '`Fabrikam · fabrikam-web · 3 sets`',
+    '`Fabrikam · 2 repos · 3 sets`'
+  ]) {
+    assert.ok(prs.includes(phrase), `The PRs tab: ${phrase}`)
+  }
+  const pipelines = section(text, 'The Pipelines tab')
+  for (const phrase of [
+    "Its header line has the project's name and a count such as `4 runs`, and one hint sits under it: `1 needs you`, else `2 failed`, else `1 running`.",
+    '`Fabrikam · fabrikam-api · 4 runs`',
+    '`Fabrikam · 2 repos · 4 runs`'
+  ]) {
+    assert.ok(pipelines.includes(phrase), `The Pipelines tab: ${phrase}`)
+  }
+  assert.ok(section(text, 'The Work tab').includes('with the number of items in its header, such as `Active · 3`'), 'a Work group counts in its header')
+  assert.ok(!text.includes('a muted count such as'), 'the count is no longer a separate muted part')
+})
+
+test('a Work card is a title cut at the limit, a second line with Move at the right and tasks on a shaded panel', async () => {
+  const work = section(await readme(), 'The Work tab')
+  assert.ok(work.includes(`one pressable line cut with \`…\` after ${MAX_TITLE_CHARS} characters`), 'the title cut is stated')
+  assert.match(work, /The second has, on the left, the type's icon[^\n]*\*\*Tasks n\/m\*\* when the item has tasks\. On the right is a compact \*\*Move\*\* box\./)
+  assert.match(work, /shows its tasks inside it while they are open/)
+  const tasks = subsection(work, 'Tasks under their parent')
+  assert.match(tasks, /opens or closes the list, which shows inside the card on a shaded panel/)
+  assert.match(tasks, /A task is one line: its `#id`, its title and its state\. Press the `#id` to open the details; finished tasks open too\./)
+  assert.match(tasks, /When the task isn't yours, the assignee's name or `Unassigned` follows the title/)
+  assert.match(tasks, /A finished task has a muted title and its state in a success badge\./)
+  assert.match(tasks, /Your own open task shows its state as the placeholder of its \*\*Move\*\* box, which moves it\./)
+  assert.match(tasks, /with no state to move to shows its state as a badge/)
+  assert.match(tasks, /shows dimmed, in the column \(and lane\) it is in, with a small progress bar beside \*\*Tasks n\/m\*\*/)
+  assert.ok(!tasks.includes('Press a title to open the details'), 'the title of a task is not the press target')
+  assert.ok(!tasks.includes("Finished tasks are muted and don't open"), 'a finished task opens from its id')
+})
+
+test('the PRs tab puts waiting for under the row, and the review header has a heading, two icon buttons and a check mark on your vote', async () => {
+  const text = await readme()
+  const prs = section(text, 'The PRs tab')
+  assert.ok(prs.includes("`waiting for …` sits under the pull request's row and names the required reviewers who haven't voted or declined."))
+  assert.ok(!prs.includes('Beside the chip'), 'waiting for is not beside the chip')
+  const review = section(text, 'Reviewing a pull request')
+  assert.match(review, /At the right of the same row are two icon buttons: \*\*Refresh\*\* reads the pull request again, and \*\*Open in Azure DevOps\*\* opens it on the website\./)
+  assert.match(review, /The header shows the title as a heading, then `Pull Request N`/)
+  assert.ok(!review.includes('\n**Open in Azure DevOps** opens it'), 'Open in Azure DevOps is not a separate header line')
+  assert.match(subsection(review, 'Votes'), /The button for your current vote shows a check mark\./)
+})
+
+test('a run card has a short state badge, the age at the right, and Share for approval in the approval row', async () => {
+  const card = subsection(section(await readme(), 'The Pipelines tab'), 'A run card')
+  assert.match(card, /The state badge, the pipeline's name and, at the right, the run's age: when it finished, else when it started, else when it was queued\./)
+  assert.ok(
+    card.includes('The badge reads `queued`, `running`, `waiting` (for an approval), `cancelling`, `✓ succeeded`, `! partial` (partially succeeded), `✕ failed` or `canceled`.'),
+    'the badge texts are listed'
+  )
+  assert.match(card, /One warning line for each approval the run waits on, with that approval's buttons under it/)
+  assert.match(card, /\*\*Open in Azure DevOps\*\* \(an icon button\) opens the run on the website\./)
+  assert.match(card, /\*\*Share for approval\*\* isn't in that row\. While the run waits for an approval, it sits in the button row of the last approval, beside \*\*Approve…\*\* and \*\*Reject…\*\* when you can decide/)
+  assert.ok(!card.includes('- **Share for approval** shows'), 'Share for approval is not in the run buttons')
+  assert.ok(!card.includes('waiting for approval, cancelling'), 'the badge says waiting')
+})
+
+test('a wiki page has icon buttons for Open in Azure DevOps and Refresh, and a draft is a compact row under Drafts · N', async () => {
+  const text = await readme()
+  const wiki = section(text, 'The Wiki tab')
+  assert.match(
+    wiki,
+    /one row of actions: \*\*Open in tab\*\*, \*\*Edit in Orca\*\* \(project wikis only\) and \*\*Open in Azure DevOps\*\*, an icon button shown when the page has a web address\. \*\*Refresh\*\*, also an icon, is at the right of the row and reloads only that page\./
+  )
+  assert.match(wiki, /\*\*Drafts · N\*\* lists your drafts as compact rows\. A row has the page's name, a status line, \*\*Publish\*\*, an \*\*Open\*\* icon and a \*\*Discard…\*\* icon\./)
+  assert.match(wiki, /`Saved changes not published yet\.` or `No changes since you opened or published it\.`, followed by `Published` and when/)
+  assert.match(wiki, /its tooltip shows the file's path under `\.orca-ado\/`/)
+  assert.match(wiki, /A row doesn't show the workspace or the file\. It shows the wiki's name only when your drafts come from more than one wiki\./)
+  assert.match(wiki, /The group starts open, and the tab remembers if you fold it, for each organisation\./)
+  for (const stale of ['Drafts (N)', "the draft's card", 'their page, wiki, workspace and file']) {
+    assert.ok(!text.includes(stale), `${stale} no longer describes the drafts`)
+  }
 })
