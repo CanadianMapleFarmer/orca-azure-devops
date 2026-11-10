@@ -4,7 +4,7 @@
   "private": true,
   "description": "Azure DevOps in the Orca sidebar.",
   "license": "MIT",
-  "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "repository": "https://github.com/kloppers-labs/orca-azure-devops",
   "scripts": {
     "types": "node scripts/orca-types.mjs",
     "typecheck": "node scripts/orca-types.mjs && tsc -p . && tsc -p worker"

@@ -51,11 +51,11 @@ Run these from a clean working tree at the commit to release, and name that comm
 
 ## Publishing
 
-Only when the user asks. GitHub work uses the CanadianMapleFarmer account's credentials.
+Only when the user asks. The repository belongs to the `kloppers-labs` organisation; GitHub work uses the CanadianMapleFarmer account's credentials, which administers it.
 
-1. Create the public repository `CanadianMapleFarmer/orca-azure-devops` and push `main`.
+1. Create the public repository `kloppers-labs/orca-azure-devops` and push `main`.
 2. Set `version` and commit. That is a new commit, so run Before every release again on it and use its figures in the release report. Then `git tag -a v<version> -m v<version>` and push the tag.
-3. Add the topic: `gh repo edit CanadianMapleFarmer/orca-azure-devops --add-topic orca-plugin`.
-4. Check the listing at `https://www.onorca.dev/plugins/CanadianMapleFarmer/orca-azure-devops`.
+3. Add the topic: `gh repo edit kloppers-labs/orca-azure-devops --add-topic orca-plugin`.
+4. Check the listing at `https://www.onorca.dev/plugins/kloppers-labs/orca-azure-devops`.
 5. For a catalog, run `orca plugin release-entry . --json` at the tag and paste its entry into that catalog's `orca-catalog.json` `releases`, newest first.
 6. Install from the listing on a clean Orca profile and follow the README's first connect.

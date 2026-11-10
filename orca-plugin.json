@@ -10,8 +10,8 @@
     "url": "https://github.com/CanadianMapleFarmer"
   },
   "license": "MIT",
-  "repository": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
-  "homepage": "https://github.com/CanadianMapleFarmer/orca-azure-devops",
+  "repository": "https://github.com/kloppers-labs/orca-azure-devops",
+  "homepage": "https://github.com/kloppers-labs/orca-azure-devops",
   "engines": {
     "orca": ">=1.4.248"
   },
