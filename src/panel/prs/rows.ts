@@ -31,7 +31,7 @@ function worstCheck(pr: PrSummary): Chip | null {
   if (pr.checks?.policies === 'rejected') return { tone: 'danger', text: '✗ policies' }
   if (hasVote(pr, REJECTED_VOTE)) return { tone: 'danger', text: 'rejected' }
   if (hasVote(pr, WAITING_FOR_AUTHOR_VOTE)) return { tone: 'warning', text: 'waiting for author' }
-  if (pr.checks?.build === 'running') return { tone: 'warning', text: 'build …' }
+  if (pr.checks?.build === 'running') return { tone: 'warning', text: 'building' }
   if (pr.checks?.policies === 'pending') return { tone: 'neutral', text: '· policies' }
   if (pr.checks?.build === 'succeeded' || pr.checks?.policies === 'approved') return { tone: 'success', text: '✓ build' }
   return null

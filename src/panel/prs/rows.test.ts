@@ -20,14 +20,14 @@ test('statusChip gives one chip: merged alone, else draft, the worst check and a
     [{ checks: checks('running', 'rejected'), reviewers: voted(-10, -5) }, 'danger', '✗ policies'],
     [{ checks: checks('running', 'pending'), reviewers: voted(-5, -10) }, 'danger', 'rejected'],
     [{ checks: checks('running', 'pending'), reviewers: voted(10, -5) }, 'warning', 'waiting for author'],
-    [{ checks: checks('running', 'approved'), reviewers: voted(10, 5) }, 'warning', 'build …'],
+    [{ checks: checks('running', 'approved'), reviewers: voted(10, 5) }, 'warning', 'building'],
     [{ checks: checks('succeeded', 'pending') }, 'neutral', '· policies'],
     [{ checks: checks('succeeded', 'none') }, 'success', '✓ build'],
     [{ checks: checks('none', 'approved') }, 'success', '✓ build']
   ]
   for (const [over, tone, text] of worst) assert.deepEqual(statusOf(over), { tone, text }, text)
 
-  assert.deepEqual(statusOf({ isDraft: true, checks: checks('running', 'pending') }), { tone: 'warning', text: 'draft · build …' })
+  assert.deepEqual(statusOf({ isDraft: true, checks: checks('running', 'pending') }), { tone: 'warning', text: 'draft · building' })
   assert.deepEqual(statusOf({ autoComplete: true, checks: checks('succeeded', 'approved') }), { tone: 'success', text: '✓ build · auto-complete' })
   assert.deepEqual(statusOf({ isDraft: true, autoComplete: true, mergeStatus: 'conflicts' }), { tone: 'danger', text: 'draft · conflicts · auto-complete' })
   assert.deepEqual(statusOf({ autoComplete: true }), { tone: 'accent', text: 'auto-complete' })

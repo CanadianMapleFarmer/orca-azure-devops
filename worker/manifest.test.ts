@@ -8,6 +8,7 @@ interface Screenshot {
 
 interface ImageManifest {
   icon?: string
+  cover?: Screenshot
   screenshots?: Screenshot[]
 }
 
@@ -29,6 +30,9 @@ const MAX_SCREENSHOTS = 6
 const MIN_SCREENSHOT = { width: 1280, height: 800 }
 const MAX_SCREENSHOT_BYTES = 1536 * 1024
 const MAX_IMAGE_BYTES_TOGETHER = 8 * 1024 * 1024
+const MIN_COVER = { width: 800, height: 500 }
+const MAX_COVER_BYTES = 1024 * 1024
+const MAX_ALT_CHARS = 160
 
 function pngSize(bytes: Buffer): Size {
   assert.equal(bytes.subarray(0, 8).compare(PNG_SIGNATURE), 0, 'a PNG starts with the PNG signature')
@@ -53,11 +57,12 @@ function imageSize(bytes: Buffer): Size {
   assert.fail('an image is a PNG or a JPEG')
 }
 
-async function manifestImages(): Promise<{ icon: Buffer | undefined; screenshots: { shot: Screenshot; bytes: Buffer }[] }> {
+async function manifestImages(): Promise<{ icon: Buffer | undefined; cover: { shot: Screenshot; bytes: Buffer } | undefined; screenshots: { shot: Screenshot; bytes: Buffer }[] }> {
   const manifest: ImageManifest = JSON.parse(await fs.readFile(new URL('../orca-plugin.json', import.meta.url), 'utf8'))
   const read = (path: string) => fs.readFile(new URL(`../${path}`, import.meta.url))
   return {
     icon: manifest.icon === undefined ? undefined : await read(manifest.icon),
+    cover: manifest.cover === undefined ? undefined : { shot: manifest.cover, bytes: await read(manifest.cover.path) },
     screenshots: await Promise.all((manifest.screenshots ?? []).map(async shot => ({ shot, bytes: await read(shot.path) })))
   }
 }
@@ -75,9 +80,22 @@ test("the manifest icon and screenshots meet Orca's image rules", async () => {
     assert.ok(size.width >= MIN_SCREENSHOT.width && size.height >= MIN_SCREENSHOT.height, `${shot.path} is at least ${MIN_SCREENSHOT.width}x${MIN_SCREENSHOT.height}`)
     assert.ok(bytes.length <= MAX_SCREENSHOT_BYTES, `${shot.path} is at most ${MAX_SCREENSHOT_BYTES / 1024} KB`)
     assert.ok(shot.alt?.trim(), `${shot.path} has an alt text`)
+    assert.ok((shot.alt ?? '').length <= MAX_ALT_CHARS, `${shot.path}'s alt text is at most ${MAX_ALT_CHARS} characters`)
   }
   const together = icon.length + screenshots.reduce((sum, { bytes }) => sum + bytes.length, 0)
   assert.ok(together <= MAX_IMAGE_BYTES_TOGETHER, 'all images together are at most 8 MB')
+})
+
+test('the manifest cover is a wide image within the catalog limits, with an alt text', async () => {
+  const { cover, screenshots } = await manifestImages()
+  assert.ok(cover, 'the manifest names a cover')
+  const { width, height } = imageSize(cover.bytes)
+  assert.ok(width >= MIN_COVER.width && height >= MIN_COVER.height, `the cover is at least ${MIN_COVER.width}x${MIN_COVER.height}`)
+  assert.equal(width * 10, height * 16, 'the cover is 16:10')
+  assert.ok(cover.bytes.length <= MAX_COVER_BYTES, `the cover is at most ${MAX_COVER_BYTES / 1024} KB`)
+  assert.ok(cover.shot.alt?.trim(), 'the cover has an alt text')
+  assert.ok((cover.shot.alt ?? '').length <= MAX_ALT_CHARS, `the cover's alt text is at most ${MAX_ALT_CHARS} characters`)
+  assert.ok(screenshots.length > 0, 'the plugin page has screenshots')
 })
 
 test('image headers are read for PNG and JPEG, and any other format is refused', () => {

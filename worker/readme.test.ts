@@ -27,10 +27,10 @@ function readme(): Promise<string> {
   return fs.readFile(new URL('../README.md', import.meta.url), 'utf8')
 }
 
-function worksNow(text: string): string {
+function whatItDoes(text: string): string {
   const lines = text.split('\n')
-  const header = lines.findIndex(line => /^\|\s*Works now\s*\|$/.test(line))
-  assert.ok(header >= 0, 'the status table has a Works now column')
+  const header = lines.findIndex(line => /^\|\s*What it does\s*\|$/.test(line))
+  assert.ok(header >= 0, 'the status table has a What it does column')
   const rows: string[] = []
   for (const line of lines.slice(header + 2)) {
     if (!line.startsWith('|')) break
@@ -46,9 +46,9 @@ function section(text: string, title: string): string {
   return text.slice(start, end < 0 ? undefined : end)
 }
 
-test('the status table lists every built feature under Works now and has no Coming column', async () => {
+test('the status table lists every built feature under What it does and has no Coming column', async () => {
   const text = await readme()
-  const works = worksNow(text)
+  const works = whatItDoes(text)
   for (const feature of [/pipelines/i, /notifications/i, /PR reviews/, /wiki/i]) assert.match(works, feature)
   assert.ok(!/\|\s*Coming\s*\|/.test(text), 'nothing is left under Coming')
 })
