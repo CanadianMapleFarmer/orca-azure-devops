@@ -7,9 +7,12 @@ export interface WorkspaceHookDeps {
   arm: Arm
   links: LinkStore
   context: ContextCache
-  itemInfo: (org: string, itemId: number) => ItemInfo | null
+  itemInfo: (org: string, itemId: number, signal: AbortSignal) => Promise<ItemInfo | null>
+  timeout: (ms: number) => AbortSignal
   agentContext: () => boolean
 }
+
+const ITEM_INFO_TIMEOUT_MS = 1_000
 
 export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookDeps): void {
   orca.hooks.on('workspace.create.before', (event, next) => {
@@ -29,12 +32,13 @@ export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookD
     if (event.workspaceId && event.terminalId) deps.context.record(event.terminalId, event.workspaceId)
   })
 
-  orca.hooks.on('agent.prompt.before', (event, next) => {
+  orca.hooks.on('agent.prompt.before', async (event, next) => {
     if (!deps.agentContext() || deps.context.wasGiven(event.terminalId)) return
     const workspaceId = deps.context.workspaceOf(event.terminalId)
     const ref = workspaceId && deps.links.byWorkspace(workspaceId)
-    const info = ref && deps.itemInfo(ref.org, ref.itemId)
-    if (!ref || !info) return
+    if (!ref) return
+    const info = await itemInfoInTime(deps, ref.org, ref.itemId)
+    if (!info) return
     deps.context.markGiven(event.terminalId)
     return carriesContext(event.prompt, ref.itemId) ? undefined : next({ ...event, prompt: `${itemLink(ref.itemId, info)}\n\n${event.prompt}` })
   })
@@ -42,4 +46,10 @@ export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookD
   orca.events.on('agent.status.changed', status => {
     if (status.workspaceId && status.terminalId) deps.context.record(status.terminalId, status.workspaceId)
   })
+}
+
+function itemInfoInTime(deps: WorkspaceHookDeps, org: string, itemId: number): Promise<ItemInfo | null> {
+  const signal = deps.timeout(ITEM_INFO_TIMEOUT_MS)
+  const late = new Promise<null>(resolve => signal.addEventListener('abort', () => resolve(null), { once: true }))
+  return Promise.race([deps.itemInfo(org, itemId, signal), late]).catch(() => null)
 }

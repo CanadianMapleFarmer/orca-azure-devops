@@ -31,7 +31,7 @@ import {
   WEF,
   type AdoCall
 } from './fake-ado'
-import { createBoardsService, type BoardChange } from './service'
+import { createBoardsService, type BoardChange, type BoardResult } from './service'
 import { createItemSource, loadMine } from './snapshot'
 
 const T0 = Date.parse('2026-11-04T09:00:00Z')
@@ -255,10 +255,11 @@ for (const [name, request] of Object.entries(JOINERS)) {
       () => assert.fail('only records')
     )
     const held = h.ado.hold(() => true)
+    h.service.visibility({ surface: 'work', org: ORG, visible: true })
     h.setOrgs([status()])
     await h.clock.tick(0)
     assert.ok(priorities.length > 0, 'the background load is waiting on its first answer')
-    assert.deepEqual(priorities.filter(priority => priority !== 'hidden'), [], 'in its hidden lane')
+    assert.deepEqual(priorities.filter(priority => priority !== 'visible'), [], 'in its visible lane')
 
     const answer = request(h.service)
     await drain()
@@ -605,26 +606,31 @@ test('orgs without boards get the settings message', async () => {
   assert.deepEqual(h.posts, [])
 })
 
-test('visibility switches the job cadence', async () => {
+test('the Work job runs every minute while visible, backs off to 2 min while unchanged, and still posts each load', async () => {
   const h = harness()
   h.setOrgs([status()])
-  await h.clock.tick(0)
-  assert.equal(h.ado.count(isMineWiql), 1, 'a new job runs at once')
-  await h.clock.tick(MINUTE)
-  assert.equal(h.ado.count(isMineWiql), 1, 'hidden: every 5 min')
+  await h.clock.tick(5 * MINUTE)
+  assert.equal(h.ado.count(isMineWiql), 0, 'a hidden Work tab is not polled')
 
   assert.deepEqual(h.service.visibility({ surface: 'work', org: ORG, visible: true }), { ok: true })
   await h.clock.tick(0)
-  assert.equal(h.ado.count(isMineWiql), 2, 'visible: due once a minute has passed')
+  assert.equal(h.ado.count(isMineWiql), 1, 'shown, it loads at once')
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isMineWiql), 2)
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isMineWiql), 2, 'an unchanged load backs off')
   await h.clock.tick(MINUTE)
   assert.equal(h.ado.count(isMineWiql), 3)
+  assert.equal(h.posts.length, 3, 'unchanged loads still post')
+  assert.deepEqual(h.posts.map(post => post.updatedAt), [T0 + 5 * MINUTE, T0 + 6 * MINUTE, T0 + 8 * MINUTE], 'so "Updated" stays honest')
 
-  h.service.visibility({ surface: 'work', org: ORG, visible: false })
-  await h.clock.tick(4 * MINUTE)
-  assert.equal(h.ado.count(isMineWiql), 3)
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isMineWiql), 3, 'back-off stops at 2 min')
+  h.ado.items.get(1204)!.rev = 10
   await h.clock.tick(MINUTE)
   assert.equal(h.ado.count(isMineWiql), 4)
-  assert.equal(h.posts.length, 4)
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isMineWiql), 5, 'a change returns it to every minute')
 
   const early = harness()
   early.service.visibility({ surface: 'work', org: ORG, visible: true })
@@ -636,6 +642,7 @@ test('visibility switches the job cadence', async () => {
 
 test('jobs follow org status: added when connected, removed otherwise', async () => {
   const h = harness()
+  h.service.visibility({ surface: 'work', org: ORG, visible: true })
   h.setOrgs([status()])
   await h.clock.tick(0)
   assert.equal(h.ado.count(isMineWiql), 1)
@@ -732,42 +739,55 @@ test('a snapshot keeps the newest items that fit in one post', async () => {
   assert.ok(Buffer.byteLength(JSON.stringify(h.posts.at(-1))) < 256 * 1024)
 })
 
-test('the board loads every 30 s while a board is visible', async () => {
+test('the board loads at 30 s, backs off to 60 s while unchanged, and returns to 30 s after a change', async () => {
   const h = harness()
   h.setOrgs([status()])
   h.ado.state.wiql = [1204, 1205, 1206]
-  const view = await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
+  const args = { org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true }
+  const view = await h.service.board(args)
   assert.equal(view.board.boardId, STORIES)
   assert.deepEqual(view.items.map(entry => entry.id), [1204, 1205, 1206])
   assert.equal(h.ado.count(isBoardWiql), 1)
   assert.ok(!h.ado.calls.find(isBoardWiql)?.body.query.includes('@Me'), 'everyone')
 
-  assert.deepEqual(await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true }), view)
+  assert.deepEqual(await h.service.board(args), view)
   assert.equal(h.ado.count(isBoardWiql), 1, 'a fresh board is served from the cache')
 
   await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isBoardWiql), 2)
+  assert.equal(h.ado.count(isBoardWiql), 2, 'the first reload comes at 30 s')
   assert.deepEqual(h.boardPosts, [], 'nothing changed')
 
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isBoardWiql), 2, 'an unchanged board backs off')
   h.ado.items.get(1205)!.rev = 4
   await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isBoardWiql), 3)
+  assert.equal(h.ado.count(isBoardWiql), 3, 'the next reload comes 60 s after the unchanged one')
   assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
-  assert.equal((await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })).items[1].rev, 4)
+  assert.equal((await h.service.board(args)).items[1].rev, 4)
+
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isBoardWiql), 4, 'a change returns it to 30 s')
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isBoardWiql), 5)
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isBoardWiql), 5, 'back-off stops at 60 s')
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.count(isBoardWiql), 6)
 
   h.service.visibility({ surface: 'board', org: ORG, visible: false })
   await h.clock.tick(5 * MINUTE)
-  assert.equal(h.ado.count(isBoardWiql), 3, 'a hidden board is not polled')
+  assert.equal(h.ado.count(isBoardWiql), 6, 'a hidden board is not polled')
 
   h.service.visibility({ surface: 'board', org: ORG, visible: true })
-  await h.service.board({ org: ORG, projectId: PROJECT, teamId: TEAM, everyone: true })
-  assert.equal(h.ado.count(isBoardWiql), 4, 'a board shown again is asked for again')
-  await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isBoardWiql), 5)
+  assert.equal((await h.service.board(args)).items[1].rev, 4, 'a board shown again is served from its held view')
+  await drain()
+  assert.equal(h.ado.count(isBoardWiql), 7, 'and revalidated, since it is older than 30 s')
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isBoardWiql), 8)
 
   h.setOrgs([status({ state: 'expired' })])
   await h.clock.tick(5 * MINUTE)
-  assert.equal(h.ado.count(isBoardWiql), 5, 'a board of an org that is not connected is not polled')
+  assert.equal(h.ado.count(isBoardWiql), 8, 'a board of an org that is not connected is not polled')
 })
 
 test('a failed background board reload keeps the last board and says so, until a reload succeeds', async () => {
@@ -792,11 +812,12 @@ test('a failed background board reload keeps the last board and says so, until a
 
 test('disposing the scheduler aborts an in-flight "mine" load and shows no error', async () => {
   const h = harness()
+  h.service.visibility({ surface: 'work', org: ORG, visible: true })
   h.setOrgs([status()])
   await h.clock.tick(0)
   const posts = h.posts.length
   const hung = h.ado.hang(isMineWiql)
-  await h.clock.tick(5 * MINUTE)
+  await h.clock.tick(MINUTE)
   assert.equal(hung.length, 1)
 
   h.scheduler.dispose()
@@ -809,6 +830,7 @@ test('disposing the scheduler aborts an in-flight "mine" load and shows no error
 test('removing the "mine" job aborts its in-flight load', async () => {
   const h = harness()
   const hung = h.ado.hang(isMineWiql)
+  h.service.visibility({ surface: 'work', org: ORG, visible: true })
   h.setOrgs([status()])
   await h.clock.tick(0)
   assert.equal(hung.length, 1)
@@ -1004,6 +1026,19 @@ test('a "mine" load in flight when a move lands does not bring the old item back
   assert.equal(item(await h.service.refresh(ORG), 1204)?.rev, 11)
 })
 
+test('the Work job idles while the Work tab is hidden', async () => {
+  const h = harness()
+  h.service.visibility({ surface: 'work', org: ORG, visible: true })
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  assert.equal(h.ado.count(isMineWiql), 1)
+
+  h.service.visibility({ surface: 'work', org: ORG, visible: false })
+  const calls = h.ado.calls.length
+  await h.clock.tick(15 * MINUTE)
+  assert.equal(h.ado.calls.length, calls)
+})
+
 test('a board load in flight when a move lands does not bring the old item back', async () => {
   const h = harness()
   h.setOrgs([status()])
@@ -1019,7 +1054,7 @@ test('a board load in flight when a move lands does not bring the old item back'
   assert.equal(h.boardPosts.length, 1, 'only the move changed the board')
 })
 
-test('hiding the boards drops them, and only a board asked for again polls', async () => {
+test('hiding the boards keeps their views and stops their polling until they are shown again', async () => {
   const h = harness()
   h.setOrgs([status()])
   boardIds(h, [1204, 1205])
@@ -1030,13 +1065,13 @@ test('hiding the boards drops them, and only a board asked for again polls', asy
 
   h.service.visibility({ surface: 'board', org: ORG, visible: false })
   await h.clock.tick(MINUTE)
-  h.service.visibility({ surface: 'board', org: ORG, visible: true })
-  await h.clock.tick(MINUTE)
-  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 2])
-
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 2], 'hidden boards are not polled')
   await h.service.board({ ...FEATURES_BOARD, everyone: true })
-  await h.clock.tick(30_000)
-  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 4])
+  assert.equal(h.ado.count(isFeaturesWiql), 2, 'a hidden board is served from its held view')
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true })
+  await h.clock.tick(0)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [3, 3], 'shown again, both held views revalidate at once')
 })
 
 test('an in-flight load of a signed-out or removed org posts nothing', async () => {
@@ -1128,7 +1163,7 @@ test('a move published while a load reads the nudge rules is not overwritten', a
   assert.deepEqual(item(h.posts.at(-1), 1204), moved)
 })
 
-test('a board that lands after the boards were hidden is neither kept nor polled', async () => {
+test('a board that lands after the boards were hidden is kept but not polled until they are shown', async () => {
   const h = harness()
   h.setOrgs([status()])
   const held = h.ado.hold(isStoriesWiql)
@@ -1136,18 +1171,21 @@ test('a board that lands after the boards were hidden is neither kept nor polled
   await drain()
   h.service.visibility({ surface: 'board', org: ORG, visible: false })
   held.release()
-  await opening
+  const view = await opening
+
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'no job polls it while hidden')
+  assert.deepEqual(await h.service.board({ ...STORIES_BOARD, everyone: false }), view)
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'its view was kept')
 
   h.service.visibility({ surface: 'board', org: ORG, visible: true })
-  await h.clock.tick(MINUTE)
-  assert.equal(h.ado.count(isStoriesWiql), 1, 'no job was armed for it')
-  await h.service.board({ ...STORIES_BOARD, everyone: false })
-  assert.equal(h.ado.count(isStoriesWiql), 2, 'its view was not kept, so asking again loads it')
+  await h.clock.tick(0)
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'shown again, it revalidates at once')
 })
 
 const STORIES_REF = { teamId: TEAM, boardId: STORIES }
 
-test('hiding one board drops only that view and its job; another board of the org keeps polling', async () => {
+test('hiding one board stops only its job and keeps its view; another board of the org keeps polling', async () => {
   const h = harness()
   h.setOrgs([status()])
   boardIds(h, [1204, 1205])
@@ -1161,24 +1199,22 @@ test('hiding one board drops only that view and its job; another board of the or
   await h.service.board({ ...FEATURES_BOARD, everyone: true })
   assert.equal(h.ado.count(isFeaturesWiql), 2, 'the Features view was kept and serves from its cache')
   await h.service.board({ ...STORIES_BOARD, everyone: true })
-  assert.equal(h.ado.count(isStoriesWiql), 2, 'the Stories view was dropped, so asking again loads it')
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'the Stories view was kept too, and is not reloaded while hidden')
 })
 
-test('showing a hidden board polls only it again, once it is asked for again', async () => {
+test('showing a hidden board polls it again at once, without it being asked for', async () => {
   const h = harness()
   h.setOrgs([status()])
   boardIds(h, [1204, 1205])
   await h.service.board({ ...STORIES_BOARD, everyone: true })
   await h.service.board({ ...FEATURES_BOARD, everyone: true })
   h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
-
-  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
-  await h.clock.tick(30_000)
+  await h.clock.tick(MINUTE)
   assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2])
 
-  await h.service.board({ ...STORIES_BOARD, everyone: true })
-  await h.clock.tick(30_000)
-  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [3, 3])
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  await h.clock.tick(0)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [2, 2], 'only the shown board revalidates')
 })
 
 test('a board asked for while it is hidden is not polled until it is shown', async () => {
@@ -1194,11 +1230,11 @@ test('a board asked for while it is hidden is not polled until it is shown', asy
   h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
   await h.clock.tick(0)
   assert.equal(h.ado.count(isStoriesWiql), 2, 'shown again, its stale view reloads at once')
-  await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isStoriesWiql), 3, 'and keeps polling')
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isStoriesWiql), 3, 'and keeps polling, backed off while unchanged')
 })
 
-test('a board load in flight across that board being hidden is neither kept nor polled', async () => {
+test('a board load in flight across that board being hidden is kept but not polled', async () => {
   const h = harness()
   h.setOrgs([status()])
   boardIds(h, [1204, 1205])
@@ -1208,13 +1244,100 @@ test('a board load in flight across that board being hidden is neither kept nor 
   await drain()
   h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
   held.release()
-  await opening
+  const view = await opening
+
+  await h.clock.tick(30_000)
+  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2], 'no job polls Stories while it is hidden')
+  assert.deepEqual(await h.service.board({ ...STORIES_BOARD, everyone: true }), view)
+  assert.equal(h.ado.count(isStoriesWiql), 1, 'its view was kept')
 
   h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
-  await h.clock.tick(30_000)
-  assert.deepEqual([h.ado.count(isStoriesWiql), h.ado.count(isFeaturesWiql)], [1, 2], 'no job was armed for Stories')
-  await h.service.board({ ...STORIES_BOARD, everyone: true })
-  assert.equal(h.ado.count(isStoriesWiql), 2, 'its view was not kept, so asking again loads it')
+  await h.clock.tick(0)
+  assert.equal(h.ado.count(isStoriesWiql), 2, 'shown again, it revalidates at once')
+})
+
+test('hiding a board keeps its view and stops its polling', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  const calls = h.ado.calls.length
+
+  await h.clock.tick(10 * MINUTE)
+  assert.equal(h.ado.calls.length, calls, 'nothing is polled while the board is hidden')
+  assert.deepEqual(await h.service.board({ ...STORIES_BOARD, everyone: true }), view)
+  assert.equal(h.ado.calls.length, calls, 'the held view is served without a call')
+})
+
+test('showing a held board older than 30 s returns it at once and revalidates in the background', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  await h.clock.tick(MINUTE)
+
+  const gate = h.ado.hold(isStoriesWiql)
+  h.ado.items.get(1205)!.rev = 4
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  let answered: BoardResult | undefined
+  void h.service.board({ ...STORIES_BOARD, everyone: true }).then(result => (answered = result))
+  await drain()
+  assert.deepEqual(answered, view, 'answered from the held view before the reload is answered')
+  assert.deepEqual(h.boardPosts, [])
+
+  gate.release()
+  await drain()
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.equal((await h.service.board({ ...STORIES_BOARD, everyone: true })).items[1].rev, 4)
+})
+
+test('a held board under 30 s old is served without any request', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  await h.clock.tick(20_000)
+  const calls = h.ado.calls.length
+
+  h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
+  assert.deepEqual(await h.service.board({ ...STORIES_BOARD, everyone: true }), view)
+  await h.clock.tick(0)
+  assert.equal(h.ado.calls.length, calls)
+})
+
+const EXTRA_BOARDS = ['c3d4e5f6-6001-4a7b-8c9d-0e1f2a3b4c01', 'c3d4e5f6-6002-4a7b-8c9d-0e1f2a3b4c02', 'c3d4e5f6-6003-4a7b-8c9d-0e1f2a3b4c03']
+
+function extraBoards(h: ReturnType<typeof harness>): void {
+  for (const boardId of EXTRA_BOARDS) {
+    h.ado.on(
+      call => call.method === 'GET' && call.path === `/${ORG}/${PROJECT}/${TEAM}/_apis/work/boards/${boardId}`,
+      () => json(200, { ...fixture<object>('board-stories'), id: boardId })
+    )
+  }
+}
+
+test('at most 4 board views are held per org, and the oldest hidden one goes first', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  extraBoards(h)
+  const [third, fourth, fifth] = EXTRA_BOARDS
+  const open = (boardId: string) => h.service.board({ ...STORIES_BOARD, boardId, everyone: true })
+  const hide = (boardId: string) => h.service.visibility({ surface: 'board', org: ORG, visible: false, board: { teamId: TEAM, boardId } })
+  for (const boardId of [STORIES, FEATURES, third, fourth]) await open(boardId)
+  await open(STORIES)
+  hide(STORIES)
+  hide(third)
+
+  await open(fifth)
+  const calls = h.ado.calls.length
+  for (const boardId of [STORIES, FEATURES, fourth, fifth]) await open(boardId)
+  assert.equal(h.ado.calls.length, calls, 'four views are still held')
+  await open(third)
+  assert.ok(h.ado.calls.length > calls, 'the least recently opened hidden view was dropped, so it loads again')
 })
 
 test('without a board, a move prefers a board holding the item that maps its type', async () => {
@@ -1244,6 +1367,39 @@ test('cachedItem reads the snapshot, then the open board views, and never calls 
   assert.equal(h.service.cachedItem(ORG, 1100)?.title, 'Vehicle search', 'an item only an open board view holds')
   assert.equal(h.ado.calls.length, viewCalls)
   assert.ok(viewCalls > calls)
+})
+
+test('itemInfo reads an item it does not hold with one fields read in a user lane, and a held one with none', async () => {
+  const h = harness()
+  const contexts: string[] = []
+  h.ado.on(
+    () => {
+      const { feature, lane } = currentContext()
+      contexts.push(`${feature}/${lane.priority}`)
+      return false
+    },
+    () => assert.fail('only records')
+  )
+  const signal = new AbortController().signal
+  const info = { type: 'User Story', title: 'Add vehicle search filters', url: `${ORG_URL}/Fabrikam%20Web/_workitems/edit/1204` }
+
+  assert.deepEqual(await h.service.itemInfo(ORG, 1204, signal), info)
+  assert.deepEqual(h.ado.calls.map(isFieldsBatch), [true])
+  assert.deepEqual(contexts, ['work/user'])
+  assert.equal(await h.service.itemInfo(ORG, 9999, signal), null, 'an item ADO does not return')
+
+  await h.service.refresh(ORG)
+  const calls = h.ado.calls.length
+  assert.deepEqual(await h.service.itemInfo(ORG, 1204, signal), info)
+  assert.equal(h.ado.calls.length, calls, 'a held item needs no request')
+
+  const hung = h.ado.hang(isFieldsBatch)
+  const abort = new AbortController()
+  const reading = h.service.itemInfo(ORG, 1301, abort.signal).catch(() => 'aborted')
+  await drain()
+  abort.abort()
+  assert.equal(await reading, 'aborted')
+  assert.equal(hung[0].signal?.aborted, true, 'the caller can abort the read')
 })
 
 const ALEX: PinnedAccount = { adoId: '9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b', uniqueName: 'alex@contoso.example', displayName: 'Alex Contoso', tenantId: null, objectId: null }

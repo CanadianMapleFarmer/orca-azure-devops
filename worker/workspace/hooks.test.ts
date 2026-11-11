@@ -1,7 +1,7 @@
 import { assert, mountWorker, test } from 'orca/testing'
 import type { StorePort } from '../connections'
-import { drain, memoryStore } from '../test-support'
-import { createContextCache } from './agents'
+import { drain, fakeTimeouts, memoryStore } from '../test-support'
+import { createContextCache, type ItemInfo } from './agents'
 import { createArm } from './arm'
 import { registerWorkspaceHooks, type WorkspaceHookDeps } from './hooks'
 import { createLinkStore, LINKS_KEY } from './links'
@@ -16,6 +16,7 @@ const CREATE = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2', bas
 const SOURCE = 'hotfix/1211-login-redirect'
 const PR_ARMED = { org: 'contoso', branch: SOURCE, base: `origin/${SOURCE}`, prId: 4110 }
 const REVIEWING = { ...CREATE, branch: SOURCE, name: SOURCE, base: `origin/${SOURCE}` }
+const INFO: ItemInfo = { type: 'User Story', title: 'Add vehicle search filters', url: ITEM_URL }
 const HOOKS = ['workspace.create.before', 'workspace.create.after', 'agent.prompt.before', 'agent.launch.before']
 
 async function setup(over: Partial<WorkspaceHookDeps> = {}) {
@@ -25,11 +26,13 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
   const links = await createLinkStore(store, () => now)
   const context = createContextCache()
   const state = { agentContext: true }
+  const timeouts = fakeTimeouts()
   const deps: WorkspaceHookDeps = {
     arm,
     links,
     context,
-    itemInfo: (org, itemId) => (org === 'contoso' && itemId === 1204 ? { type: 'User Story', title: 'Add vehicle search filters', url: ITEM_URL } : null),
+    itemInfo: async (org, itemId) => (org === 'contoso' && itemId === 1204 ? INFO : null),
+    timeout: timeouts.timeout,
     agentContext: () => state.agentContext,
     ...over
   }
@@ -41,6 +44,7 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
     context,
     data,
     state,
+    timeouts,
     advance: (ms: number) => void (now += ms)
   }
 }
@@ -205,16 +209,55 @@ test('prompt context is added only when enabled and linked, and only once', asyn
   assert.deepEqual(w.logs, [])
 })
 
-test('prompt context needs the item in the cache', async () => {
-  const { w, links } = await setup({ itemInfo: () => null })
+test('prompt context needs the item', async () => {
+  const { w, links } = await setup({ itemInfo: async () => null })
   await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
   await w.emit('agent.status.changed', status('term-linked', 'ws-linked'))
   const event = { agent: 'claude', terminalId: 'term-linked', prompt: 'Fix it', inputKind: 'launch' } as const
   assert.deepEqual(await w.hooks.fire('agent.prompt.before', event), { kind: 'continue', event })
 })
 
+test('prompt context waits for an item read that answers in time, capped under the 2 s hook budget', async () => {
+  let answer: (info: ItemInfo | null) => void = () => {}
+  const { w, links, timeouts } = await setup({ itemInfo: () => new Promise(resolve => (answer = resolve)) })
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  await w.emit('agent.status.changed', status('term-linked', 'ws-linked'))
+  const event = { agent: 'claude', terminalId: 'term-linked', prompt: 'Fix it', inputKind: 'launch' } as const
+
+  const deciding = w.hooks.fire('agent.prompt.before', event)
+  await drain()
+  answer(INFO)
+  assert.deepEqual(await deciding, { kind: 'continue', event: { ...event, prompt: `${PREFIX}\n\nFix it` } })
+  assert.equal(timeouts.armed.length, 1)
+  assert.ok(timeouts.armed[0].ms <= 1000, `the read is capped at ${timeouts.armed[0].ms} ms`)
+})
+
+test('a slow item read falls back to the prompt unchanged, and the next prompt tries again', async () => {
+  const reads: AbortSignal[] = []
+  let fast = false
+  const { w, links, timeouts } = await setup({
+    itemInfo: (_org, _itemId, signal) => {
+      reads.push(signal)
+      return fast ? Promise.resolve(INFO) : new Promise(() => {})
+    }
+  })
+  await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
+  await w.emit('agent.status.changed', status('term-linked', 'ws-linked'))
+  const prompt = (text: string) => ({ agent: 'claude', terminalId: 'term-linked', prompt: text, inputKind: 'orchestration' }) as const
+
+  const deciding = w.hooks.fire('agent.prompt.before', prompt('Fix it'))
+  await drain()
+  timeouts.fire(timeouts.armed[0].ms)
+  assert.deepEqual(await deciding, { kind: 'continue', event: prompt('Fix it') })
+  assert.equal(reads[0].aborted, true, 'the read is aborted')
+
+  fast = true
+  assert.deepEqual(await w.hooks.fire('agent.prompt.before', prompt('Next')), { kind: 'continue', event: prompt(`${PREFIX}\n\nNext`) })
+  assert.deepEqual(w.logs, [])
+})
+
 test('prompt context escapes brackets in the title', async () => {
-  const { w, links } = await setup({ itemInfo: () => ({ type: 'User Story', title: '[Bug] Search', url: ITEM_URL }) })
+  const { w, links } = await setup({ itemInfo: async () => ({ type: 'User Story', title: '[Bug] Search', url: ITEM_URL }) })
   await links.link('ws-linked', { org: 'contoso', itemId: 1204 })
   await w.emit('agent.status.changed', status('term-linked', 'ws-linked'))
   const event = { agent: 'claude', terminalId: 'term-linked', prompt: 'Fix it', inputKind: 'launch' } as const

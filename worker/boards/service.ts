@@ -5,9 +5,9 @@ import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs
 import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
-import type { RawWorkItem } from '../ado/workitems'
+import { readFields, textOr, workItemUrl, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
-import { fly, join, type Flight } from '../data/context'
+import { fly, inLane, join, type Flight } from '../data/context'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
@@ -48,6 +48,7 @@ export interface BoardsService {
   refresh(org: string): Promise<WorkSnapshot>
   details(org: string, id: number): Promise<WorkItemDetails>
   cachedItem(org: string, id: number): WorkItemSummary | null
+  itemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null>
   move(input: { org: string; id: number; rev: number; to: MoveTarget; board?: BoardRef }): Promise<WorkItemSummary>
   comment(org: string, id: number, text: string): Promise<WorkComment>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
@@ -66,7 +67,10 @@ interface OrgWork {
 
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
-const MINE_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
+type ItemInfo = Pick<WorkItemSummary, 'type' | 'title' | 'url'>
+
+const MINE_MS = { visibleMs: 60_000, backgroundMs: null, quietMax: 2 }
+const INFO_FIELDS = ['System.WorkItemType', 'System.Title', 'System.TeamProject']
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const { http, scheduler, now } = deps
@@ -176,6 +180,12 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return join(entry.loading)
   }
 
+  async function poll(org: string, signal: AbortSignal): Promise<void | 'unchanged'> {
+    const before = work.get(org)?.snapshot
+    const after = await load(org, signal)
+    if (before && sameApartFromTime(before, after)) return 'unchanged'
+  }
+
   async function loadBoard(request: BoardRequest, signal?: AbortSignal): Promise<BoardResult> {
     const status = await statusOf(request.org)
     const board = await config(request.args, signal)
@@ -183,6 +193,15 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const loaded = await loadBoardItems(source, board, request.everyone)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
     return capBoard({ board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }, loaded.truncated)
+  }
+
+  async function readItemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null> {
+    const status = await statusOf(org)
+    if (!status.boards) return null
+    const [raw] = await readFields(withSignal(http, signal), org, status.boards.projectId, [id], INFO_FIELDS)
+    if (!raw) return null
+    const project = textOr(raw.fields['System.TeamProject'], '') || status.boards.projectId
+    return { type: textOr(raw.fields['System.WorkItemType'], ''), title: textOr(raw.fields['System.Title'], ''), url: workItemUrl(status.url, project, id) }
   }
 
   function forget(org: string): void {
@@ -305,7 +324,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const [org, target] of wanted) {
         if (polled.has(org)) continue
         polled.set(org, target)
-        scheduler.upsert({ key: mineKey(org), org, ...MINE_MS, run: async signal => void (await load(org, signal)) })
+        scheduler.upsert({ key: mineKey(org), org, ...MINE_MS, run: signal => poll(org, signal) })
         scheduler.setVisible(mineKey(org), workVisible.has(org))
       }
       boardViews.syncAll()
@@ -341,6 +360,12 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const snapshot = work.get(org)?.snapshot
       const listed = [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(item => item.id === id)
       return listed ?? boardViews.of(org).flatMap(view => view.result.items).find(item => item.id === id) ?? null
+    },
+
+    async itemInfo(org, id, signal) {
+      const held = service.cachedItem(org, id)
+      if (held) return { type: held.type, title: held.title, url: held.url }
+      return inLane('work', 'user', () => readItemInfo(org, id, signal))
     },
 
     async move({ org, id, rev, to, board }) {
@@ -427,6 +452,10 @@ async function restatedRows(source: ItemSource, cfg: BoardConfig, families: Work
     if (hasTask(patched, item.id)) patched = patchFamilies(patched, item, await isCompleted(source, cfg, item))
   }
   return patched
+}
+
+function sameApartFromTime(a: WorkSnapshot, b: WorkSnapshot): boolean {
+  return JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 })
 }
 
 function holds(snapshot: WorkSnapshot, id: number): boolean {

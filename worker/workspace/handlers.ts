@@ -18,10 +18,8 @@ export async function registerWorkspaceHandlers(orca: OrcaWorkerApi, { boards, s
     arm,
     links,
     context,
-    itemInfo: (org, itemId) => {
-      const item = boards.cachedItem(org, itemId)
-      return item && { type: item.type, title: item.title, url: item.url }
-    },
+    itemInfo: (org, itemId, signal) => boards.itemInfo(org, itemId, signal),
+    timeout: ms => AbortSignal.timeout(ms),
     agentContext: settings.agentContext
   })
 

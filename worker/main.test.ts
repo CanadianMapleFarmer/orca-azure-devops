@@ -655,6 +655,7 @@ test('deactivate disposes the polling scheduler, aborting the "my work" load in 
   const loading = ado.hang(isWiql)
   await withFetch(signedIn(ado), async () => {
     await withWorker(worker, { host: boardsHost(BOARDS) }, async w => {
+      await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true })
       assert.ok(await until(() => loading.length === 1), 'the "my work" job is loading')
       await w.deactivate()
       assert.equal(loading[0].signal?.aborted, true)
@@ -702,6 +703,7 @@ test('org changes reach the boards service: setting a boards team starts polling
   ado.on(call => call.path === `/contoso/_apis/projects/${PROJECT}/teams`, () => reply(200, { value: [{ id: TEAM, name: BOARDS.teamName }] }))
   await withFetch(signedIn(ado), async () => {
     await withWorker(worker, { host: boardsHost(null) }, async w => {
+      await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true })
       await w.request('orgs.setBoards', { org: 'contoso', projectId: PROJECT, teamId: TEAM })
       assert.ok(await until(() => workChanged(w.posts).length > 0), 'the new job loaded and posted a snapshot')
       assert.deepEqual(workChanged(w.posts)[0].mine.map(item => item.id), [1204])
