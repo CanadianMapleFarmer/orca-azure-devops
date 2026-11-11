@@ -1,6 +1,6 @@
 # A cached, rate-limit-aware data layer — design
 
-Date: 2026-11-11 · Status: draft for review · Research: [`docs/research/2026-11-11-request-inventory.md`](../../research/2026-11-11-request-inventory.md) · Plan: [`docs/superpowers/plans/2026-11-11-data-layer.md`](../plans/2026-11-11-data-layer.md)
+Date: 2026-11-11 · Status: decisions settled by the user on 2026-11-11 (section 10) · Research: [`docs/research/2026-11-11-request-inventory.md`](../../research/2026-11-11-request-inventory.md) · Plan: [`docs/superpowers/plans/2026-11-11-data-layer.md`](../plans/2026-11-11-data-layer.md)
 
 ## 1. Intent
 
@@ -409,6 +409,19 @@ contoso — connected as dev@contoso.com
   Rate limit: near, 152 of 200 TSTU left, polling ×2 (headers 40 s ago)
 ```
 
+### 5.10 Board filter memory (decision 4)
+
+Each board remembers its last **Me / Everyone** choice. A board on *Me* reads only the user's items and their PR chips, which is most of the remaining board cost (section 7).
+
+- **Where.** The choice is kept per org, team and board in `orca.storage`, under `boardFilters:<org>`.
+  - It is a small map of `<teamId>/<boardId>` → `everyone`, holding at most 50 boards per org. The oldest choice is dropped first.
+  - It is a preference, not cache. It sits outside `adoCache:`, so the cache budget and the version sweep never remove it.
+- **Protocol.** `work.board` takes `everyone` as optional, and its answer always carries the filter it used (`everyone: boolean`).
+  - Without `everyone`, the worker uses the remembered choice, or *Everyone* for a board never opened.
+  - With it, the worker remembers the choice.
+- **Editor.** It opens with neither button pressed, sends no filter on its first request, and takes the filter from the answer. Pressing **Me** or **Everyone** sends the choice.
+- **Saved views** (5.7) are stored with their filter, so the remembered choice also picks the right saved view at start-up.
+
 ## 6. Data flows
 
 ### Work tab
@@ -478,7 +491,7 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 | Hourly | +~370 | 0 (terminal chips are final) |
 
 - **The live run view now dominates.** It is the user's foreground focus. The pressure factor still slows it when ADO pushes back.
-- **The busy board's remaining cost is real change.** That is 2–3 requests per change tick, plus evaluations for running PR builds. The levers left are the board's default filter (decision 4) and a 4-minute instead of 2-minute check for running PR builds.
+- **The busy board's remaining cost is real change.** That is 2–3 requests per change tick, plus evaluations for running PR builds. Remembering each board's filter (5.10) removes most of it for anyone who works on *Me*. The lever left after that is a 4-minute instead of 2-minute check for running PR builds.
 - **TSTUs fall further than requests.** The quiet-tick delta query has a change-date clause first and returns nothing. It replaces a 500-row WIQL plus up to 3 full-field `workitemsbatch` reads every tick. The metrics' `X-RateLimit-Cost` sum will show the real figure.
 
 ## 8. Migration strategy
@@ -486,13 +499,13 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 **Order.** Every task in the plan leaves the plugin building, passing tests and working. The order puts the biggest rate-limit win first:
 
 1. Pressure and governor (tasks 1–3). They change no behaviour except throttling, and every service still calls `AdoHttp.json`.
-2. Board and Work fixes (tasks 4–7): views kept when hidden, then the store under the existing caches, then delta sync, then chips from the store.
+2. Board and Work fixes (tasks 4–7, plus 15): views kept when hidden, then the remembered board filter (task 15, right after task 4), then the store under the existing caches, then delta sync, then chips from the store.
 3. Persistence (tasks 8–9). It only adds a faster first paint, and a wrong key shape is fixed by bumping the version prefix.
 4. PR and pipeline cadence (tasks 10–13). Each is local to its service.
 5. Metrics (task 14). It depends only on task 2, so the lead can run it early to record a baseline before the other tasks land.
 
 **Safety**
-- No panel protocol type changes shape. Restored views use the existing `stale`, `message` and `updatedAt` fields.
+- Only one panel protocol type changes. `work.board` takes an optional `everyone` and answers with the filter it used (5.10). The editor and the worker ship in the same plugin, so they always match. Restored views use the existing `stale`, `message` and `updatedAt` fields.
 - `recent.ts`, the cap functions and the message budgets stay. The new code calls them with explicit budgets.
 - There is no feature flag. Rolling back is a revert per task, and the persisted keys are versioned and budgeted, so old data is harmless.
 
@@ -515,9 +528,9 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 
 ## 10. Decisions for the user
 
-1. **Where the last-known data lives.**
-   - Recommended, and the lead's call: `orca.storage`, within a 1.5 MiB budget.
-   - Alternative: a file under `~/.orca-azure-devops/cache/`, which has no 5 MiB cliff but sits outside Orca's management.
-2. **Cold projects polled every 5 minutes** in the PRs and Pipelines tabs. In a project where you've had no PRs or runs for 24 hours, a new review request, run or approval can take up to 5 minutes to appear and to notify. Recommended: yes.
-3. **PR comment notifications back off** from 2 to 10 minutes on PRs with no new activity, so a comment on a quiet PR can take up to 10 minutes to notify. Today it is ≤1 minute while the PRs tab is visible and ≤5 minutes hidden. Recommended: yes.
-4. **The board's default filter.** It opens on *everyone* today. Chips for every linked PR on the team board are then the largest remaining board cost. The alternative is to remember each board's last filter. Recommended: remember it. This is not in the plan until the user says so.
+Settled by the user on 2026-11-11. All four take the recommended option.
+
+1. **Where the last-known data lives: `orca.storage`**, within a 1.5 MiB budget (5.7). The alternative, a file under `~/.orca-azure-devops/cache/`, was not chosen.
+2. **Cold projects are polled every 5 minutes** in the PRs and Pipelines tabs (5.8). In a project where you've had no PRs or runs for 24 hours, a new review request, run or approval can take up to 5 minutes to appear and to notify.
+3. **PR comment notifications back off** from 2 to 10 minutes on PRs with no new activity (5.8), so a comment on a quiet PR can take up to 10 minutes to notify. Today it is ≤1 minute while the PRs tab is visible and ≤5 minutes hidden.
+4. **Each board remembers its last Me / Everyone filter** (5.10). A board never opened before starts on *Everyone*, as today.

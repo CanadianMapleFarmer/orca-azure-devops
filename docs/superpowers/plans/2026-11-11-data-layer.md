@@ -97,6 +97,7 @@
 | `worker/data/heat.ts` | Hot and cold project rotation | 10 |
 | `worker/prs/thread-cadence.ts` | Per-PR thread re-read back-off | 11 |
 | `worker/data/metrics.ts` | Per-org request counts, endpoints, rate-limit headers; status lines | 14 |
+| `worker/boards/board-filters.ts` | Each board's remembered Me / Everyone choice | 15 |
 
 Tests sit beside their files as `*.test.ts`.
 
@@ -109,8 +110,9 @@ Tests sit beside their files as `*.test.ts`.
 | 1 | Rate-limit signals and per-org pressure | — | 14 (`http.ts` observe only) | — |
 | 2 | Request context and the governor | 1 | 3, 5, 8, 9, 14 (`main.ts`) | — |
 | 3 | Scheduler pacing; retire `pipelines/pressure.ts` | 1, 2 | 4–13 (job definitions), `main.ts` | ∥ 14 |
-| 4 | Keep hidden boards; Work idles while hidden | 3 | 5–8 (`boards/service.ts`, `board-views.ts`) | ∥ 14 |
-| 5 | Entity store; move config, state, project and wiki caches | 2, 4 (files) | 6–13 | ∥ 14 |
+| 4 | Keep hidden boards; Work idles while hidden | 3 | 5–8, 15 (`boards/service.ts`, `board-views.ts`) | ∥ 14 |
+| 15 | Remember each board's filter | 4 | 5–8 (`boards/service.ts`) | ∥ 14 |
+| 5 | Entity store; move config, state, project and wiki caches | 2, 4 and 15 (files) | 6–13 | ∥ 14 |
 | 6 | Delta sync of work items | 4, 5 | 7, 8 (`boards/*`) | ∥ 13, ∥ 14 |
 | 7 | PR records and checks in the store; chips reuse them | 5, 6 | 8, 10, 11 | ∥ 13, ∥ 14 |
 | 8 | Persist Work, board, meta and PR records | 6, 7 | 9, 14 (`main.ts`) | ∥ 13 |
@@ -119,13 +121,15 @@ Tests sit beside their files as `*.test.ts`.
 | 11 | PRs cadence | 7, 10 | — | ∥ 12, ∥ 13 |
 | 12 | Pipelines cadence | 5, 10 | — | ∥ 11, ∥ 13 |
 | 13 | Run view cadence | 3, 5 | — (only `run-views.ts`) | ∥ 6–12, ∥ 14 |
-| 14 | Request metrics in Connection status | 1, 2 | 1, 3, 5, 8 (`main.ts`, wiring lines only) | ∥ 3–13 |
+| 14 | Request metrics in Connection status | 1, 2 | 1, 3, 5, 8 (`main.ts`, wiring lines only) | ∥ 3–13, ∥ 15 |
+
+Task 15 was added after the user settled decision 4. Its number is out of order so the other tasks keep theirs, but it runs right after Task 4.
 
 Suggested waves:
 1. 1
 2. 2
 3. 3 and 14
-4. 4
+4. 4, then 15
 5. 5
 6. 6 and 13
 7. 7
@@ -799,7 +803,7 @@ export const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
   - `load(org, 'work', status.account.adoId)` is used only if it is connected and its `board.projectId` and `board.teamId` match `status.boards`
   - its value is set as the entry snapshot with `stale: true` and `message: SHOWING_SAVED`, keeping its `updatedAt`
   - `scheduler.runNow(mineKey(org))` starts without awaiting
-- `BoardViews.open` with no held view uses `board:<teamId>:<boardId>` the same way, only when `everyone` matches, then starts `runNow`.
+- `BoardViews.open` with no held view uses `board:<teamId>:<boardId>` the same way, only when `everyone` matches the filter Task 15 resolved, then starts `runNow`.
 - After each successful live projection: `save('work' | 'board:…', capSnapshot(view, VALUE_BUDGET_BYTES) | capBoard(view, truncated, VALUE_BUDGET_BYTES))`.
 - `meta` is `{ configs: [key, BoardConfig, at][], states: [key, TypeState[], at][], projects: [key, NamedItem[], at][] }`. `pr-records` is `{ prs: [key, PrRecord, at][], checks: [key, CheckRecord, at][] }`, newest 600 by `at`.
   - Both are saved after a tick that changed those tables.
@@ -874,7 +878,7 @@ export const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 **Goal:**
 - Projects where the user has had nothing for 24 hours are listed at most every 5 minutes while visible and every 15 in the background. Their last results are reused between reads.
 - Refresh reads every project.
-- This is decision 2 in the spec. If the user rejects it, set `COLD_EVERY_MS` to `{ visible: 0, background: 0 }`.
+- This is decision 2 in the spec, accepted by the user on 2026-11-11.
 
 **Files:**
 - Create: `worker/data/heat.ts`, `worker/data/heat.test.ts`
@@ -937,7 +941,7 @@ export function createHeat(now: () => number): Heat
 **Goal:**
 - An unchanged PR poll backs off to 120 s.
 - Opening the tab shows the last load at once and revalidates it.
-- Comment threads are re-read per PR, from 2 to 10 minutes. This is decision 3; if the user rejects it, set `THREADS_MAX_MS = THREADS_FIRST_MS = 60_000`.
+- Comment threads are re-read per PR, from 2 to 10 minutes. This is decision 3, accepted by the user on 2026-11-11.
 - Hidden observes no longer list every project.
 
 **Files:**
@@ -1137,6 +1141,66 @@ export function metricsLines(report: MetricsReport, pressure: PressureState, now
 
 ---
 
+### Task 15: Remember each board's filter
+
+**Goal:** A board opens on the Me / Everyone choice last used for it, or *Everyone* the first time. This is decision 4, settled by the user on 2026-11-11 (spec §5.10). It runs right after Task 4.
+
+**Files:**
+- Create: `worker/boards/board-filters.ts`, `worker/boards/board-filters.test.ts`
+- Modify: `src/protocol.ts`. `work.board`'s input becomes `everyone?: boolean`, and its output gains `everyone: boolean`.
+- Modify: `worker/boards/service.ts` (`board()`) and `worker/boards/service.test.ts`. The service builds its `BoardFilters` from its existing `deps.store`, so `main.ts` doesn't change.
+- Modify: `src/board/board.ts`. The state's `everyone` becomes `boolean | null`. `openRef` sets it to `null`, `load()` sends `everyone` only when it isn't `null`, and every answer sets it from `result.everyone`.
+- Modify: `src/board/render.ts`. The toolbar's `update` takes `everyone: boolean | null`, and `null` sets `aria-pressed="false"` on both buttons. Add a test in `src/board/render.test.ts`.
+- Modify: `docs/work.md`. The **Me** and **Everyone** line gains: "Each board remembers your choice."
+
+**Interfaces:**
+- Consumes: `StorePort` (existing); held board views (Task 4).
+- Produces:
+```ts
+export const MAX_REMEMBERED_BOARDS = 50
+export interface BoardFilters {
+  everyone(org: string, teamId: string, boardId: string): Promise<boolean>
+  remember(org: string, teamId: string, boardId: string, everyone: boolean): Promise<void>
+}
+export function createBoardFilters(store: StorePort): BoardFilters
+// worker/boards/service.ts
+board(input: BoardArgs & { everyone?: boolean }): Promise<BoardResult & { everyone: boolean }>
+```
+- **Storage.** The key is `boardFilters:<org>`. Its value is `Record<string, boolean>` keyed `<teamId>/<boardId>`, in order of last change.
+  - `remember` deletes and re-adds the entry, drops the first entries beyond `MAX_REMEMBERED_BOARDS`, and writes only when the value changed.
+  - A malformed stored value reads as empty.
+- **`board()`** resolves `config(args)` first, so `boardId` is known. Then:
+  - `filter = input.everyone ?? await filters.everyone(org, teamId, boardId)`
+  - when `input.everyone` was given, it calls `remember`
+  - it returns `{ ...(await boardViews.open(org, args, boardId, filter)), everyone: filter }`
+
+  Task 8's saved-board restore compares against this resolved `filter`.
+
+- [ ] **Step 1: Write the failing tests.**
+
+  `board-filters.test.ts`, using `memoryStore`:
+  - `a board never opened uses Everyone`.
+  - `a remembered filter comes back after a restart`: a new `createBoardFilters` on the same store.
+  - `filters are kept per board and per org`.
+  - `at most 50 boards are remembered per org, the oldest go first`.
+  - `remembering the same choice writes nothing`.
+  - `a malformed stored value is ignored`.
+
+  `worker/boards/service.test.ts`:
+  - `opening a board without a filter uses the remembered one and says which`: remember *Me* for the fake board; `board({ … })` without `everyone` → `everyone: false`, and the WIQL contains `[System.AssignedTo] = @Me`.
+  - `choosing a filter remembers it for that board only`.
+
+  `src/board/render.test.ts`:
+  - `the toolbar presses neither filter until the board's filter is known`.
+- [ ] **Step 2: Run the tests and see them fail.**
+- [ ] **Step 3: Implement** `board-filters.ts`, the protocol change, `board()`, then the editor and toolbar changes.
+- [ ] **Step 4: Run the tests and see them pass.**
+- [ ] **Step 5: Update `docs/work.md`.**
+- [ ] **Step 6: Verify** with the four commands.
+- [ ] **Step 7: Commit.** `git commit -m "Remember each board's Me or Everyone filter"`
+
+---
+
 ## Spec coverage
 
 | Spec section | Task |
@@ -1150,7 +1214,8 @@ export function metricsLines(report: MetricsReport, pressure: PressureState, now
 | §5.7 Persistence | 8, 9 |
 | §5.8 Visibility and cadence | 4, 10, 11, 12, 13 |
 | §5.9 Metrics | 14 |
+| §5.10 Board filter memory | 15 |
 | §3.9 Live checks | 6, 14 (`docs/development.md`) |
-| Decision 1 (storage) | 8, as recommended; a file backend would only replace the `CachePort` in `main.ts` |
-| Decisions 2 and 3 | 10 and 11, each with its one-constant opt-out |
-| Decision 4 (board filter) | Not planned until the user decides |
+| Decision 1: `orca.storage` (settled 2026-11-11) | 8 |
+| Decisions 2 and 3: cold projects every 5 min; comment back-off 2–10 min (settled 2026-11-11) | 10, 11 |
+| Decision 4: remember each board's filter (settled 2026-11-11) | 15 |
