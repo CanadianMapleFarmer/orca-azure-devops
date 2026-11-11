@@ -70,7 +70,7 @@ Source: [Rate and usage limits](https://learn.microsoft.com/en-us/azure/devops/i
 - From the same page: "Honor the Retry-After header: If you receive it in a response, wait the specified time before sending another request." And "track `X-RateLimit-Remaining` and `X-RateLimit-Limit`… to smooth out request bursts".
 - From [integration best practices](https://learn.microsoft.com/en-us/azure/devops/integrate/concepts/integration-bestpractices?view=azure-devops): batch requests. "Using queries and individual *get work item* calls is the top way to get rate limits enforced". "Place a date or range-limiting clause near the top of a query whenever possible."
 
-How this design reads `Retry-After` on a 200 is the lead's call (section 4): it slows background work ×8 rather than stopping it. That is looser than the literal guidance; section 9 says how to tighten it in one place.
+This design follows that literally (section 4): `Retry-After` on any response, a 200 included, holds background work until it passes, then paces it ×8 for 5 minutes. User requests are never held, so this costs the user nothing.
 
 ### 3.2 WIQL
 - [Query By Wiql](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/wiql/query-by-wiql?view=azure-devops-rest-7.1) takes `timePrecision` ("Whether or not to use time precision") and returns `asOf`, "the date the query was run in the context of", plus ids only.
@@ -135,7 +135,7 @@ The delta WIQL in 5.5 asks ADO that membership question directly, in one call pe
 All seven of the lead's original calls stand. The builder check added four more, which this revision adopts:
 
 - **A click always works.** The governor never fails a user request because of a block. User requests go first and are sent; only background work is held back. ADO's own 429 surfaces the existing "throttling" message.
-- **Retry-After on a 200 means *delayed*,** pacing background work ×8. Only a 429 sets a hard `resumeAt`.
+- **`Retry-After` on any response sets `resumeAt`,** a 200 included, as Microsoft asks. Background work waits until it passes, then is paced ×8 (*delayed*) for 5 minutes. User requests are never held, so honouring it literally costs the user nothing. A 429 without `Retry-After` blocks for 60 s.
 - **Three priority tiers:** user requests, then *visible* background jobs (the visible board, an open run tab, the visible sidebar tab), then *hidden* background jobs. The scheduler passes visibility through the request context.
 - **Notification latency** (section 10, item 5): cold projects are checked every 5 minutes even while hidden, and quiet back-off never stretches a notification-driving check past 5 minutes.
 
@@ -204,8 +204,8 @@ Three adjustments from the first draft still hold:
 
 | Signal | Effect |
 | --- | --- |
-| A 429 | `resumeAt = max(resumeAt, now + Retry-After)`, or `now + 60 s` without `Retry-After`; also *delayed* for 5 min |
-| `Retry-After` on any other status | *delayed* for 5 min |
+| `Retry-After` on any status, a 200 included | `resumeAt = max(resumeAt, now + Retry-After)`; also *delayed* for 5 min |
+| A 429 without `Retry-After` | `resumeAt = max(resumeAt, now + 60 s)`; also *delayed* for 5 min |
 | `X-RateLimit-Delay` | *delayed* for 5 min from the last one seen |
 | `X-RateLimit-Limit` or `-Remaining` | *near* for 5 min; *tight* when remaining ≤ 25% of limit or 0 |
 
@@ -580,7 +580,7 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 | Storage hitting the 5 MiB cliff | 160 KiB per value; 1.5 MiB total; LRU eviction; debounced index; version sweep |
 | Re-projection floods panel posts (200 per 10 s) | Batched per microtask; posted only when the JSON changed; capped |
 | Quiet back-off hides a teammate's change for up to 60 s on the board | Bounded ×2; becoming visible or Refresh resets it |
-| `Retry-After` on a 200 honoured more loosely than Microsoft's text | Lead's call: ×8 background pace. To follow the text literally, also set a background-only `resumeAt` from it in `rate-limit.ts` |
+| A long `Retry-After` on a 200 holds background polling, notification checks included | Followed literally, as Microsoft asks. User requests are never held, and background work resumes once it passes. To loosen it, set only the *delayed* window for a non-429 in `rate-limit.ts` |
 | A 304 misread as an auth failure if conditional requests are tried later | Called out in 3.5 |
 
 ## 10. Decisions for the user

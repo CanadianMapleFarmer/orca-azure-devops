@@ -196,7 +196,7 @@ export function paceOf(pressure: Pressure): Pace
 
 **Rules (spec §5.2):**
 - A **429** sets `resumeAt = max(resumeAt, now + (retryAfterMs ?? DEFAULT_BLOCK_MS))` and `delayedUntil = now + PRESSURE_WINDOW_MS`.
-- **`Retry-After` on any other status** sets `delayedUntil = now + PRESSURE_WINDOW_MS`. It never touches `resumeAt`.
+- **`Retry-After` on any status**, a 200 included, sets `resumeAt = max(resumeAt, now + retryAfterMs)` and `delayedUntil = now + PRESSURE_WINDOW_MS`.
 - **`X-RateLimit-Delay`** sets `delayedUntil = now + PRESSURE_WINDOW_MS`.
 - **`X-RateLimit-Limit` or `X-RateLimit-Remaining`** sets `nearUntil = now + PRESSURE_WINDOW_MS`. The level is *tight* while the last `remaining` is ≤ 25% of the last `limit`, or is 0.
 - The **level** is the strongest of: `blocked` (now < resumeAt), `delayed`, `tight`, `near`, `normal`.
@@ -214,7 +214,7 @@ export function paceOf(pressure: Pressure): Pace
     - A 429 with `Retry-After: 7`: `state('contoso')` is `{ level: 'blocked', factor: 8, resumeAt: T0 + 7000 }`, and `state('fabrikam').level` is `'normal'`.
     - At `T0 + 7000` the level is `'delayed'`. At `T0 + 300_000` it is `'normal'`.
   - `a 429 without Retry-After blocks for 60 seconds`: `resumeAt === T0 + 60_000`.
-  - `Retry-After on a 200 marks the org delayed, not blocked`: `level === 'delayed'` and `resumeAt === 0`.
+  - `Retry-After on a 200 holds the org until it passes, then leaves it delayed`: a 200 with `Retry-After: 7` gives `level 'blocked'` and `resumeAt T0 + 7000`. At `T0 + 7000` the level is `'delayed'`. At `T0 + 300_000` it is `'normal'`.
   - `X-RateLimit-Delay marks the org delayed for five minutes from the last one seen`:
     - The level is `'delayed'` (factor 8).
     - Another delay at +4 min extends it.
@@ -1457,7 +1457,7 @@ export function threadSignature(threads: readonly RawThread[]): string
   - opening the tab shows the last data at once
 - **Watched runs:** every 30 seconds while the Pipelines tab is visible, every minute otherwise.
 - **An open run tab:** every 5 seconds while a step runs (the run every 20 seconds, its logs every 10), every 30 seconds while queued or waiting for an approval, every minute once finished. It slows down while nothing changes.
-- **Slow-down**, replacing the existing bullet: when Azure DevOps signals rate-limit pressure for an organisation, all of its background polling slows by ×2, ×4 or ×8 depending on how close it is. After a 429, nothing polls in the background until its `Retry-After` has passed. Your own clicks are never held back. It returns to normal 5 minutes after the last signal.
+- **Slow-down**, replacing the existing bullet: when Azure DevOps signals rate-limit pressure for an organisation, all of its background polling slows by ×2, ×4 or ×8 depending on how close it is. After a 429 or a `Retry-After`, nothing polls in the background until the wait has passed. Your own clicks are never held back. It returns to normal 5 minutes after the last signal.
 - Remove the per-job "polling pauses" wording.
 
 `docs/reference.md`, Status bar: **Connection status** also shows, for each organisation with traffic in the last 5 minutes:

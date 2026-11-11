@@ -35,12 +35,15 @@ export interface AdoHttp {
   json<T>(req: AdoRequest): Promise<{ data: T; headers: Headers }>
 }
 
+export type ResponseObserver = (req: AdoRequest, status: number, headers: Headers) => void
+
 export interface AdoHttpDeps {
   fetch: typeof fetch
   authHeader: (org: string) => Promise<string>
   onUnauthorized?: (org: string) => Promise<boolean>
   sleep?: (ms: number) => Promise<void>
   timeoutMs?: number
+  observe?: ResponseObserver
 }
 
 const DEFAULT_API_VERSION = '7.1'
@@ -115,6 +118,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
     let previewRetried = false
     for (;;) {
       const res = await send(req, apiVersion)
+      deps.observe?.(req, res.status, res.headers)
       if (isSuccess(res)) return { data: parseSuccess<T>(res), headers: res.headers }
 
       const problem = readProblem(res.text)

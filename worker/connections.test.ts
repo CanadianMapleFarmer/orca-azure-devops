@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { BoardsTarget, ConnectFailure, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import type { ConnectionData } from './ado/core'
-import { AdoError, type AdoRequest } from './ado/http'
+import { AdoError, type AdoRequest, type ResponseObserver } from './ado/http'
 import { entraAuthorizeUrl } from './ado/org'
 import type { AzCliProvider } from './auth/azcli'
 import { createPkce } from './auth/entra'
@@ -251,6 +251,7 @@ function harness(
     profiles?: string[]
     settings?: Record<string, unknown>
     bindError?: Error
+    observe?: ResponseObserver
   } = {}
 ) {
   const clock = { now: T0 }
@@ -307,7 +308,8 @@ function harness(
       failures.push(record(structuredClone(failure)))
     },
     now: () => clock.now,
-    log
+    log,
+    observe: seed.observe
   })
 
   const h = {
@@ -410,6 +412,14 @@ test('connect via PAT pins the identity', async () => {
 
   await h.connections.http.json(PROJECTS)
   assert.deepEqual(h.ado.requests.map(request => request.who), ['ada', 'ada'])
+})
+
+test('the observer given to connections hears the org\'s responses', async () => {
+  const heard: string[] = []
+  const h = harness({ observe: (req, status) => void heard.push(`${req.org} ${req.path} ${status}`) })
+  await h.connect({ orgInput: 'https://dev.azure.com/contoso', method: 'pat', pat: PAT_ADA })
+  await h.connections.http.json(PROJECTS)
+  assert.deepEqual(heard, ['contoso /_apis/connectionData 200', 'contoso /_apis/projects 200'])
 })
 
 test('connect via azure-cli returns signing-in then posts connected', async () => {

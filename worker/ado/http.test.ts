@@ -200,6 +200,31 @@ test('treats 503 with Retry-After as throttling but 503 without it as a server e
   assert.deepEqual(waits, [])
 })
 
+function listener() {
+  const heard: { org: string; path: string; status: number; retryAfter: string | null }[] = []
+  const observe = (req: AdoRequest, status: number, headers: Headers) =>
+    void heard.push({ org: req.org, path: req.path, status, retryAfter: headers.get('retry-after') })
+  return { heard, observe }
+}
+
+test('observe hears every response, including throttled ones that are retried', async () => {
+  const { fetch } = fakeFetch(new Response('', { status: 429, headers: { 'retry-after': '1' } }), jsonResponse({ ok: true }))
+  const { heard, observe } = listener()
+  await clientFor(fetch, { observe }).json(REPOS)
+  assert.deepEqual(heard, [
+    { org: 'contoso', path: '/_apis/git/repositories', status: 429, retryAfter: '1' },
+    { org: 'contoso', path: '/_apis/git/repositories', status: 200, retryAfter: null }
+  ])
+})
+
+test('observe hears an error response before it is thrown', async () => {
+  const { fetch } = fakeFetch(jsonResponse({ message: 'TF401019: no such repo.' }, 404))
+  const { heard, observe } = listener()
+  const error = await failure(clientFor(fetch, { observe }).json(REPOS))
+  assert.equal(error.code, 'not_found')
+  assert.deepEqual(heard.map(entry => entry.status), [404])
+})
+
 test('401 asks onUnauthorized once', async () => {
   const headers = ['Bearer old', 'Bearer fresh']
   let issued = 0
