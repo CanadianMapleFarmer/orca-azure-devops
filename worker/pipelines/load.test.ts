@@ -4,6 +4,7 @@ import type { RawApproval } from '../ado/approvals'
 import type { RawBuild } from '../ado/builds'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { fixture, json, PROJECT, type AdoCall } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { PLATFORM } from '../prs/fake-prs'
 import { drain } from '../test-support'
 import {
@@ -41,7 +42,8 @@ function setup() {
   const ado = fakePipelines()
   const clock = { now: T0 }
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
-  return { ado, clock, source: createRunSource(http, ORG, () => clock.now) }
+  const tables = createEntities(() => clock.now).of(ORG)
+  return { ado, clock, tables, source: createRunSource(http, ORG, () => clock.now, tables) }
 }
 
 function iso(ms: number): string {
@@ -176,6 +178,17 @@ test('chips: at most 8 active runs every load, and at most 8 newly finished runs
   clock.now += 30_000
   await source.full(ME, PROJECTS, [])
   assert.deepEqual(timelineIds(ado.calls.slice(again)).sort(), [...activeFirst, 4512].sort(), 'a run that finished again is read again')
+})
+
+test('seeded finished runs keep their chips without a timeline read; runs still going or never read are not seeded', async () => {
+  const saved = (await setup().source.full(ME, PROJECTS, [])).runs
+  const { ado, source, tables } = setup()
+  source.seed(saved.map(run => (run.buildId === 4498 ? { ...run, stages: null } : run)))
+  assert.deepEqual(tables.runChips.entries().map(([key]) => Number(key.split(':')[0])).sort(), [4490, 4505, 4512])
+
+  const loaded = await source.full(ME, PROJECTS, [])
+  assert.deepEqual(timelineIds(ado.calls).sort(), [4498, 4520, 4531])
+  assert.deepEqual(loaded.runs.map(run => [run.buildId, run.stages]), saved.map(run => [run.buildId, run.stages]))
 })
 
 test('an approval is placed on its run timeline and named by its check suite, once', async () => {

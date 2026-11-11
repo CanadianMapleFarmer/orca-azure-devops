@@ -5,8 +5,10 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, isPatch, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { createEntities } from '../data/entities'
+import { createPersisted } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
 import { createScheduler } from '../poll/scheduler'
-import { drain, fakeClock } from '../test-support'
+import { drain, fakeClock, memoryCache } from '../test-support'
 import { createPrActions } from './actions'
 import { fakePrs, isMineActive, isPrWorkItems, ME, NO_PR_NOTIFICATIONS } from './fake-prs'
 import { createPrsService } from './service'
@@ -84,6 +86,8 @@ function harness(saved: AutoCompleteOptions = SAVED) {
   ado.on(isVote, call => json(200, { id: ME, ...call.body }))
   ado.on(isPatch, call => json(200, { pullRequestId: idOf(call) }))
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const entities = createEntities(clock.now)
+  const persisted = createPersisted({ port: memoryCache().port, orgs: async () => [], now: clock.now, clock, log: () => {} })
   const prs = createPrsService({
     http,
     orgs: async () => [status()],
@@ -92,7 +96,9 @@ function harness(saved: AutoCompleteOptions = SAVED) {
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: () => {},
     now: clock.now,
-    entities: createEntities(clock.now),
+    entities,
+    persisted,
+    savedTables: createSavedTables(entities, persisted),
     ...NO_PR_NOTIFICATIONS
   })
   const actions = createPrActions({ http, prs, settings: { autoComplete: () => saved } })

@@ -6,6 +6,8 @@ import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { fly, join, type Flight } from '../data/context'
 import type { Entities } from '../data/entities'
+import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import type { SavedTables } from '../data/saved-tables'
 import {
   failureMessage,
   joinMessages,
@@ -14,7 +16,8 @@ import {
   PRS_LOAD_FAILED,
   PRS_NEED_CODE_READ,
   PRS_TRIMMED,
-  PRS_WORK_ITEMS_NEED_ACCESS
+  PRS_WORK_ITEMS_NEED_ACCESS,
+  SHOWING_SAVED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
@@ -33,6 +36,8 @@ export interface PrsServiceDeps {
   notifier: PrNotifier
   log: (message: string) => void
   entities: Entities
+  persisted: Persisted
+  savedTables: SavedTables
 }
 
 export interface PrsService {
@@ -62,6 +67,8 @@ interface OrgPrs {
   loading: { kind: Kind; flight: Flight<PrSnapshot> } | null
   pausedUntil: number
   threadsPausedUntil: number
+  restored: boolean
+  restoring?: Promise<PrSnapshot | null>
 }
 
 const PRS_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
@@ -79,8 +86,10 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   const baselined = new Set<string>()
   let disposed = false
 
-  function statusOf(org: string): Promise<SignedInStatus> {
-    return signedInStatus(deps.orgs, org, PRS_LOAD_FAILED, () => disposed)
+  async function statusOf(org: string): Promise<SignedInStatus> {
+    const status = await signedInStatus(deps.orgs, org, PRS_LOAD_FAILED, () => disposed)
+    await deps.savedTables.seed(org, status.account.adoId)
+    return status
   }
 
   function entryOf(org: string): OrgPrs {
@@ -97,7 +106,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       failure: null,
       loading: null,
       pausedUntil: -Infinity,
-      threadsPausedUntil: -Infinity
+      threadsPausedUntil: -Infinity,
+      restored: false
     }
     entries.set(org, entry)
     return entry
@@ -121,17 +131,39 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     return entry !== undefined && entry.snapshot !== null && entry.fullAt !== null && now() - entry.fullAt < FRESH_MS
   }
 
+  function painted(entry: OrgPrs): boolean {
+    return entry.fullAt !== null || entry.restored
+  }
+
   function lastFull(org: string): PrSnapshot | null {
     const entry = entries.get(org)
-    return entry && entry.fullAt !== null ? entry.snapshot : null
+    return entry && painted(entry) ? entry.snapshot : null
   }
 
   function publish(entry: OrgPrs, base: PrSnapshot): PrSnapshot {
     const snapshot = capPrSnapshot(base)
     entry.base = base
     entry.snapshot = snapshot
-    if (entry.fullAt !== null) deps.post(snapshot)
+    if (painted(entry)) deps.post(snapshot)
     return snapshot
+  }
+
+  function restore(org: string, status: SignedInStatus): Promise<PrSnapshot | null> {
+    const entry = entryOf(org)
+    if (painted(entry)) return Promise.resolve(null)
+    entry.restoring ??= restoreFrom(org, entry, status.account.adoId)
+    return entry.restoring
+  }
+
+  async function restoreFrom(org: string, entry: OrgPrs, account: string): Promise<PrSnapshot | null> {
+    const saved = await deps.persisted.load(org, 'prs', account)
+    if (entries.get(org) !== entry || painted(entry) || !isSavedPrs(saved?.value, org)) return null
+    entry.restored = true
+    const restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
+    entry.base = restored
+    entry.snapshot = capPrSnapshot(restored)
+    void loadInFull(org)
+    return entry.snapshot
   }
 
   function compose(org: string, me: string, sets: ReleaseSet[], review: PrSummary[], message?: string): PrSnapshot {
@@ -193,12 +225,11 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
         const loaded = await entry.source.full(me, projects, signal)
         signal.throwIfAborted()
         const base = compose(org, me, releaseSets(loaded.mine, now()), loaded.review, offMessage(loaded))
-        entry.mine = loaded.mine
-        entry.review = loaded.review
-        entry.fullAt = now()
+        Object.assign(entry, { mine: loaded.mine, review: loaded.review, fullAt: now(), restored: false, failure: null })
         entry.fullLoads += 1
-        entry.failure = null
         deps.counts(org, base.toReviewCount)
+        deps.persisted.save(org, 'prs', me, capPrSnapshot(base, VALUE_BUDGET_BYTES))
+        deps.savedTables.save(org, me)
         return publish(entry, base)
       }
       const review = await entry.source.reviews(me, projects, signal)
@@ -209,6 +240,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       entry.review = review
       entry.failure = null
       deps.counts(org, base.toReviewCount)
+      deps.savedTables.save(org, me)
       return publish(entry, base)
     } catch (error) {
       if (signal.aborted) throw notConnected()
@@ -300,9 +332,11 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     },
 
     async snapshot(org) {
-      await statusOf(org)
+      const status = await statusOf(org)
       const entry = entries.get(org)
       if (fresh(entry)) return entry.snapshot
+      const restored = await restore(org, status)
+      if (restored) return restored
       try {
         return await load(org, 'full')
       } catch (error) {
@@ -334,7 +368,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
     cached(org, key) {
       const entry = entries.get(org)
-      return [...(entry?.mine ?? []), ...(entry?.review ?? [])].find(pr => samePr(pr, key)) ?? null
+      if (!entry || entry.restored) return null
+      return [...entry.mine, ...entry.review].find(pr => samePr(pr, key)) ?? null
     },
 
     visibility({ org, visible: shown }) {
@@ -356,14 +391,14 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   }
 }
 
-function capPrSnapshot(snapshot: PrSnapshot): PrSnapshot {
+function capPrSnapshot(snapshot: PrSnapshot, budget = POST_BUDGET_BYTES): PrSnapshot {
   const message = joinMessages(snapshot.message, PRS_TRIMMED)
-  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, sets: [], toReview: [], reviewed: [], message })
-  const sets = newestThatFit(snapshot.sets, budget, newestCreatedAt, MAX_SETS)
+  const room = budget - byteLength({ ...snapshot, sets: [], toReview: [], reviewed: [], message })
+  const sets = newestThatFit(snapshot.sets, room, newestCreatedAt, MAX_SETS)
   const setBytes = [...sets].reduce((sum, set) => sum + itemBytes(set), 0)
-  const toReview = newestThatFit(snapshot.toReview, budget - setBytes, pr => pr.createdAt, MAX_TO_REVIEW)
+  const toReview = newestThatFit(snapshot.toReview, room - setBytes, pr => pr.createdAt, MAX_TO_REVIEW)
   const toReviewBytes = [...toReview].reduce((sum, pr) => sum + itemBytes(pr), 0)
-  const reviewed = newestThatFit(snapshot.reviewed, budget - setBytes - toReviewBytes, pr => pr.createdAt, MAX_REVIEWED)
+  const reviewed = newestThatFit(snapshot.reviewed, room - setBytes - toReviewBytes, pr => pr.createdAt, MAX_REVIEWED)
   if (sets.size === snapshot.sets.length && toReview.size === snapshot.toReview.length && reviewed.size === snapshot.reviewed.length) return snapshot
   return {
     ...snapshot,
@@ -376,6 +411,21 @@ function capPrSnapshot(snapshot: PrSnapshot): PrSnapshot {
 
 function offMessage({ off }: FullLoad): string | undefined {
   return joinMessages(off.workItems ? PRS_WORK_ITEMS_NEED_ACCESS : undefined, off.checks ? PRS_CHECKS_NEED_ACCESS : undefined)
+}
+
+function isSavedPrs(value: unknown, org: string): value is PrSnapshot {
+  return (
+    isRecord(value) &&
+    value.org === org &&
+    [value.sets, value.toReview, value.reviewed].every(list => Array.isArray(list) && list.every(isRecord)) &&
+    Number.isFinite(value.toReviewCount) &&
+    isRecord(value.autoComplete) &&
+    Number.isFinite(value.updatedAt)
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function samePr(pr: PrKey, key: PrKey): boolean {

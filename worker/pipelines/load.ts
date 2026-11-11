@@ -7,6 +7,7 @@ import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { isMalformed, malformed } from '../ado/shape'
 import { approvalPlaceOf, getTimeline, stageChips, type RawTimeline } from '../ado/timeline'
+import type { OrgEntities } from '../data/entities'
 import { MALFORMED } from '../messages'
 
 const MINUTE = 60_000
@@ -16,7 +17,6 @@ const RUNNING_TOP = 25
 const MINE_WINDOW_MS = 7 * 24 * 60 * MINUTE
 const MAX_ACTIVE_CHIPS = 8
 const MAX_FINISHED_CHIPS = 8
-const MAX_CACHED_CHIPS = 100
 const APPROVALS_OFF_MS = 10 * MINUTE
 
 export interface RunsLoad {
@@ -29,6 +29,7 @@ export interface RunSource {
   background(me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad>
   watched(me: string, keys: RunKey[], signal?: AbortSignal): Promise<RunSummary[]>
   approval(me: string, key: { projectId: string; approvalId: string }, signal?: AbortSignal): Promise<{ run: RunSummary; approval: ApprovalSummary } | null>
+  seed(runs: RunSummary[]): void
 }
 
 interface Pending {
@@ -52,8 +53,8 @@ interface Lists {
 
 type Kind = 'full' | 'background'
 
-export function createRunSource(http: AdoHttp, org: string, now: () => number): RunSource {
-  const finishedChips = new Map<string, StageChip[] | null>()
+export function createRunSource(http: AdoHttp, org: string, now: () => number, tables: Pick<OrgEntities, 'runChips'>): RunSource {
+  const { runChips } = tables
   let places = new Map<string, ApprovalPlace>()
   let lastFull = new Map<number, RunSummary>()
   let approvalsOffUntil = -Infinity
@@ -126,26 +127,12 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     const ordered = orderRuns(runs)
     return {
       active: ordered.filter(isActive).slice(0, MAX_ACTIVE_CHIPS),
-      finished: ordered.filter(run => !isActive(run) && run.finishedAt !== null && !finishedChips.has(chipKey(run))).slice(0, MAX_FINISHED_CHIPS)
-    }
-  }
-
-  function rememberChips(run: RunSummary, chips: StageChip[] | null): void {
-    finishedChips.delete(chipKey(run))
-    finishedChips.set(chipKey(run), chips)
-    for (const key of finishedChips.keys()) {
-      if (finishedChips.size <= MAX_CACHED_CHIPS) break
-      finishedChips.delete(key)
+      finished: ordered.filter(run => !isActive(run) && run.finishedAt !== null && !runChips.get(chipKey(run))).slice(0, MAX_FINISHED_CHIPS)
     }
   }
 
   function cachedChips(run: RunSummary): StageChip[] | null | undefined {
-    const key = chipKey(run)
-    if (!finishedChips.has(key)) return undefined
-    const chips = finishedChips.get(key) ?? null
-    finishedChips.delete(key)
-    finishedChips.set(key, chips)
-    return chips
+    return runChips.get(chipKey(run))?.value
   }
 
   function fullChips(run: RunSummary, timelines: ReadonlyMap<number, RawTimeline | null>, active: ReadonlySet<number>): StageChip[] | null {
@@ -179,7 +166,7 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     const runs = await withUnlisted(scoped, me, builds, wanted)
     const targets = kind === 'full' ? chipTargets([...runs.values()]) : { active: [], finished: [] }
     const timelines = await timelinesOf(scoped, [...targets.active, ...targets.finished])
-    for (const run of targets.finished) rememberChips(run, chipsFrom(timelines.get(run.buildId)))
+    for (const run of targets.finished) runChips.put(chipKey(run), chipsFrom(timelines.get(run.buildId)))
     await placeAll(scoped, pending, runs, timelines)
     const current = new Set(pending.map(({ raw }) => placeKey(raw.id)))
     places = new Map([...places].filter(([key]) => current.has(key)))
@@ -222,6 +209,13 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
       const approval = toApprovalSummary(raw, { projectId: key.projectId, me, stage: place.stage, environment: place.environment })
       const approvals = [approval]
       return { run: { ...run, approvals, state: waitingIf(run.state, approvals), stages: chipsFrom(timeline) }, approval }
+    },
+
+    seed(runs) {
+      for (const run of runs) {
+        if (isActive(run) || run.finishedAt === null || !Array.isArray(run.stages) || runChips.get(chipKey(run))) continue
+        runChips.put(chipKey(run), run.stages)
+      }
     }
   }
 }

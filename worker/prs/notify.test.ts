@@ -7,7 +7,9 @@ import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
 import { createEntities } from '../data/entities'
-import { drain, fakeClock, paced, withWorker } from '../test-support'
+import { createPersisted } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
+import { drain, fakeClock, memoryCache, paced, withWorker } from '../test-support'
 import { fakePrs, isMineActive, isReviewList, isThreads, ME, projectOf, threadsPrIdOf } from './fake-prs'
 import { createPrNotifier, MAX_WATCHED_PRS } from './notify'
 import { createPrsService, type PrsService } from './service'
@@ -105,6 +107,8 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
     default: async (orca: OrcaWorkerApi) => {
       const log = (message: string) => orca.log(message)
       const notifier = createPrNotifier({ show: n => orca.host.call('notifications.show', n), prefs: () => prefs, log })
+      const entities = createEntities(clock.now)
+      const persisted = createPersisted({ port: memoryCache().port, orgs: async () => [], now: clock.now, clock, log })
       made.service = createPrsService({
         http: createAdoHttp({ fetch: ado.fetch, authHeader: async () => AUTHORIZATION, sleep: async () => {}, observe: pressure.observe }),
         orgs: async () => structuredClone(orgs),
@@ -113,7 +117,9 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
         post: () => {},
         counts: () => {},
         now: clock.now,
-        entities: createEntities(clock.now),
+        entities,
+        persisted,
+        savedTables: createSavedTables(entities, persisted),
         notifier: {
           ...notifier,
           forget: org => {

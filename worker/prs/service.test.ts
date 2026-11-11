@@ -6,8 +6,11 @@ import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
 import { createEntities } from '../data/entities'
+import { cacheKey, createPersisted, VALUE_BUDGET_BYTES, type Saved } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
+import type { Shown } from '../pipelines/notify'
 import { createScheduler } from '../poll/scheduler'
-import { drain, fakeClock } from '../test-support'
+import { drain, fakeClock, memoryCache } from '../test-support'
 import {
   fakePrs,
   isEvaluations,
@@ -22,11 +25,15 @@ import {
   PLATFORM,
   projectOf
 } from './fake-prs'
+import { createPrNotifier, type PrNotifier } from './notify'
 import { createPrsService } from './service'
 
 const T0 = Date.parse('2026-11-05T09:00:00Z')
 const MINUTE = 60_000
-const DAY = 24 * 60 * MINUTE
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+const OTHER_ACCOUNT = '5e6f7a8b-8888-4c9d-8e0f-1a2b3c4d5e6f'
+const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 const AUTO: AutoCompleteOptions = { mergeStrategy: 'squash', deleteSourceBranch: true, transitionWorkItems: false }
 const TRIMMED = 'Showing the newest pull requests only.'
 const NEED_CODE_READ = 'Pull requests need Code (Read) access.'
@@ -50,15 +57,18 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness() {
+function harness(options: { cache?: Record<string, unknown>; at?: number; notifier?: PrNotifier } = {}) {
   const ado = fakePrs()
-  const clock = fakeClock(T0)
+  const clock = fakeClock(options.at ?? T0)
   const posts: PrSnapshot[] = []
   const counts: [string, number | null][] = []
   const failing = { orgs: false, settings: false }
   let orgs = [status()]
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const scheduler = createScheduler(clock)
+  const entities = createEntities(clock.now)
+  const cache = memoryCache(options.cache)
+  const persisted = createPersisted({ port: cache.port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: () => {} })
   const service = createPrsService({
     http,
     orgs: async () => {
@@ -73,8 +83,11 @@ function harness() {
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: (org, count) => counts.push([org, count]),
     now: clock.now,
-    entities: createEntities(clock.now),
-    ...NO_PR_NOTIFICATIONS
+    entities,
+    persisted,
+    savedTables: createSavedTables(entities, persisted),
+    ...NO_PR_NOTIFICATIONS,
+    ...(options.notifier ? { notifier: options.notifier } : {})
   })
   return {
     ado,
@@ -84,6 +97,8 @@ function harness() {
     failing,
     service,
     scheduler,
+    cache,
+    persisted,
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
@@ -456,6 +471,11 @@ test('a snapshot over the post budget is trimmed with the message', async () => 
   assert.deepEqual(snapshot.toReview.map(pr => pr.prId), review.slice(0, snapshot.toReview.length).map(pr => pr.pullRequestId))
   assert.equal(snapshot.toReviewCount, 30)
   assert.deepEqual(h.posts, [snapshot])
+  await h.persisted.flush()
+  const saved = (h.cache.data[cacheKey(ORG, 'prs')] as Saved<PrSnapshot>).value
+  assert.ok(byteLength(saved) <= VALUE_BUDGET_BYTES, `the saved copy is ${byteLength(saved)} bytes`)
+  assert.ok(saved.sets.length > 0 && saved.sets.length < snapshot.sets.length)
+  assert.equal(saved.message, TRIMMED)
 
   const small = harness()
   const many = Array.from({ length: 60 }, (_, index) => rawPr(5000 + index, T0 - index * MINUTE, `Change ${index}`))
@@ -602,4 +622,80 @@ test('reloadFresh waits for the load in flight and then runs a full load of its 
   assert.equal(h.ado.count(isMineActive), 4)
   assert.equal(h.posts.length, 2)
   assert.deepEqual(await rejection(h.service.reloadFresh('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
+})
+
+async function savedPrs(): Promise<{ live: PrSnapshot; cache: Record<string, unknown> }> {
+  const before = harness()
+  const live = await before.service.snapshot(ORG)
+  await before.persisted.flush()
+  return { live, cache: structuredClone(before.cache.data) }
+}
+
+test('the PRs tab paints saved PRs at once, stale, then live', async () => {
+  const { live, cache } = await savedPrs()
+  const h = harness({ cache, at: T0 + 3 * HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(() => true)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(painted, { ...live, stale: true, message: SHOWING_SAVED })
+  assert.equal(painted.updatedAt, T0)
+  assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
+  assert.equal(h.posts.length, 0)
+  assert.equal(h.counts.length, 0, 'saved counts are not shown as live')
+
+  gate.release()
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.deepEqual([latest?.stale, latest?.message, latest?.updatedAt], [false, undefined, T0 + 3 * HOUR])
+  assert.equal(h.ado.count(isMineActive), 2)
+  assert.deepEqual(await h.service.snapshot(ORG), latest)
+})
+
+test('restored PRs never raise review or comment notifications', async () => {
+  const { cache } = await savedPrs()
+  const shown: Shown[] = []
+  const notifier = createPrNotifier({ show: async n => shown.push(n), prefs: () => ({ reviews: true, comments: true }), log: () => {} })
+  const h = harness({ cache, at: T0 + HOUR, notifier })
+  const listed = fixture<{ value: RawPullRequest[] }>('pull-requests-review').value
+  let review = [...listed, toReviewPr(4300, T0 + 30 * MINUTE, 'Arrived while Orca was closed')]
+  h.ado.on(isReviewList, call => json(200, { value: projectOf(call) === PROJECT ? review : [] }))
+  h.setOrgs([status()])
+
+  assert.equal((await h.service.snapshot(ORG)).stale, true)
+  await drain()
+  assert.equal(h.posts.at(-1)?.stale, false)
+  assert.equal(shown.length, 0, 'the first live load sets the baseline; the saved PRs never did')
+
+  review = [...review, toReviewPr(4301, T0 + 2 * HOUR, 'Asked for after the restart')]
+  await h.clock.tick(5 * MINUTE)
+  assert.deepEqual(shown.map(note => note.title), ['Review requested: Pull Request 4301'])
+})
+
+test('saved PRs from another account are ignored', async () => {
+  const { cache } = await savedPrs()
+  const other = status({ account: { ...status().account!, adoId: OTHER_ACCOUNT } })
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([other])
+
+  const snapshot = await h.service.snapshot(ORG)
+  assert.deepEqual([snapshot.stale, snapshot.message, snapshot.me, snapshot.updatedAt], [false, undefined, OTHER_ACCOUNT, T0 + HOUR])
+  assert.equal(h.ado.count(isMineActive), 2, 'it loaded from Azure DevOps instead')
+})
+
+test('a share of a restored PR reads it from Azure DevOps first', async () => {
+  const { live, cache } = await savedPrs()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(isMineActive)
+
+  await h.service.snapshot(ORG)
+  await drain()
+  assert.deepEqual(h.counts, [[ORG, live.toReviewCount]], 'the live review list has landed')
+  const [mine, asked] = [live.sets[0].prs[0], live.toReview[0]]
+  assert.deepEqual([h.service.cached(ORG, mine), h.service.cached(ORG, asked)], [null, null], 'while restored, a share reads the PR first')
+
+  gate.release()
+  await drain()
+  assert.deepEqual([h.service.cached(ORG, mine)?.prId, h.service.cached(ORG, asked)?.prId], [mine.prId, asked.prId])
 })

@@ -12,13 +12,15 @@ import type { SecretsPort } from '../auth/pat'
 import type { StorePort } from '../connections'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { createEntities } from '../data/entities'
+import { createPersisted } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
 import { createScheduler } from '../poll/scheduler'
 import { fakePrs, isOnePr, isPrWorkItems, ME, NO_PR_NOTIFICATIONS } from '../prs/fake-prs'
 import { approvalShareSource } from '../pipelines/share-source'
 import { createPrsService } from '../prs/service'
 import { prShareSource } from '../prs/share-source'
 import type { Clipboard } from '../sys/clipboard'
-import { fakeClock, memoryStore } from '../test-support'
+import { fakeClock, memoryCache, memoryStore } from '../test-support'
 import { adaptiveCard, webhookPayload } from './card'
 import { createChannelStore } from './channels'
 import { channelDestination, copyDestination, reviewersDestination, type DestinationContext, type WorkerDestination } from './destinations'
@@ -132,6 +134,8 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
   }
   const clock = fakeClock(T0)
   const orgs = [status(ORG, TENANT), status('fabrikam', null)]
+  const entities = createEntities(clock.now)
+  const persisted = createPersisted({ port: memoryCache().port, orgs: async () => [], now: clock.now, clock, log: () => {} })
   const prs = createPrsService({
     http,
     orgs: async () => structuredClone(orgs),
@@ -140,7 +144,9 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     post: () => {},
     counts: () => {},
     now: clock.now,
-    entities: createEntities(clock.now),
+    entities,
+    persisted,
+    savedTables: createSavedTables(entities, persisted),
     ...NO_PR_NOTIFICATIONS
   })
   const template = { value: PR_TEMPLATE }

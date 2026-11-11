@@ -17,6 +17,7 @@ import { createGovernor } from './data/governor'
 import { createMetrics, metricsLines } from './data/metrics'
 import { createPersisted } from './data/persist'
 import { createPressure, paceOf } from './data/rate-limit'
+import { createSavedTables } from './data/saved-tables'
 import { NETWORK } from './messages'
 import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
 import { registerOrgHandlers } from './org-handlers'
@@ -135,6 +136,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   void persisted.sweep()
   flushSaved = () => persisted.flush()
+  const savedTables = createSavedTables(entities, persisted)
   const connections = createConnections({
     store,
     secrets: orca.secrets,
@@ -172,6 +174,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     },
     forgotten: org => {
       entities.forget(org)
+      savedTables.forget(org)
       pressure.forget(org)
       metrics.forget(org)
       void persisted.forget(org)
@@ -204,7 +207,9 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now,
     notifier: createPrNotifier({ show: showNotification, prefs: () => prSettings.notify(), log }),
     log,
-    entities
+    entities,
+    persisted,
+    savedTables
   })
   const notifier = createNotifier({
     show: showNotification,
@@ -220,7 +225,9 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     signals: createRunSignals({ bar, notifier, now: Date.now }),
     post: snapshot => orca.panels.post('runs.changed', snapshot),
     now: Date.now,
-    entities
+    entities,
+    persisted,
+    savedTables
   })
   const runViews = createRunViews({
     http,

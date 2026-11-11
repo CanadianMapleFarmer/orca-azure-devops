@@ -8,8 +8,10 @@ import type { RawTimeline } from '../ado/timeline'
 import { json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
 import { createEntities } from '../data/entities'
+import { cacheKey, createPersisted, VALUE_BUDGET_BYTES, type Saved } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
 import { isRepositories, PLATFORM } from '../prs/fake-prs'
-import { drain, fakeClock, memoryStore, paced } from '../test-support'
+import { drain, fakeClock, memoryCache, memoryStore, paced } from '../test-support'
 import {
   APPROVAL_4520,
   APPROVAL_4531,
@@ -34,6 +36,8 @@ import { createWatchList } from './watched'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
 const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 const WATCHED = `pipelines:watched:${ORG}`
 const NOT_CONNECTED = 'Connect this organization first.'
 const TRIMMED = 'Showing the newest runs only.'
@@ -63,9 +67,11 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (now: () => number) => RunSignals } = {}) {
+function harness(
+  options: { store?: ReturnType<typeof memoryStore>; signals?: (now: () => number) => RunSignals; cache?: Record<string, unknown>; at?: number } = {}
+) {
   const ado = fakePipelines()
-  const clock = fakeClock(T0)
+  const clock = fakeClock(options.at ?? T0)
   const posts: RunsSnapshot[] = []
   const updates: [string, RunSummary[] | null][] = []
   const failing = { orgs: false }
@@ -73,6 +79,9 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
   let orgs = [status()]
   const { pressure, scheduler } = paced(clock)
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {}, observe: pressure.observe })
+  const entities = createEntities(clock.now)
+  const cache = memoryCache(options.cache)
+  const persisted = createPersisted({ port: cache.port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: () => {} })
   const service = createPipelinesService({
     http,
     orgs: async () => {
@@ -84,7 +93,9 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     signals: options.signals?.(clock.now) ?? { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
     post: snapshot => posts.push(structuredClone(snapshot)),
     now: clock.now,
-    entities: createEntities(clock.now)
+    entities,
+    persisted,
+    savedTables: createSavedTables(entities, persisted)
   })
   return {
     ado,
@@ -95,6 +106,8 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     service,
     scheduler,
     pressure,
+    cache,
+    persisted,
     data: memory.data,
     setOrgs(next: OrgStatus[]) {
       orgs = next
@@ -617,6 +630,11 @@ test('a snapshot over the post budget is trimmed with the message', async () => 
   assert.equal(h.service.cachedRun(ORG, 4520)?.stages?.length, 15, 'the worker keeps them all')
   assert.deepEqual(snapshot.counts, { failedRuns: 1, approvals: 2 }, 'counts are taken before trimming')
   assert.deepEqual(h.posts, [snapshot])
+  await h.persisted.flush()
+  const saved = (h.cache.data[cacheKey(ORG, 'runs')] as Saved<RunsSnapshot>).value
+  assert.ok(byteLength(saved) <= VALUE_BUDGET_BYTES, `the saved copy is ${byteLength(saved)} bytes`)
+  assert.ok(saved.runs.length > 2 && saved.runs.length < snapshot.runs.length)
+  assert.equal(saved.message, TRIMMED)
 
   const small = harness()
   for (let index = 0; index < 60; index += 1) {
@@ -742,3 +760,92 @@ test('reloadFresh starts a full load after the one already running instead of jo
 function fixtureTimeline(ado: FakePipelines): RawTimeline {
   return structuredClone(ado.runs.timelines.get(4520) ?? assert.fail('no timeline for 4520'))
 }
+
+async function savedRuns(): Promise<{ live: RunsSnapshot; cache: Record<string, unknown> }> {
+  const before = harness()
+  const live = await before.service.snapshot(ORG)
+  await before.persisted.flush()
+  return { live, cache: structuredClone(before.cache.data) }
+}
+
+test('the Pipelines tab paints saved runs at once, stale, then live', async () => {
+  const { live, cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + 3 * HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(() => true)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(painted, { ...live, stale: true, message: SHOWING_SAVED })
+  assert.equal(painted.updatedAt, T0)
+  assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
+  assert.equal(h.posts.length, 0)
+  assert.equal(h.updates.length, 0, 'saved runs never reach the status bar or notifications')
+
+  gate.release()
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.deepEqual([latest?.stale, latest?.message, latest?.updatedAt], [false, undefined, T0 + 3 * HOUR])
+  assert.equal(h.ado.count(isRunningRuns), 2, 'the revalidation is a full load')
+  assert.deepEqual(h.updates.map(([, runs]) => ids(runs)), [ids(latest?.runs)])
+  assert.deepEqual(await h.service.snapshot(ORG), latest)
+})
+
+test('an approval in restored runs is read from Azure DevOps before it is shared', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(isMineRuns)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(runOf(painted, 4520).approvals.map(approval => approval.approvalId), [APPROVAL_4520])
+  Object.assign(h.ado.runs.approvals.get(APPROVAL_4520) ?? assert.fail('no approval'), { status: 'approved' })
+
+  assert.equal(await h.service.approval(ORG, { projectId: PROJECT, approvalId: APPROVAL_4520 }), null)
+  assert.ok(
+    h.ado.calls.some(call => isApprovals(call) && call.query.get('approvalIds') === APPROVAL_4520),
+    'the approval was read from Azure DevOps, not taken from the saved runs'
+  )
+  assert.equal(h.service.cachedRun(ORG, 4520), null, 'saved runs are not handed out as live')
+  gate.release()
+})
+
+test('watching a run in restored runs reads it first', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(isMineRuns)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.equal(runOf(painted, 4531).state, 'waiting', 'the saved copy shows it still going')
+  finish(h.ado, 4531, T0 + 30 * MINUTE)
+
+  assert.equal((await rejection(h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true }))).message, ALREADY_FINISHED)
+  assert.deepEqual(h.ado.calls.filter(isBuildsByIds).map(call => call.query.get('buildIds')), ['4531'])
+  assert.deepEqual(h.data[WATCHED] ?? [], [])
+
+  const watching = await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4520, watched: true })
+  assert.deepEqual([watching.stale, runOf(watching, 4520).watched], [true, true])
+  assert.deepEqual(h.ado.calls.filter(isBuildsByIds).map(call => call.query.get('buildIds')), ['4531', '4520'])
+  await h.clock.tick(30_000)
+  assert.equal(h.updates.length, 0, 'the watch job waits for live runs instead of merging into saved ones')
+
+  gate.release()
+  await drain()
+  assert.equal(h.posts.at(-1)?.stale, false)
+  assert.ok(h.updates.length > 0)
+  assert.ok(h.updates.every(([, runs]) => runs?.find(run => run.buildId === 4531)?.state !== 'waiting'), 'the signals only ever saw live runs')
+})
+
+test('finished runs restored from storage keep their stage chips without a timeline read', async () => {
+  const { live, cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status()])
+
+  await h.service.snapshot(ORG)
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.equal(latest?.stale, false)
+  assert.deepEqual(timelines(h.ado.calls), ACTIVE, 'only active runs are read')
+  for (const id of FINISHED) assert.deepEqual(runOf(latest, id).stages, runOf(live, id).stages, `run ${id} keeps its chips`)
+  assert.equal(h.ado.count(isRepositories), 0, 'the saved code projects are still fresh')
+})

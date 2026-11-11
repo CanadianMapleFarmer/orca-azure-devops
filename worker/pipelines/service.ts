@@ -7,6 +7,8 @@ import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { fly, join, type Flight } from '../data/context'
 import type { Entities } from '../data/entities'
+import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import type { SavedTables } from '../data/saved-tables'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -18,7 +20,8 @@ import {
   RUN_GONE,
   RUNS_LOAD_FAILED,
   RUNS_NEED_BUILD_READ,
-  RUNS_TRIMMED
+  RUNS_TRIMMED,
+  SHOWING_SAVED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
@@ -35,6 +38,8 @@ export interface PipelinesServiceDeps {
   post: (snapshot: RunsSnapshot) => void
   now: () => number
   entities: Entities
+  persisted: Persisted
+  savedTables: SavedTables
 }
 
 export interface PipelinesService {
@@ -66,6 +71,8 @@ interface OrgRuns {
   watching: Flight<void> | null
   pausedUntil: number
   watched: RunKey[]
+  restored: boolean
+  restoring?: Promise<RunsSnapshot | null>
 }
 
 const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000, quietCapMs: NOTIFY_CAP_MS }
@@ -81,8 +88,10 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   const visible = new Set<string>()
   let disposed = false
 
-  function statusOf(org: string): Promise<SignedInStatus> {
-    return signedInStatus(deps.orgs, org, RUNS_LOAD_FAILED, () => disposed)
+  async function statusOf(org: string): Promise<SignedInStatus> {
+    const status = await signedInStatus(deps.orgs, org, RUNS_LOAD_FAILED, () => disposed)
+    await deps.savedTables.seed(org, status.account.adoId)
+    return status
   }
 
   function entryOf(org: string): OrgRuns {
@@ -90,7 +99,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     if (existing) return existing
     const entry: OrgRuns = {
       controller: new AbortController(),
-      source: createRunSource(deps.http, org, now),
+      source: createRunSource(deps.http, org, now, deps.entities.of(org)),
       projects: cachedCodeProjects(deps.http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,
@@ -100,7 +109,8 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       loading: null,
       watching: null,
       pausedUntil: -Infinity,
-      watched: []
+      watched: [],
+      restored: false
     }
     entries.set(org, entry)
     return entry
@@ -135,17 +145,40 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     return entry !== undefined && entry.snapshot !== null && entry.fullAt !== null && now() - entry.fullAt < FRESH_MS
   }
 
+  function painted(entry: OrgRuns): boolean {
+    return entry.fullAt !== null || entry.restored
+  }
+
   function lastFull(org: string): RunsSnapshot | null {
     const entry = entries.get(org)
-    return entry && entry.fullAt !== null ? entry.snapshot : null
+    return entry && painted(entry) ? entry.snapshot : null
   }
 
   function publish(entry: OrgRuns, base: RunsSnapshot): RunsSnapshot {
     const snapshot = capRunsSnapshot(base)
     entry.base = base
     entry.snapshot = snapshot
-    if (entry.fullAt !== null) deps.post(snapshot)
+    if (painted(entry)) deps.post(snapshot)
     return snapshot
+  }
+
+  function restore(org: string, status: SignedInStatus): Promise<RunsSnapshot | null> {
+    const entry = entryOf(org)
+    if (painted(entry)) return Promise.resolve(null)
+    entry.restoring ??= restoreFrom(org, entry, status.account.adoId)
+    return entry.restoring
+  }
+
+  async function restoreFrom(org: string, entry: OrgRuns, account: string): Promise<RunsSnapshot | null> {
+    const saved = await deps.persisted.load(org, 'runs', account)
+    if (entries.get(org) !== entry || painted(entry) || !isSavedRuns(saved?.value, org)) return null
+    entry.source.seed(saved.value.runs)
+    entry.restored = true
+    const restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
+    entry.base = restored
+    entry.snapshot = capRunsSnapshot(restored)
+    void loadInFull(org)
+    return entry.snapshot
   }
 
   function compose(org: string, me: string, runs: RunSummary[], message?: string): RunsSnapshot {
@@ -224,10 +257,13 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       entry.watched = watched
       const loaded = kind === 'full' ? await entry.source.full(me, projects, watched, signal) : await entry.source.background(me, projects, watched, signal)
       signal.throwIfAborted()
-      if (kind === 'full') entry.fullAt = now()
+      if (kind === 'full') Object.assign(entry, { fullAt: now(), restored: false })
       entry.failure = null
       const runs = await settle(org, entry, loaded.runs, watched, loaded.runs, signal)
-      return publish(entry, compose(org, me, runs, offMessage(loaded)))
+      const base = compose(org, me, runs, offMessage(loaded))
+      if (kind === 'full') deps.persisted.save(org, 'runs', me, capRunsSnapshot(base, VALUE_BUDGET_BYTES))
+      deps.savedTables.save(org, me)
+      return publish(entry, base)
     } catch (error) {
       if (signal.aborted) throw notConnected()
       throw fail(entry, error)
@@ -254,7 +290,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const { signal } = link
     try {
       const base = entry.base
-      if (!base || now() < entry.pausedUntil) return
+      if (!base || entry.restored || now() < entry.pausedUntil) return
       const status = await statusOf(org)
       const keys = await deps.watchList.list(org)
       entry.watched = keys
@@ -283,7 +319,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
   async function poll(org: string, signal: AbortSignal): Promise<void> {
     try {
-      await untilAborted(load(org, visible.has(org) ? 'full' : 'background'), signal)
+      await untilAborted(load(org, visible.has(org) || entries.get(org)?.restored ? 'full' : 'background'), signal)
     } finally {
       if (!signal.aborted && jobs.has(org)) upsertRuns(org)
     }
@@ -312,7 +348,9 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   function cachedRun(org: string, buildId: number): RunSummary | null {
-    return entries.get(org)?.base?.runs.find(run => run.buildId === buildId) ?? null
+    const entry = entries.get(org)
+    if (!entry || entry.restored) return null
+    return entry.base?.runs.find(run => run.buildId === buildId) ?? null
   }
 
   function isWatched(org: string, buildId: number): boolean {
@@ -320,9 +358,11 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   async function snapshot(org: string): Promise<RunsSnapshot> {
-    await statusOf(org)
+    const status = await statusOf(org)
     const entry = entries.get(org)
     if (fresh(entry)) return entry.snapshot
+    const restored = await restore(org, status)
+    if (restored) return restored
     try {
       return await load(org, 'full')
     } catch (error) {
@@ -403,7 +443,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const status = await statusOf(org)
       const entry = entryOf(org)
       const wanted = key.approvalId.toLowerCase()
-      for (const run of entry.base?.runs ?? []) {
+      for (const run of entry.restored ? [] : (entry.base?.runs ?? [])) {
         const approval = run.approvals.find(item => item.projectId === key.projectId && item.approvalId.toLowerCase() === wanted)
         if (approval) return { run, approval }
       }
@@ -446,11 +486,11 @@ function mergeWatched(current: RunSummary[], read: RunSummary[]): RunSummary[] {
   return orderRuns([...byId.values()])
 }
 
-function capRunsSnapshot(snapshot: RunsSnapshot): RunsSnapshot {
+function capRunsSnapshot(snapshot: RunsSnapshot, budget = POST_BUDGET_BYTES): RunsSnapshot {
   const runs = snapshot.runs.map(run => (run.stages && run.stages.length > MAX_STAGE_CHIPS ? { ...run, stages: run.stages.slice(0, MAX_STAGE_CHIPS) } : run))
   const message = joinMessages(snapshot.message, RUNS_TRIMMED)
-  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, runs: [], message })
-  const kept = newestThatFit(runs, budget, run => (isActive(run) ? Infinity : run.queuedAt), MAX_RUNS)
+  const room = budget - byteLength({ ...snapshot, runs: [], message })
+  const kept = newestThatFit(runs, room, run => (isActive(run) ? Infinity : run.queuedAt), MAX_RUNS)
   if (kept.size === runs.length) return { ...snapshot, runs }
   return { ...snapshot, runs: runs.filter(run => kept.has(run)), message }
 }
@@ -461,4 +501,12 @@ function offMessage({ off }: RunsLoad): string | undefined {
     off.skippedApprovals ? APPROVALS_UNREADABLE : undefined,
     off.environments ? APPROVAL_ENVIRONMENTS_UNREAD : undefined
   )
+}
+
+function isSavedRuns(value: unknown, org: string): value is RunsSnapshot {
+  return isRecord(value) && value.org === org && Array.isArray(value.runs) && value.runs.every(isRecord) && isRecord(value.counts) && Number.isFinite(value.updatedAt)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
