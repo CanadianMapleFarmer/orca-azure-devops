@@ -21,7 +21,7 @@ import { isMalformed } from '../ado/shape'
 import { failuresOf, getTimeline, mergeTimeline, runStages, type RawTimeline } from '../ado/timeline'
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes } from '../budget'
 import { fly, join, type Flight } from '../data/context'
-import type { Entities } from '../data/entities'
+import type { Entities, Table } from '../data/entities'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -64,12 +64,20 @@ interface RunTarget extends RunKey {
 
 interface OrgScope {
   controller: AbortController
+  timelines: Table<RawTimeline>
+}
+
+interface Source {
+  http: AdoHttp
+  timelines: Table<RawTimeline>
 }
 
 interface Reads {
   build: RawBuild
   timeline: RawTimeline
   logLines: ReadonlyMap<number, number>
+  ticks: number
+  awaitingApproval: boolean
   approvals: ApprovalSummary[]
   notes: string | undefined
 }
@@ -90,8 +98,11 @@ interface Loaded {
   failure: unknown
 }
 
-const ACTIVE_MS = { visibleMs: 5_000, backgroundMs: 5_000 }
-const FINISHED_MS = { visibleMs: 60_000, backgroundMs: 60_000 }
+const RUNNING_MS = { visibleMs: 5_000, backgroundMs: 5_000, quietMax: 4 }
+const WAITING_MS = { visibleMs: 30_000, backgroundMs: 30_000, quietMax: 2 }
+const FINISHED_MS = { visibleMs: 60_000, backgroundMs: 60_000, quietMax: 4 }
+const BUILD_EVERY = 4
+const LOGS_EVERY = 2
 const FRESH_MS = 5_000
 const MAX_CACHED_VIEWS = 10
 const IN_FLIGHT = 4
@@ -100,6 +111,7 @@ const ISSUE_LIMITS = [Infinity, TRIMMED_ISSUES, 0]
 const MAX_RECORDS = 2_000
 const PENDING = 'pending'
 const IN_PROGRESS = 'inProgress'
+const GONE = Symbol('gone')
 
 export function createRunViews(deps: RunViewsDeps): RunViews {
   const { scheduler, now } = deps
@@ -116,7 +128,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
   function scopeOf(org: string): OrgScope {
     const existing = scopes.get(org)
     if (existing) return existing
-    const scope = { controller: new AbortController() }
+    const scope = { controller: new AbortController(), timelines: deps.entities.of(org).timelines }
     scopes.set(org, scope)
     return scope
   }
@@ -151,9 +163,11 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     return held.view !== null && now() - held.at < FRESH_MS
   }
 
-  function intervalsOf(target: RunTarget) {
-    const build = views.get(viewKey(target.org, target.buildId))?.reads?.build
-    return build && finishedStatus(build.status) ? FINISHED_MS : ACTIVE_MS
+  function cadenceOf(target: RunTarget) {
+    const reads = views.get(viewKey(target.org, target.buildId))?.reads
+    if (!reads) return RUNNING_MS
+    if (finishedStatus(reads.build.status)) return FINISHED_MS
+    return inProgress(reads.timeline) && !reads.awaitingApproval ? RUNNING_MS : WAITING_MS
   }
 
   function sync(key: string): void {
@@ -162,28 +176,29 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
       scheduler.remove(key)
       return
     }
-    scheduler.upsert({ key, org: target.org, ...intervalsOf(target), run: signal => poll(target, signal) })
+    scheduler.upsert({ key, org: target.org, ...cadenceOf(target), run: signal => poll(target, signal) })
     scheduler.setVisible(key, true)
   }
 
-  async function poll(target: RunTarget, signal: AbortSignal): Promise<void> {
+  async function poll(target: RunTarget, signal: AbortSignal): Promise<void | 'unchanged'> {
     try {
-      const failure = await untilAborted(reload(target), signal)
-      if (failure) throw failure
+      const loaded = await untilAborted(reload(target), signal)
+      if (loaded?.failure) throw loaded.failure
+      return loaded && !loaded.changed ? 'unchanged' : undefined
     } finally {
       if (!signal.aborted) sync(viewKey(target.org, target.buildId))
     }
   }
 
-  async function reload(target: RunTarget): Promise<unknown> {
+  async function reload(target: RunTarget): Promise<Loaded | null> {
     const held = hold(target)
     if (fresh(held)) return null
     try {
       const loaded = await load(held)
       if (loaded.changed && connected.has(held.org)) deps.changed({ org: held.org, buildId: held.buildId })
-      return loaded.failure
+      return loaded
     } catch (error) {
-      return error
+      return { view: null, changed: false, failure: error }
     }
   }
 
@@ -243,7 +258,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     try {
       if (link.signal.aborted) throw notConnected()
       const me = (await statusOf(held.org)).account.adoId
-      const reads = await read(withSignal(deps.http, link.signal), held, held.reads, me)
+      const reads = await read({ http: withSignal(deps.http, link.signal), timelines: scope.timelines }, held, held.reads, me)
       link.signal.throwIfAborted()
       return reads && { reads, view: viewOf(held, reads, me) }
     } catch (error) {
@@ -254,19 +269,41 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     }
   }
 
-  async function read(http: AdoHttp, held: Held, previous: Reads | null, me: string): Promise<Reads | null> {
+  async function read(source: Source, held: Held, previous: Reads | null, me: string): Promise<Reads | null> {
+    if (previous && !finishedStatus(previous.build.status)) return follow(source, held, previous, me)
+    const { http } = source
     const { org, projectId, buildId } = held
-    const build = await getBuild(http, org, projectId, buildId).catch((error: unknown) => {
-      if (error instanceof AdoError && error.code === 'not_found') return null
-      throw error
-    })
-    if (!build) return null
-    if (previous && finishedStatus(previous.build.status) && sameFinish(previous.build, build)) return { ...previous, build }
-    const base = previous && !finishedStatus(previous.build.status) ? previous : null
-    const timeline = mergeTimeline(base?.timeline ?? null, await getTimeline(http, org, projectId, buildId, base?.timeline.changeId))
-    const logLines = base && !inProgress(base.timeline) && !inProgress(timeline) ? base.logLines : await listLogs(http, org, projectId, buildId)
-    const waiting = runStages(timeline, logLines, !finishedStatus(build.status)).flatMap(stage => (stage.approvalId ? [stage.approvalId] : []))
-    return { build, timeline, logLines, ...(await approvalsOf(http, held, timeline, waiting, me)) }
+    const build = await unlessGone(getBuild(http, org, projectId, buildId))
+    if (build === GONE) return null
+    if (previous && sameFinish(previous.build, build)) return { ...previous, build }
+    const timeline = await timelineOf(source, held, null)
+    if (timeline === GONE) return null
+    return complete(http, held, { build, timeline, logLines: await listLogs(http, org, projectId, buildId), ticks: 0 }, me)
+  }
+
+  async function follow(source: Source, held: Held, previous: Reads, me: string): Promise<Reads | null> {
+    const { http } = source
+    const { org, projectId, buildId } = held
+    const ticks = previous.ticks + 1
+    const timeline = await timelineOf(source, held, previous.timeline)
+    if (timeline === GONE) return null
+    const build = ticks % BUILD_EVERY === 0 || settled(timeline) ? await unlessGone(getBuild(http, org, projectId, buildId)) : previous.build
+    if (build === GONE) return null
+    const moved = ticks % LOGS_EVERY === 0 || timeline.changeId > previous.timeline.changeId
+    const logLines = moved ? await listLogs(http, org, projectId, buildId) : previous.logLines
+    return complete(http, held, { build, timeline, logLines, ticks }, me)
+  }
+
+  async function timelineOf({ http, timelines }: Source, held: Held, base: RawTimeline | null): Promise<RawTimeline | typeof GONE> {
+    const next = await unlessGone(getTimeline(http, held.org, held.projectId, held.buildId, base?.changeId))
+    if (next === GONE) return GONE
+    return timelines.put(String(held.buildId), mergeTimeline(base, next))
+  }
+
+  async function complete(http: AdoHttp, held: Held, reads: Pick<Reads, 'build' | 'timeline' | 'logLines' | 'ticks'>, me: string): Promise<Reads> {
+    const stages = runStages(reads.timeline, reads.logLines, !finishedStatus(reads.build.status))
+    const waiting = stages.flatMap(stage => (stage.approvalId ? [stage.approvalId] : []))
+    return { ...reads, awaitingApproval: waiting.length > 0, ...(await approvalsOf(http, held, reads.timeline, waiting, me)) }
   }
 
   async function approvalsOf(
@@ -425,6 +462,17 @@ function sameFinish(before: RawBuild, after: RawBuild): boolean {
 
 function inProgress(timeline: RawTimeline): boolean {
   return timeline.records.some(record => record.state === IN_PROGRESS)
+}
+
+function settled(timeline: RawTimeline): boolean {
+  return !timeline.records.some(record => record.state === PENDING || record.state === IN_PROGRESS)
+}
+
+function unlessGone<T>(request: Promise<T>): Promise<T | typeof GONE> {
+  return request.catch((error: unknown) => {
+    if (error instanceof AdoError && error.code === 'not_found') return GONE
+    throw error
+  })
 }
 
 function comparable(view: RunView): string {
