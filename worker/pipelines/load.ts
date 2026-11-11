@@ -6,8 +6,8 @@ import type { NamedItem } from '../ado/core'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { isMalformed, malformed } from '../ado/shape'
-import { approvalPlaceOf, getTimeline, stageChips, type RawTimeline } from '../ado/timeline'
-import type { OrgEntities } from '../data/entities'
+import { approvalPlaceOf, getTimeline, mergeTimeline, stageChips, type RawTimeline } from '../ado/timeline'
+import type { OrgEntities, Stamped } from '../data/entities'
 import { createHeat } from '../data/heat'
 import { MALFORMED } from '../messages'
 
@@ -19,6 +19,7 @@ const MINE_WINDOW_MS = 7 * 24 * 60 * MINUTE
 const MAX_ACTIVE_CHIPS = 8
 const MAX_FINISHED_CHIPS = 8
 const APPROVALS_OFF_MS = 10 * MINUTE
+const SHARED_TIMELINE_MS = 5_000
 
 export interface RunsLoad {
   runs: RunSummary[]
@@ -29,6 +30,7 @@ export interface RunSource {
   full(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
   background(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
   watched(me: string, keys: RunKey[], signal?: AbortSignal): Promise<RunSummary[]>
+  unread(keys: RunKey[], withinMs: number): RunKey[]
   approval(me: string, key: { projectId: string; approvalId: string }, signal?: AbortSignal): Promise<{ run: RunSummary; approval: ApprovalSummary } | null>
   seed(runs: RunSummary[]): void
 }
@@ -67,8 +69,8 @@ interface Kept {
 
 type Kind = 'full' | 'background'
 
-export function createRunSource(http: AdoHttp, org: string, now: () => number, tables: Pick<OrgEntities, 'runChips'>): RunSource {
-  const { runChips } = tables
+export function createRunSource(http: AdoHttp, org: string, now: () => number, tables: Pick<OrgEntities, 'runChips' | 'builds' | 'timelines'>): RunSource {
+  const { runChips, builds, timelines } = tables
   const heat = createHeat(now)
   const kept = new Map<string, Kept>()
   let places = new Map<string, ApprovalPlace>()
@@ -98,9 +100,14 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
     return entry
   }
 
+  function keepBuilds(raws: RawBuild[]): RawBuild[] {
+    for (const raw of raws) builds.put(String(raw.id), raw)
+    return raws
+  }
+
   async function readInto(scoped: AdoHttp, me: string, entry: Kept, projectId: string, list: List): Promise<void> {
-    if (list === 'mine') entry.mine = await listBuilds(scoped, org, projectId, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP })
-    else if (list === 'running') entry.running = await listBuilds(scoped, org, projectId, { statusFilter: 'inProgress', top: RUNNING_TOP })
+    if (list === 'mine') entry.mine = keepBuilds(await listBuilds(scoped, org, projectId, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP }))
+    else if (list === 'running') entry.running = keepBuilds(await listBuilds(scoped, org, projectId, { statusFilter: 'inProgress', top: RUNNING_TOP }))
     else entry.approvals = await pendingIn(scoped, me, projectId)
   }
 
@@ -128,13 +135,21 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
     for (const { projectId, buildId } of wanted) {
       if (!runs.has(buildId)) missing.set(projectId, (missing.get(projectId) ?? new Set()).add(buildId))
     }
-    const batches = await mapLimit([...missing], IN_FLIGHT, ([projectId, ids]) => buildsByIds(scoped, org, projectId, [...ids]))
+    const batches = await mapLimit([...missing], IN_FLIGHT, async ([projectId, ids]) => keepBuilds(await buildsByIds(scoped, org, projectId, [...ids])))
     for (const raw of batches.flat()) if (!runs.has(raw.id)) runs.set(raw.id, toRunSummary(raw, org, me))
     return runs
   }
 
+  async function timelineOf(scoped: AdoHttp, run: RunSummary): Promise<RawTimeline | null> {
+    const key = String(run.buildId)
+    const stored = timelines.get(key)
+    if (stored && (now() - stored.at < SHARED_TIMELINE_MS || finalFor(run, stored))) return stored.value
+    const answer = await getTimeline(scoped, org, run.projectId, run.buildId, stored?.value.changeId)
+    return answer || stored ? timelines.put(key, mergeTimeline(stored?.value ?? null, answer)) : null
+  }
+
   async function timelinesOf(scoped: AdoHttp, runs: RunSummary[]): Promise<Map<number, RawTimeline | null>> {
-    const read = await mapLimit(runs, IN_FLIGHT, run => getTimeline(scoped, org, run.projectId, run.buildId))
+    const read = await mapLimit(runs, IN_FLIGHT, run => timelineOf(scoped, run))
     return new Map(runs.map((run, index) => [run.buildId, read[index]]))
   }
 
@@ -222,6 +237,10 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
       return [...runs.values()].map(run => ({ ...run, watched: true }))
     },
 
+    unread(keys, withinMs) {
+      return keys.filter(key => builds.fresh(String(key.buildId), withinMs) === undefined)
+    },
+
     async approval(me, key, signal) {
       const scoped = withSignal(http, signal)
       const wanted = key.approvalId.toLowerCase()
@@ -235,7 +254,7 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
       if (!build) return null
       const run = toRunSummary(build, org, me)
       const known = places.get(placeKey(raw.id))
-      const timeline = known ? null : await getTimeline(scoped, org, key.projectId, run.buildId)
+      const timeline = known ? null : await timelineOf(scoped, run)
       const place = known ?? (await placeApproval(scoped, org, key.projectId, raw.id, timeline))
       places.set(placeKey(raw.id), place)
       const approval = toApprovalSummary(raw, { projectId: key.projectId, me, stage: place.stage, environment: place.environment })
@@ -284,6 +303,14 @@ export function waitingIf(state: RunState, approvals: readonly ApprovalSummary[]
 
 function withPending(pending: Pending[], skipped = false): Approvals {
   return { pending, skipped }
+}
+
+export function settled(timeline: RawTimeline): boolean {
+  return !timeline.records.some(record => record.state === 'pending' || record.state === 'inProgress')
+}
+
+function finalFor(run: RunSummary, stored: Stamped<RawTimeline>): boolean {
+  return !isActive(run) && run.finishedAt !== null && stored.at >= run.finishedAt && settled(stored.value)
 }
 
 function found(entry: Kept): boolean {

@@ -3,6 +3,7 @@ import type { RunSummary } from '../../src/shared/pipelines'
 import type { RawApproval } from '../ado/approvals'
 import type { RawBuild } from '../ado/builds'
 import { AdoError, createAdoHttp } from '../ado/http'
+import { mergeTimeline, type RawTimeline } from '../ado/timeline'
 import { fixture, json, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { createEntities } from '../data/entities'
 import { PLATFORM } from '../prs/fake-prs'
@@ -178,6 +179,86 @@ test('chips: at most 8 active runs every load, and at most 8 newly finished runs
   clock.now += 30_000
   await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(ado.calls.slice(again)).sort(), [...activeFirst, 4512].sort(), 'a run that finished again is read again')
+})
+
+function timelineReads(calls: readonly AdoCall[], buildId: number): (string | null)[] {
+  return calls.filter(call => isTimeline(call) && buildIdOf(call) === buildId).map(call => call.query.get('changeId'))
+}
+
+function stateOf(runs: readonly RunSummary[], buildId: number, stage: string): string | undefined {
+  return runs.find(run => run.buildId === buildId)?.stages?.find(chip => chip.name === stage)?.state
+}
+
+test("the runs list reads an active run's timeline with the stored changeId and merges it", async () => {
+  const { ado, clock, source, tables } = setup()
+  ado.on(call => isTimeline(call) && buildIdOf(call) === 4520 && call.query.has('changeId'), () => json(200, fixture('timeline-4520-delta')))
+  const first = await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4520), [null])
+  assert.equal(stateOf(first.runs, 4520, 'Deploy production'), 'waiting')
+
+  clock.now += 30_000
+  const second = await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4520), [null, '41'], 'the second read asks only for changes since the first answer')
+  assert.deepEqual(second.runs.find(run => run.buildId === 4520)?.stages?.map(chip => [chip.name, chip.state]), [
+    ['Build', 'succeeded'],
+    ['Image', 'succeeded'],
+    ['Deploy production', 'running']
+  ], 'the delta is merged into the records read before')
+  assert.equal(tables.timelines.get('4520')?.value.changeId, 44)
+})
+
+test('the runs list skips a timeline a run view read in the last 5 seconds', async () => {
+  const { ado, clock, source, tables } = setup()
+  const viewed = mergeTimeline(fixture<RawTimeline>('timeline-4520'), fixture<RawTimeline>('timeline-4520-delta'))
+  tables.timelines.put('4520', viewed, T0 - 4_999)
+
+  const first = await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4520), [], 'read by the run view a moment ago')
+  assert.equal(stateOf(first.runs, 4520, 'Deploy production'), 'running', 'the chips come from the shared timeline')
+  assert.equal(timelineReads(ado.calls, 4531).length, 1, 'other runs are still read')
+
+  clock.now += 1
+  ado.on(call => isTimeline(call) && buildIdOf(call) === 4520, () => json(200, { changeId: 44, records: [] }))
+  await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4520), ['44'], 'once 5 seconds old it is read again, from its changeId')
+})
+
+test("a finished run's timeline is never read again", async () => {
+  const { ado, clock, source, tables } = setup()
+  tables.timelines.put('4512', fixture<RawTimeline>('timeline-4512'), T0 - MINUTE)
+  const first = await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4512), [], 'a run view read it after the run finished')
+  assert.deepEqual(first.runs.find(run => run.buildId === 4512)?.stages?.map(chip => chip.state), ['succeeded', 'failed', 'skipped'])
+
+  const done = fixture<RawTimeline>('timeline-4520')
+  done.changeId = 50
+  for (const record of done.records) Object.assign(record, { state: 'completed', result: record.result ?? 'succeeded' })
+  ado.runs.timelines.set(4520, done)
+  Object.assign(ado.runs.builds.get(4520) ?? assert.fail('no build 4520'), { status: 'completed', result: 'succeeded', finishTime: iso(T0 + MINUTE) })
+  clock.now += 2 * MINUTE
+  await source.full(ME, PROJECTS, [], true)
+  assert.deepEqual(timelineReads(ado.calls, 4520), [null, '41'], 'read once more when it finishes')
+
+  for (const [key] of tables.runChips.entries()) tables.runChips.drop(key)
+  for (let load = 0; load < 3; load += 1) {
+    clock.now += MINUTE
+    await source.full(ME, PROJECTS, [], true)
+  }
+  assert.deepEqual(timelineReads(ado.calls, 4520), [null, '41'], 'then never again, even with its chips forgotten')
+  assert.deepEqual(timelineReads(ado.calls, 4512), [])
+})
+
+test('every build the runs list reads is kept in the builds table', async () => {
+  const { ado, clock, source, tables } = setup()
+  finished(ado, 4401, T0 - 60 * MINUTE, { requestedFor: { id: GRACE, displayName: 'Grace Hopper' } })
+  await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4401 }], true)
+  assert.deepEqual(tables.builds.entries().map(([key]) => Number(key)).sort(), [4401, 4490, 4498, 4505, 4512, 4520, 4531])
+  assert.ok(tables.builds.entries().every(([, entry]) => entry.at === T0))
+
+  clock.now += 30_000
+  await source.watched(ME, [{ projectId: PROJECT, buildId: 4531 }])
+  assert.equal(tables.builds.get('4531')?.at, T0 + 30_000, 'a watched read refreshes it too')
+  assert.deepEqual(source.unread([{ projectId: PROJECT, buildId: 4531 }, { projectId: PROJECT, buildId: 4520 }], 30_000), [{ projectId: PROJECT, buildId: 4520 }])
 })
 
 test('seeded finished runs keep their chips without a timeline read; runs still going or never read are not seeded', async () => {
