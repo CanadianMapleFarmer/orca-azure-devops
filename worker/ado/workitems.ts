@@ -1,7 +1,8 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
+import type { ItemRecord } from '../data/records'
 import { MALFORMED } from '../messages'
-import type { AdoHttp } from './http'
-import { expectList, shaped } from './shape'
+import { AdoError, type AdoHttp } from './http'
+import { expectList, expectText, shaped } from './shape'
 
 export interface RawWorkItem {
   id: number
@@ -18,21 +19,31 @@ const BATCH_SIZE = 200
 export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
 export const CHILD_LINK = 'System.LinkTypes.Hierarchy-Forward'
 export const TASK_FIELDS: readonly string[] = ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.AssignedTo', 'System.Parent']
+export const KEPT_FIELDS: ReadonlySet<string> = new Set([
+  'System.Id',
+  'System.TeamProject',
+  'System.WorkItemType',
+  'System.Title',
+  'System.State',
+  'System.AssignedTo',
+  'System.Parent',
+  'System.ChangedDate',
+  'System.AreaPath'
+])
+const REV_FIELDS: readonly string[] = ['System.Id']
+const KANBAN_FIELD = /^WEF_[0-9A-Fa-f]+_Kanban\./
 const CHILD_URL = /\/workItems\/(\d+)$/
+const IN_PROJECT = '[System.TeamProject] = @project'
 
-export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
-  return select([
-    '[System.TeamProject] = @project',
-    '[System.AssignedTo] = @Me',
-    notIn('[System.State]', allDoneStates)
-  ])
+export interface IdsAt { ids: number[]; asOf: string }
+
+export function mineClause(allDoneStates: string[]): string {
+  return clauses(['[System.AssignedTo] = @Me', notIn('[System.State]', allDoneStates)])
 }
 
-export function wiqlBoard(cfg: BoardConfig, everyone: boolean): string {
-  const doneStates = Object.values(cfg.doneStates).flat()
-  const doneClause = notIn('[System.State]', doneStates)
-  return select([
-    '[System.TeamProject] = @project',
+export function boardClause(cfg: BoardConfig, everyone: boolean): string {
+  const doneClause = notIn('[System.State]', Object.values(cfg.doneStates).flat())
+  return clauses([
     `[System.WorkItemType] IN (${list(cfg.requirementTypes)})`,
     areaClause(cfg.areaPaths),
     everyone ? undefined : '[System.AssignedTo] = @Me',
@@ -40,28 +51,65 @@ export function wiqlBoard(cfg: BoardConfig, everyone: boolean): string {
   ])
 }
 
-export async function queryIds(http: AdoHttp, org: string, projectId: string, teamId: string, wiql: string): Promise<number[]> {
-  const { data } = await http.json<{ workItems: { id: number }[] }>({
+export function membershipWiql(clause: string): string {
+  return select([IN_PROJECT, clause])
+}
+
+export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
+  return membershipWiql(mineClause(allDoneStates))
+}
+
+export function wiqlBoard(cfg: BoardConfig, everyone: boolean): string {
+  return membershipWiql(boardClause(cfg, everyone))
+}
+
+export function deltaWiql(clause: string, since: string, known: readonly number[]): string {
+  const outside = known.length === 0 ? '' : ` OR [System.Id] IN (${known.join(', ')})`
+  return select([`[System.ChangedDate] >= ${since}`, `((${IN_PROJECT} AND (${clause}))${outside})`])
+}
+
+export function stillInWiql(clause: string, ids: readonly number[]): string {
+  return `SELECT [System.Id] FROM WorkItems WHERE ${IN_PROJECT} AND (${clause}) AND [System.Id] IN (${ids.join(', ')})`
+}
+
+export async function queryIdsAt(http: AdoHttp, org: string, projectId: string, teamId: string, wiql: string, timePrecision: boolean): Promise<IdsAt> {
+  const { data } = await http.json<{ workItems: { id: number }[]; asOf: unknown }>({
     org,
     project: projectId,
     path: `/${encodeURIComponent(teamId)}/_apis/wit/wiql`,
     method: 'POST',
-    query: { $top: WIQL_TOP },
+    query: { $top: WIQL_TOP, timePrecision: timePrecision || undefined },
     body: { query: wiql }
   })
-  return shape(() => expectList<{ id: number }>(data.workItems).map(item => item.id))
+  return shape(() => ({ ids: expectList<{ id: number }>(data.workItems).map(item => item.id), asOf: serverTime(data.asOf) }))
 }
 
-export async function queryBoardIds(
-  http: AdoHttp,
-  org: string,
-  projectId: string,
-  teamId: string,
-  cfg: BoardConfig,
-  everyone: boolean
-): Promise<number[]> {
-  if (cfg.requirementTypes.length === 0) return []
-  return queryIds(http, org, projectId, teamId, wiqlBoard(cfg, everyone))
+export async function readRevs(http: AdoHttp, org: string, projectId: string, ids: number[]): Promise<Map<number, number>> {
+  const found = await readFields(http, org, projectId, ids, REV_FIELDS)
+  return new Map(found.map(raw => [raw.id, raw.rev]))
+}
+
+export function isDatePrecisionError(error: unknown): boolean {
+  return error instanceof AdoError && error.code === 'bad_request' && /date precision/i.test(error.message)
+}
+
+export function toRecord(raw: RawWorkItem, withRelations: boolean): ItemRecord {
+  const fields = Object.fromEntries(Object.entries(raw.fields).filter(([name]) => KEPT_FIELDS.has(name) || KANBAN_FIELD.test(name)))
+  const relations: unknown = raw.relations
+  const links = withRelations && Array.isArray(relations) ? relations.flatMap(link => (isKeptLink(link) ? [{ rel: link.rel, url: link.url }] : [])) : undefined
+  return { id: raw.id, rev: raw.rev, url: raw.url, fields, ...(links ? { relations: links } : {}), withRelations }
+}
+
+function isKeptLink(link: unknown): link is { rel: string; url: string } {
+  if (typeof link !== 'object' || link === null) return false
+  const { rel, url } = link as { rel?: unknown; url?: unknown }
+  return typeof url === 'string' && (rel === CHILD_LINK || (rel === 'ArtifactLink' && url.startsWith(PR_ARTIFACT_PREFIX)))
+}
+
+function serverTime(value: unknown): string {
+  const text = expectText(value)
+  if (Number.isNaN(Date.parse(text))) throw new TypeError('expected a date')
+  return text
 }
 
 export function hydrate(http: AdoHttp, org: string, projectId: string, ids: number[]): Promise<RawWorkItem[]> {
@@ -142,9 +190,12 @@ export function workItemUrl(orgUrl: string, project: string, id: number): string
   return `${orgUrl}/${encodeURIComponent(project)}/_workitems/edit/${id}`
 }
 
-function select(conditions: (string | undefined)[]): string {
-  const where = conditions.filter(Boolean).join(' AND ')
-  return `SELECT [System.Id] FROM WorkItems WHERE ${where} ORDER BY [System.ChangedDate] DESC`
+function select(conditions: string[]): string {
+  return `SELECT [System.Id] FROM WorkItems WHERE ${clauses(conditions)} ORDER BY [System.ChangedDate] DESC`
+}
+
+function clauses(conditions: (string | undefined)[]): string {
+  return conditions.filter(Boolean).join(' AND ')
 }
 
 function notIn(field: string, values: string[]): string | undefined {

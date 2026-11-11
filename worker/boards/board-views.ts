@@ -2,17 +2,20 @@ import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
 import type { BoardArgs } from '../ado/board-config'
 import { failureMessage, joinMessages, LAST_BOARD } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
+import type { SyncState } from './sync'
 
 export interface BoardChange { org: string; teamId: string; boardId: string }
 export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean }
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
-export interface BoardView extends BoardRequest { at: number; result: BoardResult }
+export interface Synced { sync: SyncState | null; known: number[] }
+export interface BoardLoad extends Synced { result: BoardResult }
+export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult }
 export interface BoardRef { teamId: string; boardId: string }
 
 export interface BoardViewsDeps {
   scheduler: Scheduler
   now: () => number
-  load: (request: BoardRequest, signal?: AbortSignal) => Promise<BoardResult>
+  load: (request: BoardRequest & Synced, signal?: AbortSignal) => Promise<BoardLoad>
   polls: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
@@ -53,18 +56,17 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   async function reload(key: string, signal: AbortSignal): Promise<void | 'unchanged'> {
     const view = views.get(key)
     if (!view || !isStale(view)) return
-    let result: BoardResult
+    let loaded: BoardLoad
     try {
-      result = await deps.load(view, signal)
+      loaded = await deps.load(view, signal)
     } catch (error) {
       if (views.get(key) === view && !signal.aborted) failed(view, error)
       throw error
     }
     if (views.get(key) !== view) return
     const before = JSON.stringify(view.result)
-    view.result = result
-    view.at = deps.now()
-    if (JSON.stringify(result) === before) return 'unchanged'
+    Object.assign(view, loaded, { at: deps.now() })
+    if (JSON.stringify(loaded.result) === before) return 'unchanged'
     changed(view)
   }
 
@@ -134,13 +136,13 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       }
       const request = { key, org, args, everyone }
       const generation = generationOf(org, key)
-      const result = await deps.load(request)
-      if (generationOf(org, key) !== generation) return result
-      views.set(key, { ...request, at: deps.now(), result })
+      const loaded = await deps.load({ ...request, sync: null, known: [] })
+      if (generationOf(org, key) !== generation) return loaded.result
+      views.set(key, { ...request, ...loaded, at: deps.now() })
       touch(key)
       trim(org, key)
       sync(org)
-      return result
+      return loaded.result
     },
 
     get: key => views.get(key),

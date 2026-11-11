@@ -17,9 +17,13 @@ import {
   FEATURES,
   FEATURES_WEF,
   isBatch,
+  isDelta,
   isFieldsBatch,
+  isHydrate,
   isPatch,
   isPullRequest,
+  isRevRead,
+  isStillIn,
   isTypeStates,
   isWiql,
   json,
@@ -60,8 +64,8 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
 }
 
 function harness(first: OrgStatus = status()) {
-  const ado = fakeAdo()
   const clock = fakeClock(T0)
+  const ado = fakeAdo({ now: clock.now })
   const storage: Record<string, unknown> = {}
   const heldReads = new Map<string, Promise<void>>()
   const store: StorePort = {
@@ -127,8 +131,8 @@ function item(snapshot: WorkSnapshot | undefined, id: number): WorkItemSummary |
   return [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(entry => entry.id === id)
 }
 
-const isMineWiql = (call: AdoCall) => isWiql(call) && !call.body.query.includes('[System.WorkItemType] IN')
-const isBoardWiql = (call: AdoCall) => isWiql(call) && call.body.query.includes('[System.WorkItemType] IN')
+const isMineWiql = (call: AdoCall) => isWiql(call) && !isStillIn(call) && !call.body.query.includes('[System.WorkItemType] IN')
+const isBoardWiql = (call: AdoCall) => isWiql(call) && !isStillIn(call) && call.body.query.includes('[System.WorkItemType] IN')
 
 function story(id: number, changedAt: number, title = `Story ${id}`): RawWorkItem {
   return {
@@ -632,7 +636,7 @@ test('the Work job runs every minute while visible, backs off to 2 min while unc
 
   await h.clock.tick(MINUTE)
   assert.equal(h.ado.count(isMineWiql), 3, 'back-off stops at 2 min')
-  h.ado.items.get(1204)!.rev = 10
+  h.ado.change(1204)
   await h.clock.tick(MINUTE)
   assert.equal(h.ado.count(isMineWiql), 4)
   await h.clock.tick(MINUTE)
@@ -765,7 +769,7 @@ test('the board loads at 30 s, backs off to 60 s while unchanged, and returns to
 
   await h.clock.tick(30_000)
   assert.equal(h.ado.count(isBoardWiql), 2, 'an unchanged board backs off')
-  h.ado.items.get(1205)!.rev = 4
+  h.ado.change(1205)
   await h.clock.tick(30_000)
   assert.equal(h.ado.count(isBoardWiql), 3, 'the next reload comes 60 s after the unchanged one')
   assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
@@ -929,13 +933,13 @@ test('details load the item with its description, comments and links', async () 
   assert.deepEqual(added, { id: 77, author: 'Alex Contoso', createdAt: Date.parse('2026-11-04T09:00:00Z'), textMd: 'Ready for review' })
 })
 
-const isStoriesWiql = (call: AdoCall) => isBoardWiql(call) && call.body.query.includes("'User Story'")
-const isFeaturesWiql = (call: AdoCall) => isBoardWiql(call) && call.body.query.includes("IN ('Feature')")
+const onBoard = (types: string) => (call: AdoCall) => isWiql(call) && call.body.query.includes(`[System.WorkItemType] IN (${types})`)
+const isStoriesWiql = (call: AdoCall) => onBoard("'User Story', 'Bug'")(call) && !isStillIn(call)
+const isFeaturesWiql = (call: AdoCall) => onBoard("'Feature'")(call) && !isStillIn(call)
 
 function boardIds(h: ReturnType<typeof harness>, stories: number[], features: number[] = [1100]): void {
-  const ids = (list: number[]) => json(200, { workItems: list.map(id => ({ id })) })
-  h.ado.on(isStoriesWiql, () => ids(stories))
-  h.ado.on(isFeaturesWiql, () => ids(features))
+  h.ado.on(onBoard("'User Story', 'Bug'"), call => h.ado.answerWiql(call, stories))
+  h.ado.on(onBoard("'Feature'"), call => h.ado.answerWiql(call, features))
 }
 
 const STORIES_BOARD = { org: ORG, projectId: PROJECT, teamId: TEAM, boardId: STORIES }
@@ -1026,18 +1030,19 @@ test('a refused move of an item only on the board refreshes the board', async ()
 test('a "mine" load in flight when a move lands does not bring the old item back', async () => {
   const h = harness()
   await h.service.refresh(ORG)
-  const held = h.ado.hold(call => isBatch(call) && call.body.ids.length === 4)
+  h.ado.change(1204, { fields: { 'System.Title': 'Add vehicle search and sort filters' } })
+  const held = h.ado.hold(isHydrate)
   const polling = h.service.refresh(ORG)
   await drain()
 
-  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 10, to: { column: 'Resolved' } })
   held.release()
   const landed = await polling
   assert.deepEqual(item(landed, 1204), moved)
   assert.deepEqual(item(h.posts.at(-1), 1204), moved)
 
-  h.ado.items.get(1204)!.rev = 11
-  assert.equal(item(await h.service.refresh(ORG), 1204)?.rev, 11)
+  h.ado.change(1204)
+  assert.equal(item(await h.service.refresh(ORG), 1204)?.rev, 12)
 })
 
 test('the Work job idles while the Work tab is hidden', async () => {
@@ -1058,10 +1063,11 @@ test('a board load in flight when a move lands does not bring the old item back'
   h.setOrgs([status()])
   boardIds(h, [1204, 1205])
   await h.service.board({ ...STORIES_BOARD, everyone: false })
-  const held = h.ado.hold(call => isBatch(call) && call.body.ids.join() === '1204,1205')
+  h.ado.change(1204, { fields: { 'System.Title': 'Add vehicle search and sort filters' } })
+  const held = h.ado.hold(isHydrate)
   await h.clock.tick(30_000)
 
-  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' }, board: { teamId: TEAM, boardId: STORIES } })
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 10, to: { column: 'Resolved' }, board: { teamId: TEAM, boardId: STORIES } })
   held.release()
   await drain()
   assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: false })).items[0], moved)
@@ -1130,7 +1136,7 @@ test('without a board, a move prefers an open board over the "mine" board when b
   const teamPath = `/${ORG}/${PROJECT}/${team}/_apis`
   h.ado.on(call => call.path === `${teamPath}/work/boards/${boardId}`, () => json(200, { ...stories, id: boardId }))
   h.ado.on(call => call.path === `${teamPath}/work/teamsettings/teamfieldvalues`, () => json(200, fixture('team-field-values')))
-  h.ado.on(call => call.path === `${teamPath}/wit/wiql`, () => json(200, { workItems: [{ id: 1204 }] }))
+  h.ado.on(call => call.path === `${teamPath}/wit/wiql`, call => h.ado.answerWiql(call, [1204]))
   await h.service.refresh(ORG)
   await h.service.board({ org: ORG, projectId: PROJECT, teamId: team, boardId, everyone: true })
 
@@ -1150,7 +1156,7 @@ test('a panel move of a "mine" item ignores an open board in another project tha
   h.ado.on(call => call.path === `${base}/${team}/_apis/work/teamsettings/teamfieldvalues`, () => json(200, fixture('team-field-values')))
   h.ado.on(call => call.path === `${base}/_apis/wit/workitemtypes/User Story/states`, () => json(200, fixture('states-user-story')))
   h.ado.on(call => call.path === `${base}/_apis/wit/workitemtypes/Bug/states`, () => json(200, fixture('states-bug')))
-  h.ado.on(call => call.path === `${base}/${team}/_apis/wit/wiql`, () => json(200, { workItems: [] }))
+  h.ado.on(call => call.path === `${base}/${team}/_apis/wit/wiql`, call => h.ado.answerWiql(call, []))
   await h.service.refresh(ORG)
   await h.service.board({ org: ORG, projectId: project, teamId: team, boardId, everyone: true })
 
@@ -1293,7 +1299,7 @@ test('showing a held board older than 30 s returns it at once and revalidates in
   await h.clock.tick(MINUTE)
 
   const gate = h.ado.hold(isStoriesWiql)
-  h.ado.items.get(1205)!.rev = 4
+  h.ado.change(1205)
   h.service.visibility({ surface: 'board', org: ORG, visible: true, board: STORIES_REF })
   let answered: BoardResult | undefined
   void h.service.board({ ...STORIES_BOARD, everyone: true }).then(result => (answered = result))
@@ -1650,7 +1656,9 @@ test('a failed children read still posts the items, with no task lists and a mes
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const cfg = await loadBoardConfig(http, { org: ORG, projectId: PROJECT, teamId: TEAM })
   const controller = new AbortController()
-  const loading = loadMine(createItemSource(http, ORG, ORG_URL, () => T0, createEntities(() => T0).of(ORG)).withSignal(controller.signal), cfg, { id: ALEX.adoId, uniqueName: ALEX.uniqueName })
+  const members = ado.state.wiql
+  const source = createItemSource(http, ORG, ORG_URL, () => T0, createEntities(() => T0).of(ORG)).withSignal(controller.signal)
+  const loading = loadMine(source, cfg, { id: ALEX.adoId, uniqueName: ALEX.uniqueName }, { members, stale: new Set(members) })
   const settled = loading.then(() => 'resolved', (error: unknown) => error)
   for (let turn = 0; turn < 10 && hung.length === 0; turn += 1) await drain()
   assert.equal(hung.length, 1)
@@ -1683,7 +1691,8 @@ test('a moved task shows its new state after the next poll while ADO still retur
   h.ado.items.set(1207, before)
   const polled = await h.service.refresh(ORG)
   assert.equal(h.ado.calls.filter(isFieldsBatch).length, 2, 'the poll read the children again')
-  assert.equal(item(polled, 1207)?.state, 'Closed')
+  assert.equal(h.entities.of(ORG).workItems.get('1207')?.value.rev, 2, 'the older rev never replaced the move')
+  assert.equal(item(polled, 1207), undefined, 'a Closed task leaves the open items, as it does once ADO catches up')
   const list = listOf(polled, 1204)
   assert.deepEqual(list?.tasks.find(entry => entry.id === 1207), { id: 1207, title: 'Write the filter tests', state: 'Closed', done: true, assignee: 'Alex Contoso', mine: true })
   assert.deepEqual([list?.total, list?.done], [3, 2])
@@ -1697,4 +1706,122 @@ test('the children read asks for at most 1,000 ids, 200 a request', async () => 
   assert.deepEqual(h.ado.calls.filter(isFieldsBatch).map(call => call.body.ids.length), [200, 200, 200, 200, 200])
   assert.equal(h.ado.calls.filter(isFieldsBatch).flatMap(call => call.body.ids).includes(21_000), false, 'the 1,001st child is not read')
   assert.deepEqual([list?.tasks.length, list?.total], [20, 1000])
+})
+
+const ON_SCREEN = { surface: 'work', org: ORG, visible: true } as const
+
+async function shownWork(h: ReturnType<typeof harness>): Promise<void> {
+  h.service.visibility(ON_SCREEN)
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+}
+
+test('a quiet Work tick sends only the delta query', async () => {
+  const h = harness()
+  await shownWork(h)
+  const calls = h.ado.calls.length
+  await h.clock.tick(MINUTE)
+  const tick = h.ado.calls.slice(calls)
+  assert.equal(tick.length, 1)
+  assert.ok(isDelta(tick[0]) && isMineWiql(tick[0]), tick[0].body?.query)
+  assert.equal(tick[0].query.get('timePrecision'), 'true')
+})
+
+test('a card moved by someone else appears after one delta, its re-check and one hydrate', async () => {
+  const h = harness()
+  await shownWork(h)
+  const calls = h.ado.calls.length
+  h.ado.change(1204, { fields: { [`${WEF}.Column`]: 'Resolved', [`${WEF}.Column.Done`]: false } })
+  await h.clock.tick(MINUTE)
+  const tick = h.ado.calls.slice(calls)
+  assert.deepEqual(tick.map(call => [isDelta(call), isStillIn(call), isHydrate(call)]), [[true, false, false], [false, true, false], [false, false, true]])
+  assert.deepEqual(tick[2].body.ids, [1204])
+  assert.deepEqual([item(h.posts.at(-1), 1204)?.column, item(h.posts.at(-1), 1204)?.rev], ['Resolved', 10])
+})
+
+test("the user's move survives a delta that returns the older rev", async () => {
+  const h = harness()
+  await shownWork(h)
+  const before = structuredClone(h.ado.items.get(1204)!)
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  await h.clock.tick(MINUTE)
+  assert.deepEqual(item(h.posts.at(-1), 1204), moved, 'the next delta read the move back')
+
+  h.ado.change(1204, { rev: 10 })
+  let lagging = 0
+  h.ado.on(
+    call => isHydrate(call) && call.body.ids.includes(1204),
+    () => {
+      lagging += 1
+      return json(200, { count: 1, value: [before] })
+    }
+  )
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(lagging, 1, 'a lagging replica answered with the old rev')
+  assert.deepEqual(item(h.posts.at(-1), 1204), moved)
+})
+
+test('a deleted item leaves the board at the next audit', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.ado.remove(1205)
+  await h.clock.tick(10 * MINUTE)
+  assert.deepEqual(h.boardPosts, [], 'a delta cannot see a deletion')
+
+  await h.clock.tick(6 * MINUTE)
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: true })).items.map(entry => entry.id), [1204])
+  assert.equal(h.entities.of(ORG).workItems.get('1205'), undefined)
+})
+
+test('a board with no requirement types never builds an empty IN list', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  const stories = fixture<{ columns: object[] }>('board-stories')
+  h.ado.on(
+    call => call.method === 'GET' && call.path.endsWith(`/_apis/work/boards/${STORIES}`),
+    () => json(200, { ...stories, columns: stories.columns.map(column => ({ ...column, stateMappings: {} })) })
+  )
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  assert.deepEqual([view.board.requirementTypes, view.items], [[], []])
+  await h.clock.tick(5 * MINUTE)
+  assert.equal(h.ado.count(isWiql), 0)
+  assert.equal(h.ado.count(isBatch), 0)
+})
+
+test('Refresh forces an audit', async () => {
+  const h = harness()
+  await shownWork(h)
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isDelta), 1, 'a tick runs a delta')
+
+  const calls = h.ado.calls.length
+  await h.service.refresh(ORG)
+  const refreshed = h.ado.calls.slice(calls)
+  assert.equal(refreshed[0].body.query, MINE_QUERY)
+  assert.ok(isRevRead(refreshed[1]), 'with a revision read')
+  assert.equal(refreshed.filter(isDelta).length, 0)
+
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(h.ado.count(isDelta), 2, 'later ticks are deltas again')
+})
+
+test('a quiet board tick reports unchanged and backs off', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  const calls = h.ado.calls.length
+  await h.clock.tick(30_000)
+  const tick = h.ado.calls.slice(calls)
+  assert.equal(tick.length, 1)
+  assert.ok(isDelta(tick[0]) && isStoriesWiql(tick[0]), tick[0].body?.query)
+  assert.deepEqual(h.boardPosts, [])
+
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.calls.length, calls + 1, 'unchanged, it backs off')
+  await h.clock.tick(30_000)
+  assert.equal(h.ado.calls.length, calls + 2)
 })

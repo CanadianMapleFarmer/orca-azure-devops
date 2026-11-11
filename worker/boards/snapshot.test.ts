@@ -1,7 +1,12 @@
 import { assert, test } from 'orca/testing'
 import { NO_FAMILIES, type BoardConfig, type PrChip, type TaskList, type WorkFamilies, type WorkItemSummary, type WorkParent, type WorkSnapshot, type WorkTask } from '../../src/shared/work'
+import { loadBoardConfig } from '../ado/board-config'
+import { createAdoHttp } from '../ado/http'
+import { toRecord, type RawWorkItem } from '../ado/workitems'
 import { byteLength, POST_BUDGET_BYTES } from '../budget'
-import { capBoard, capSnapshot, FAMILY_BUDGET_BYTES, foldChips, patchFamilies } from './snapshot'
+import { createEntities } from '../data/entities'
+import { addChildren, fakeAdo, fixture, isBatch, isHydrate, ORG, ORG_URL, PROJECT, TEAM, WEF } from './fake-ado'
+import { capBoard, capSnapshot, createItemSource, FAMILY_BUDGET_BYTES, foldChips, loadBoardItems, loadMine, patchFamilies } from './snapshot'
 
 function tiny(id: number, changedAt: number): WorkItemSummary {
   return { id, changedAt } as WorkItemSummary
@@ -197,4 +202,98 @@ test('foldChips picks merged, then open with a failed build, a running build, op
   assert.deepEqual(foldChips([chip(10, 'dev', 'open', 'none'), chip(12, 'dev', 'open', 'succeeded'), chip(11, 'dev', 'open', 'none')]), [chip(12, 'dev', 'open', 'succeeded')])
   assert.deepEqual(foldChips([chip(21, 'dev', 'merged'), chip(20, 'dev', 'merged')]), [chip(21, 'dev', 'merged')])
   assert.deepEqual(foldChips([chip(30, 'dev', 'abandoned'), chip(31, 'dev', 'abandoned')]), [chip(31, 'dev', 'abandoned')])
+})
+
+const T0 = Date.parse('2026-11-04T09:00:00Z')
+const ME = { id: '9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b', uniqueName: 'alex@contoso.example' }
+
+function sourced() {
+  const ado = fakeAdo({ now: () => T0 })
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const tables = createEntities(() => T0).of(ORG)
+  const source = createItemSource(http, ORG, ORG_URL, () => T0, tables)
+  const hold = (id: number, over: Partial<RawWorkItem> = {}, withRelations = true) =>
+    tables.workItems.put(String(id), toRecord({ ...structuredClone(ado.items.get(id)!), ...over }, withRelations))
+  return { ado, http, tables, source, hold }
+}
+
+test('items hydrates only stale, missing or relation-less records and serves the rest from the store', async () => {
+  const { ado, source, hold } = sourced()
+  hold(1204)
+  hold(1205, {}, false)
+  const items = await source.items(PROJECT, [1204, 1205, 1206], new Set())
+  assert.deepEqual(ado.calls.filter(isBatch).map(call => call.body), [{ ids: [1205, 1206], $expand: 'relations', errorPolicy: 'omit' }])
+  assert.deepEqual(items.map(item => [item.id, item.rev]), [[1204, 9], [1205, 3], [1206, 12]])
+  assert.deepEqual(items.map(item => (item as { withRelations?: boolean }).withRelations), [true, true, true])
+  assert.equal(source.revOf(1206), 12)
+
+  await source.items(PROJECT, [1204, 1205, 1206], new Set([1204]))
+  assert.deepEqual(ado.calls.filter(isBatch).at(-1)?.body.ids, [1204], 'a stale record is read again')
+})
+
+test('items returns the record the store kept, not an older one it fetched', async () => {
+  const { ado, source, hold } = sourced()
+  hold(1204, { rev: 10, fields: { ...ado.items.get(1204)!.fields, [`${WEF}.Column`]: 'Resolved' } })
+  const [item] = await source.items(PROJECT, [1204], new Set([1204]))
+  assert.equal(ado.count(isHydrate), 1)
+  assert.deepEqual([item.rev, item.fields[`${WEF}.Column`]], [10, 'Resolved'])
+})
+
+test('items drops a record ADO no longer returns', async () => {
+  const { ado, source, hold } = sourced()
+  hold(1205)
+  ado.remove(1205)
+  const items = await source.items(PROJECT, [1204, 1205], new Set([1205]))
+  assert.deepEqual(items.map(item => item.id), [1204])
+  assert.equal(source.revOf(1205), undefined)
+})
+
+test('a task-fields read never replaces a record that has relations', async () => {
+  const { ado, tables, source, hold } = sourced()
+  hold(1207)
+  const [task] = await source.fields(PROJECT, [1207], new Set([1207]))
+  assert.equal(ado.calls.filter(isBatch).length, 1)
+  assert.equal((task as { withRelations?: boolean }).withRelations, true)
+  assert.equal(tables.workItems.get('1207')?.value.withRelations, true)
+
+  const [fresh] = await source.fields(PROJECT, [1208], new Set())
+  assert.deepEqual([fresh.id, (fresh as { withRelations?: boolean }).withRelations], [1208, false])
+  await source.fields(PROJECT, [1207, 1208], new Set())
+  assert.equal(ado.calls.filter(isBatch).length, 2, 'held tasks are served from the store')
+})
+
+test('forget drops the records of the ids it is given', () => {
+  const { source, hold } = sourced()
+  hold(1204)
+  hold(1205)
+  source.forget([1205])
+  assert.deepEqual([source.revOf(1204), source.revOf(1205)], [9, undefined])
+})
+
+test('loadMine with nothing stale makes no work-item request, and that includes parents', async () => {
+  const { ado, http, source } = sourced()
+  addChildren(ado, 1204, fixture<{ value: RawWorkItem[] }>('workitems-children').value)
+  const cfg = await loadBoardConfig(http, { org: ORG, projectId: PROJECT, teamId: TEAM })
+  const members = [1204, 1207, 1205, 1208]
+  const first = await loadMine(source, cfg, ME, { members, stale: new Set(members) })
+  assert.deepEqual(ado.calls.filter(isBatch).map(call => call.body.ids), [members, [1100], [1213, 1209, 1210, 1211]])
+  assert.deepEqual(first.known, [1204, 1207, 1205, 1208, 1100, 1213, 1209, 1210, 1211])
+
+  const calls = ado.calls.length
+  const again = await loadMine(source, cfg, ME, { members, stale: new Set() })
+  assert.deepEqual(ado.calls.slice(calls), [])
+  assert.deepEqual(again, first)
+})
+
+test('loadBoardItems projects the members it is given and knows their parents', async () => {
+  const { ado, http, source } = sourced()
+  const cfg = await loadBoardConfig(http, { org: ORG, projectId: PROJECT, teamId: TEAM })
+  const loaded = await loadBoardItems(source, cfg, { members: [1204, 1205], stale: new Set([1204, 1205]) })
+  assert.deepEqual(loaded.items.map(item => item.id), [1204, 1205])
+  assert.deepEqual([loaded.truncated, loaded.known], [false, [1204, 1205, 1100]])
+  assert.equal(loaded.items[0].parentTitle, 'Vehicle search')
+
+  const calls = ado.calls.length
+  assert.deepEqual(await loadBoardItems(source, cfg, { members: [1204, 1205], stale: new Set() }), loaded)
+  assert.deepEqual(ado.calls.slice(calls), [])
 })
