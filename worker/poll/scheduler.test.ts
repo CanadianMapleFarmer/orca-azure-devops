@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import { AdoError } from '../ado/http'
 import { currentContext, inLane, type Lane } from '../data/context'
-import type { Pace } from '../data/rate-limit'
+import type { Pace, Pressure } from '../data/rate-limit'
 import { fakeClock, paced, type FakeClock } from '../test-support'
 import { createScheduler, NOTIFY_CAP_MS, realClock, type Job } from './scheduler'
 
@@ -53,8 +53,8 @@ function rateLimitedOnFirstRun(retryAfterMs: number | undefined) {
   }
 }
 
-function settablePace(initial: { factor?: number; resumeAt?: number } = {}) {
-  const state = { factor: 1, resumeAt: 0, ...initial }
+function settablePace(initial: { factor?: number; resumeAt?: number; calmAt?: number } = {}) {
+  const state = { factor: 1, resumeAt: 0, calmAt: 0, ...initial }
   const asked: string[] = []
   const pace: Pace = {
     factor: org => {
@@ -64,6 +64,10 @@ function settablePace(initial: { factor?: number; resumeAt?: number } = {}) {
     resumeAt: org => {
       asked.push(org)
       return state.resumeAt
+    },
+    calmAt: org => {
+      asked.push(org)
+      return state.calmAt
     }
   }
   return { pace, state, asked }
@@ -235,6 +239,50 @@ test('an org job blocked past its cadence runs once the block lifts, at the pace
   assert.deepEqual(starts, [0, 300_000, 900_000])
   await clock.tick(300_000)
   assert.deepEqual(starts, [0, 300_000, 900_000, 1_200_000])
+})
+
+const delay = (pressure: { observe: Pressure['observe'] }) =>
+  pressure.observe({ org: 'contoso', path: '/_apis/build/builds' }, 200, new Headers({ 'X-RateLimit-Delay': '1' }))
+
+test('a wait set under pressure ends when the pressure does', async () => {
+  const clock = fakeClock(T0)
+  const { pressure, scheduler } = paced(clock)
+  const delayedOnFirstRun = async (_signal: AbortSignal, runNumber: number) => {
+    if (runNumber === 1) delay(pressure)
+  }
+  const { job, starts } = trackedJob(clock, delayedOnFirstRun, { key: 'runs:contoso', org: 'contoso', backgroundMs: 300_000, quietCapMs: NOTIFY_CAP_MS })
+  scheduler.upsert(job)
+  await clock.tick(0)
+  await clock.tick(15 * 60_000)
+  assert.deepEqual(starts, [0, 300_000, 600_000, 900_000])
+})
+
+test('each drop in pressure is felt by a job already waiting', async () => {
+  const clock = fakeClock(T0)
+  const { pressure, scheduler } = paced(clock)
+  const { job, starts } = trackedJob(clock, async () => {}, { key: 'runs:contoso', org: 'contoso', visibleMs: 30_000 })
+  delay(pressure)
+  scheduler.upsert(job)
+  scheduler.setVisible('runs:contoso', true)
+  await clock.tick(0)
+  await clock.tick(120_000)
+  pressure.observe({ org: 'contoso', path: '/_apis/build/builds' }, 200, new Headers({ 'X-RateLimit-Limit': '200', 'X-RateLimit-Remaining': '150' }))
+  await clock.tick(330_000)
+  assert.deepEqual(starts, [0, 240_000, 300_000, 360_000, 420_000, 450_000])
+})
+
+test('quietCapMs bounds the wait once pressure has passed', async () => {
+  const clock = fakeClock(T0)
+  const { pressure, scheduler } = paced(clock)
+  const delayedOnFifthRun = async (_signal: AbortSignal, runNumber: number) => {
+    if (runNumber === 5) delay(pressure)
+    return 'unchanged' as const
+  }
+  const { job, starts } = trackedJob(clock, delayedOnFifthRun, { key: 'prs:contoso', org: 'contoso', backgroundMs: 60_000, quietMax: 16, quietCapMs: NOTIFY_CAP_MS })
+  scheduler.upsert(job)
+  await clock.tick(0)
+  await clock.tick(1_560_000)
+  assert.deepEqual(starts, [0, 120_000, 360_000, 660_000, 960_000, 1_260_000, 1_560_000])
 })
 
 test('each unchanged run doubles the interval up to quietMax, and a changed run resets it', async () => {

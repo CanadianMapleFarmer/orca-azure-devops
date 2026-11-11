@@ -440,25 +440,52 @@ test('the watch list survives a restart', async () => {
   assert.equal(third.updates.at(-1)?.[1]?.find(run => run.buildId === 4531)?.watched, false, 'a dropped run is not watched after a restart, so it cannot notify again')
 })
 
-test('a delayed org polls its runs at eight times the interval', async () => {
-  const h = harness()
-  h.setOrgs([status()])
+function timesOf(h: ReturnType<typeof harness>, match: (call: AdoCall) => boolean): number[] {
+  const times: number[] = []
+  h.ado.on(
+    call => {
+      if (match(call)) times.push(h.clock.now() - T0)
+      return false
+    },
+    () => json(500, {})
+  )
+  return times
+}
+
+const delay = (h: ReturnType<typeof harness>) =>
   h.pressure.observe({ org: ORG, path: '/_apis/build/builds' }, 200, new Headers({ 'X-RateLimit-Delay': '1' }))
+
+test('a delayed org polls its runs at eight times the interval until the delay passes', async () => {
+  const h = harness()
+  const loads = timesOf(h, isMineRuns)
+  h.setOrgs([status()])
+  delay(h)
   h.show()
   await h.clock.tick(0)
-  const load = h.ado.count(isMineRuns)
-  assert.ok(load > 0, 'showing the tab still loads at once')
+  await h.clock.tick(330_000)
+  assert.deepEqual([...new Set(loads)], [0, 240_000, 300_000, 330_000], 'every 240 s while delayed, then every 30 s from the moment the delay passes')
+})
 
-  await h.clock.tick(240_000 - 1)
-  assert.equal(h.ado.count(isMineRuns), load, 'no visible 30 s load while the org is delayed')
-  await h.clock.tick(1)
-  assert.equal(h.ado.count(isMineRuns), 2 * load, 'the next load comes 240 s later')
-  await h.clock.tick(240_000 - 1)
-  assert.equal(h.ado.count(isMineRuns), 2 * load)
-  await h.clock.tick(1)
-  assert.equal(h.ado.count(isMineRuns), 3 * load, 'and the one after that')
-  await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isMineRuns), 4 * load, 'and every 30 s once the delay has passed')
+test('a delayed org polls its hidden runs again five minutes after the delay, not forty', async () => {
+  const h = harness()
+  const loads = timesOf(h, isMineRuns)
+  h.setOrgs([status()])
+  delay(h)
+  await h.clock.tick(0)
+  await h.clock.tick(15 * MINUTE)
+  assert.deepEqual([...new Set(loads)], [0, 300_000, 600_000, 900_000])
+})
+
+test('a delayed org watches its runs at eight times the interval until the delay passes', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  await h.clock.tick(100_000)
+  const batches = timesOf(h, isBuildsByIds)
+  delay(h)
+  await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  await h.clock.tick(330_000)
+  assert.deepEqual([...new Set(batches)], [100_000, 340_000, 400_000, 430_000], 'every 240 s while delayed, then every 30 s from the moment the delay passes')
 })
 
 test('a forbidden builds list pauses the org; a forbidden approvals list only turns approvals off', async () => {

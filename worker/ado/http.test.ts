@@ -1,4 +1,5 @@
 import { assert, test } from 'orca/testing'
+import { inLane } from '../data/context'
 import { AdoError, createAdoHttp, type AdoRequest } from './http'
 
 const AUTH = 'Bearer secret-token-value'
@@ -154,6 +155,23 @@ test('honours Retry-After then gives up after two retries', async () => {
   assert.equal(error.code, 'rate_limited')
   assert.equal(error.status, 429)
   assert.equal(error.retryAfterMs, 2000)
+})
+
+test('a background request is not retried on a throttle, a user request still is', async () => {
+  const throttled = () => new Response('', { status: 429, headers: { 'retry-after': '1' } })
+  for (const priority of ['visible', 'hidden'] as const) {
+    const { fetch, calls } = fakeFetch(throttled(), jsonResponse({ ok: true }))
+    const waits: number[] = []
+    const http = clientFor(fetch, { sleep: async ms => void waits.push(ms) })
+    const error = await failure(inLane('pipelines', priority, () => http.json(REPOS)))
+    assert.deepEqual({ priority, code: error.code, retryAfterMs: error.retryAfterMs, calls: calls.length, waits }, { priority, code: 'rate_limited', retryAfterMs: 1000, calls: 1, waits: [] })
+  }
+
+  const { fetch, calls } = fakeFetch(throttled(), jsonResponse({ ok: true }))
+  const waits: number[] = []
+  const http = clientFor(fetch, { sleep: async ms => void waits.push(ms) })
+  const { data } = await inLane('pipelines', 'user', () => http.json<{ ok: boolean }>(REPOS))
+  assert.deepEqual({ data, calls: calls.length, waits }, { data: { ok: true }, calls: 2, waits: [1000] })
 })
 
 test('fails at once without sleeping when Retry-After is over ten seconds', async () => {

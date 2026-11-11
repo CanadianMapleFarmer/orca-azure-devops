@@ -391,9 +391,8 @@ test('a delayed org polls an active run view at forty seconds', async () => {
   )
   h.show(4520)
   await h.clock.tick(0)
-  await h.clock.tick(5 * MINUTE + 30_000)
-  assert.deepEqual(reads.slice(0, 3), [0, 40_000, 80_000], 'eight times the five seconds')
-  assert.deepEqual(reads.slice(-3), [320_000, 325_000, 330_000], 'and back to five seconds once the delay has passed')
+  await h.clock.tick(5 * MINUTE + 10_000)
+  assert.deepEqual(reads, [0, 40_000, 80_000, 120_000, 160_000, 200_000, 240_000, 280_000, 300_000, 305_000, 310_000], 'eight times the five seconds, then five seconds from the moment the delay passes')
 })
 
 test('a run action reloads its open view in full at once', async () => {

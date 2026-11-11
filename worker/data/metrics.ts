@@ -106,12 +106,12 @@ export function metricsLines(report: MetricsReport, pressure: PressureState, now
 }
 
 function rateLimitText(last: MetricsReport['last'], pressure: PressureState, now: number): string {
-  if (!last) return 'no pressure seen'
-  const { limit, remaining } = last.headers
+  if (!last && pressure.level === 'normal') return 'no pressure seen'
   const parts: string[] = [pressure.level]
+  const { limit, remaining } = last?.headers ?? {}
   if (remaining !== undefined) parts.push(limit === undefined ? `${remaining} TSTU left` : `${remaining} of ${limit} TSTU left`)
   if (pressure.factor > 1) parts.push(`polling ×${pressure.factor}`)
-  return `${parts.join(', ')} (headers ${ageText(now - last.at)} ago)`
+  return last ? `${parts.join(', ')} (headers ${ageText(now - last.at)} ago)` : parts.join(', ')
 }
 
 function ageText(ms: number): string {

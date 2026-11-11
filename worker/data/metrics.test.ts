@@ -23,7 +23,7 @@ function report(overrides: Partial<MetricsReport>): MetricsReport {
 }
 
 function pressure(overrides: Partial<PressureState>): PressureState {
-  return { level: 'normal', factor: 1, resumeAt: 0, last: null, ...overrides }
+  return { level: 'normal', factor: 1, resumeAt: 0, calmAt: 0, last: null, ...overrides }
 }
 
 test('requests are counted per minute for five minutes, by feature and endpoint', () => {
@@ -141,6 +141,13 @@ test('metricsLines shows totals, the busiest endpoints and the rate-limit state'
   assert.equal(metricsLines(blocked, pressure({ level: 'blocked', factor: 8 }), T0)[2], '  Rate limit: blocked, polling ×8 (headers 5 min ago)')
   const calm = { ...quiet, last: { at: T0 - 1_000, headers: { limit: 200, remaining: 190 } } }
   assert.equal(metricsLines(calm, pressure({}), T0)[2], '  Rate limit: normal, 190 of 200 TSTU left (headers 1 s ago)')
+})
+
+test('metricsLines shows the pressure level when no rate-limit headers were seen', () => {
+  const bare = report({ total: 1, byFeature: { prs: 1 }, byEndpoint: [{ endpoint: 'GET /_apis/git/pullrequests', count: 1 }], throttled: 1 })
+  assert.equal(metricsLines(bare, pressure({ level: 'blocked', factor: 8 }), T0)[2], '  Rate limit: blocked, polling ×8')
+  assert.equal(metricsLines(bare, pressure({ level: 'delayed', factor: 8 }), T0)[2], '  Rate limit: delayed, polling ×8')
+  assert.equal(metricsLines(bare, pressure({}), T0)[2], '  Rate limit: no pressure seen')
 })
 
 test('metricsLines shows nothing for an org with no traffic', () => {

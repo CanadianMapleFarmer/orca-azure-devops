@@ -83,27 +83,36 @@ export function createScheduler(clock: Clock, pace?: Pace): Scheduler {
     return pace && job.org !== undefined ? pace.resumeAt(job.org) : 0
   }
 
+  function calmAtOf(job: Job): number {
+    return pace && job.org !== undefined ? pace.calmAt(job.org) : 0
+  }
+
   function baseOf(entry: Entry): number | null {
     return entry.visible ? entry.job.visibleMs : entry.job.backgroundMs
   }
 
-  function intervalOf(entry: Entry, base: number): number {
+  function quietIntervalOf(entry: Entry, base: number): number {
     const { quietMax = 1, quietCapMs = Infinity } = entry.job
     const quiet = Math.min(2 ** entry.streak, quietMax)
-    return Math.min(base * quiet, Math.max(base, quietCapMs)) * factorOf(entry.job)
+    return Math.min(base * quiet, Math.max(base, quietCapMs))
   }
 
   function dueAt(entry: Entry, base: number): number {
-    const cadenceDue = entry.lastRunAt === undefined ? -Infinity : entry.lastRunAt + intervalOf(entry, base)
+    const cadenceDue = entry.lastRunAt === undefined ? -Infinity : entry.lastRunAt + quietIntervalOf(entry, base) * factorOf(entry.job)
     return Math.max(cadenceDue, resumeAtOf(entry.job))
   }
 
+  function wakeAt(entry: Entry, base: number): number {
+    const due = dueAt(entry, base)
+    if (entry.lastRunAt === undefined) return due
+    const calm = Math.max(entry.lastRunAt + quietIntervalOf(entry, base), calmAtOf(entry.job))
+    return calm > clock.now() ? Math.min(due, calm) : due
+  }
+
   function timeoutFor(entry: Entry, base: number): number {
-    const now = clock.now()
-    const resumeAt = resumeAtOf(entry.job)
-    const wakeAt = resumeAt > now ? resumeAt : dueAt(entry, base)
-    if (wakeAt <= now) return 0
-    return Math.min(Math.max(wakeAt - now, MIN_DELAY_MS), MAX_DELAY_MS)
+    const wait = wakeAt(entry, base) - clock.now()
+    if (wait <= 0) return 0
+    return Math.min(Math.max(wait, MIN_DELAY_MS), MAX_DELAY_MS)
   }
 
   function schedule(entry: Entry): void {

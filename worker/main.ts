@@ -240,6 +240,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     log
   })
   stopPolling = () => {
+    http.dispose()
     scheduler.dispose()
     prs.dispose()
     pipelines.dispose()
@@ -262,7 +263,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const host = withUserContext(orca)
   await registerWorkspaceHandlers(host, { boards, store, call, arm })
   host.panels.handle('plugin.ping', () => ({ version: manifest.version }))
-  registerOrgHandlers(host, connections)
+  registerOrgHandlers(host, connections, http)
   registerWorkHandlers(host, { boards, http, call })
   registerPrHandlers(host, { prs, actions: prActions })
   registerReviewHandlers(host, {

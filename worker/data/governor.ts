@@ -1,6 +1,6 @@
 import type { AdoHttp, AdoRequest } from '../ado/http'
 import type { Clock } from '../poll/scheduler'
-import { currentContext, onRaise, raise, runIn, type Lane, type Priority, type RequestContext } from './context'
+import { currentContext, fly, join, onRaise, runIn, type Flight, type Priority, type RequestContext } from './context'
 import type { Pressure, PressureLevel } from './rate-limit'
 
 export const MAX_IN_FLIGHT = 6
@@ -33,10 +33,13 @@ interface OrgQueue {
 }
 
 interface Exchange {
-  readonly lane: Lane
+  readonly flight: Flight<Answer>
   readonly controller: AbortController
-  readonly answer: Promise<Answer>
   waiting: number
+}
+
+export interface Governor extends AdoHttp {
+  dispose(): void
 }
 
 const MERGEABLE_POSTS = ['/_apis/wit/wiql', '/_apis/wit/workitemsbatch']
@@ -55,12 +58,12 @@ export function mergeKey(req: AdoRequest): string | null {
   return JSON.stringify([req.org, req.host ?? null, req.project ?? null, method, req.path, query, req.apiVersion ?? null, body])
 }
 
-export function createGovernor(deps: GovernorDeps): AdoHttp {
+export function createGovernor(deps: GovernorDeps): Governor {
   const orgs = new Map<string, OrgQueue>()
   const exchanges = new Map<string, Exchange>()
   let arrivals = 0
 
-  onRaise(lane => {
+  const stopHearingRaises = onRaise(lane => {
     for (const [org, queue] of orgs) {
       for (const task of queue.held) if (task.context.lane === lane) unhold(queue, task)
       if (queue.queued.length > 0) pump(org, queue)
@@ -92,7 +95,7 @@ export function createGovernor(deps: GovernorDeps): AdoHttp {
 
   function pump(org: string, queue: OrgQueue): void {
     const state = deps.pressure.state(org)
-    if (deps.now() < state.resumeAt) hold(org, queue, state.resumeAt)
+    if (state.level === 'blocked') hold(org, queue, state.resumeAt)
     while (queue.running.size < MAX_IN_FLIGHT) {
       const next = firstOf(queue.queued)
       if (!next) return
@@ -162,29 +165,29 @@ export function createGovernor(deps: GovernorDeps): AdoHttp {
 
   function share(key: string, req: AdoRequest): Promise<Answer> {
     const exchange = exchanges.get(key) ?? open(key, req)
-    if (currentContext().lane.priority === 'user') raise(exchange.lane)
     exchange.waiting += 1
+    const answer = join(exchange.flight)
     const signal = req.signal
-    if (!signal) return exchange.answer
+    if (!signal) return answer
     return new Promise<Answer>((resolve, reject) => {
       const onAbort = () => {
         reject(signal.reason)
         leave(key, exchange, signal.reason)
       }
       signal.addEventListener('abort', onAbort, { once: true })
-      void exchange.answer.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+      void answer.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
     })
   }
 
   function open(key: string, req: AdoRequest): Exchange {
     const controller = new AbortController()
-    const answer = enqueue(req.org, () => deps.http.json<unknown>({ ...req, signal: controller.signal }), controller.signal)
-    const exchange: Exchange = { lane: currentContext().lane, controller, answer, waiting: 0 }
+    const flight = fly(() => enqueue(req.org, () => deps.http.json<unknown>({ ...req, signal: controller.signal }), controller.signal))
+    const exchange: Exchange = { flight, controller, waiting: 0 }
     exchanges.set(key, exchange)
     const close = () => {
       if (exchanges.get(key) === exchange) exchanges.delete(key)
     }
-    void answer.then(close, close)
+    void flight.promise.then(close, close)
     return exchange
   }
 
@@ -201,7 +204,8 @@ export function createGovernor(deps: GovernorDeps): AdoHttp {
       const key = mergeKey(req)
       const answer = key === null ? enqueue(req.org, () => deps.http.json<unknown>(req), req.signal) : share(key, req)
       return answer as Promise<{ data: T; headers: Headers }>
-    }
+    },
+    dispose: stopHearingRaises
   }
 }
 

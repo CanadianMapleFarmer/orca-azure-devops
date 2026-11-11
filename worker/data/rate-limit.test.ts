@@ -98,6 +98,30 @@ test('limit and remaining mark the org near, and tight at a quarter or less', ()
   assert.equal(pressure.state('contoso').level, 'normal')
 })
 
+test('X-RateLimit-Delay of zero is not pressure', () => {
+  const { pressure, answer } = tracker()
+  answer(200, { 'X-RateLimit-Delay': '0' })
+  assert.deepEqual(summary(pressure), { level: 'normal', factor: 1, resumeAt: 0 })
+})
+
+test('calmAt is when the level next drops', () => {
+  const { clock, pressure, answer } = tracker()
+  assert.equal(pressure.state('contoso').calmAt, 0)
+
+  answer(429, { 'Retry-After': '30', 'X-RateLimit-Limit': '200', 'X-RateLimit-Remaining': '150' })
+  assert.equal(pressure.state('contoso').calmAt, T0 + 30_000)
+  clock.now = T0 + 30_000
+  assert.equal(pressure.state('contoso').calmAt, T0 + PRESSURE_WINDOW_MS)
+
+  clock.now = T0 + MINUTE
+  answer(200, { 'X-RateLimit-Limit': '200', 'X-RateLimit-Remaining': '150' })
+  clock.now = T0 + PRESSURE_WINDOW_MS
+  assert.equal(pressure.state('contoso').level, 'near')
+  assert.equal(pressure.state('contoso').calmAt, T0 + MINUTE + PRESSURE_WINDOW_MS)
+  clock.now = T0 + MINUTE + PRESSURE_WINDOW_MS
+  assert.equal(pressure.state('contoso').calmAt, 0)
+})
+
 test('the strongest live signal wins', () => {
   const { pressure, answer } = tracker()
   answer(200, { 'X-RateLimit-Delay': '2', 'X-RateLimit-Limit': '200', 'X-RateLimit-Remaining': '0' })
@@ -109,7 +133,7 @@ test('a response without rate-limit headers leaves the org untouched', () => {
   const { pressure, answer } = tracker()
   answer(200, { 'content-type': 'application/json' })
   answer(404)
-  assert.deepEqual(pressure.state('contoso'), { level: 'normal', factor: 1, resumeAt: 0, last: null })
+  assert.deepEqual(pressure.state('contoso'), { level: 'normal', factor: 1, resumeAt: 0, calmAt: 0, last: null })
 })
 
 test('forget clears an org', () => {
@@ -117,20 +141,23 @@ test('forget clears an org', () => {
   answer(429, { 'Retry-After': '7' })
   pressure.observe({ org: 'fabrikam', path: '/_apis/projects' }, 429, new Headers())
   pressure.forget('contoso')
-  assert.deepEqual(pressure.state('contoso'), { level: 'normal', factor: 1, resumeAt: 0, last: null })
+  assert.deepEqual(pressure.state('contoso'), { level: 'normal', factor: 1, resumeAt: 0, calmAt: 0, last: null })
   assert.equal(pressure.state('fabrikam').level, 'blocked')
 })
 
-test('paceOf exposes factor and resumeAt', () => {
+test('paceOf exposes factor, resumeAt and calmAt', () => {
   const { clock, pressure, answer } = tracker()
   const pace = paceOf(pressure)
   assert.equal(pace.factor('contoso'), 1)
   assert.equal(pace.resumeAt('contoso'), 0)
+  assert.equal(pace.calmAt('contoso'), 0)
 
   answer(429, { 'Retry-After': '7' })
   assert.equal(pace.factor('contoso'), PRESSURE_FACTORS.blocked)
   assert.equal(pace.resumeAt('contoso'), T0 + 7000)
+  assert.equal(pace.calmAt('contoso'), T0 + 7000)
   clock.now = T0 + 7000
   assert.equal(pace.factor('contoso'), PRESSURE_FACTORS.delayed)
+  assert.equal(pace.calmAt('contoso'), T0 + PRESSURE_WINDOW_MS)
   assert.equal(pace.factor('fabrikam'), PRESSURE_FACTORS.normal)
 })

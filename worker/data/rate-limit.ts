@@ -2,9 +2,9 @@ import type { ResponseObserver } from '../ado/http'
 
 export interface RateLimitHeaders { resource?: string; retryAfterMs?: number; delayMs?: number; limit?: number; remaining?: number; resetAt?: number; cost?: number }
 export type PressureLevel = 'normal' | 'near' | 'tight' | 'delayed' | 'blocked'
-export interface PressureState { level: PressureLevel; factor: number; resumeAt: number; last: { at: number; status: number; headers: RateLimitHeaders } | null }
+export interface PressureState { level: PressureLevel; factor: number; resumeAt: number; calmAt: number; last: { at: number; status: number; headers: RateLimitHeaders } | null }
 export interface Pressure { observe: ResponseObserver; state(org: string): PressureState; forget(org: string): void }
-export interface Pace { factor(org: string): number; resumeAt(org: string): number }
+export interface Pace { factor(org: string): number; resumeAt(org: string): number; calmAt(org: string): number }
 
 export const PRESSURE_WINDOW_MS = 5 * 60_000
 export const DEFAULT_BLOCK_MS = 60_000
@@ -54,7 +54,7 @@ export function createPressure(now: () => number): Pressure {
       org.resumeAt = Math.max(org.resumeAt, at + (headersRead.retryAfterMs ?? DEFAULT_BLOCK_MS))
       org.delayedUntil = at + PRESSURE_WINDOW_MS
     }
-    if (headersRead.delayMs !== undefined) org.delayedUntil = at + PRESSURE_WINDOW_MS
+    if ((headersRead.delayMs ?? 0) > 0) org.delayedUntil = at + PRESSURE_WINDOW_MS
     if (headersRead.limit !== undefined || headersRead.remaining !== undefined) {
       org.nearUntil = at + PRESSURE_WINDOW_MS
       org.limit = headersRead.limit ?? org.limit
@@ -73,9 +73,9 @@ export function createPressure(now: () => number): Pressure {
 
   function state(name: string): PressureState {
     const org = orgs.get(name)
-    if (!org) return { level: 'normal', factor: PRESSURE_FACTORS.normal, resumeAt: 0, last: null }
+    if (!org) return { level: 'normal', factor: PRESSURE_FACTORS.normal, resumeAt: 0, calmAt: 0, last: null }
     const level = levelOf(org, now())
-    return { level, factor: PRESSURE_FACTORS[level], resumeAt: org.resumeAt, last: org.last }
+    return { level, factor: PRESSURE_FACTORS[level], resumeAt: org.resumeAt, calmAt: calmAtOf(org, level), last: org.last }
   }
 
   return { observe, state, forget: org => void orgs.delete(org) }
@@ -84,7 +84,17 @@ export function createPressure(now: () => number): Pressure {
 export function paceOf(pressure: Pressure): Pace {
   return {
     factor: org => pressure.state(org).factor,
-    resumeAt: org => pressure.state(org).resumeAt
+    resumeAt: org => pressure.state(org).resumeAt,
+    calmAt: org => pressure.state(org).calmAt
+  }
+}
+
+function calmAtOf(org: OrgPressure, level: PressureLevel): number {
+  switch (level) {
+    case 'blocked': return org.resumeAt
+    case 'delayed': return org.delayedUntil
+    case 'normal': return 0
+    default: return org.nearUntil
   }
 }
 

@@ -29,7 +29,7 @@ function fakeHttp() {
 }
 
 function settablePressure(level: PressureLevel = 'normal') {
-  let current: PressureState = { level, factor: PRESSURE_FACTORS[level], resumeAt: 0, last: null }
+  let current: PressureState = { level, factor: PRESSURE_FACTORS[level], resumeAt: 0, calmAt: 0, last: null }
   return {
     state: () => current,
     set(next: PressureLevel) {
@@ -331,6 +331,119 @@ test('a user joining a held shared request raises it and it is sent at once', as
   inner.calls[0].answer({ value: [] })
   const [a, b] = await Promise.all([background, user])
   assert.equal(a.data, b.data)
+})
+
+test('a user joining a held shared request raises only that request, not the lane that opened it', async () => {
+  const { clock, inner, governor } = blockedFor(30)
+  inLane('prs', 'hidden', () => {
+    void governor.json(get('/a'))
+    void governor.json(get('/b'))
+  })
+  await drain()
+  void inLane('prs', 'user', () => governor.json(get('/a')))
+  await drain()
+  assert.deepEqual(paths(inner.calls), ['/a'])
+  assert.equal(inner.calls[0].priority, 'user')
+
+  await clock.tick(30_000)
+  assert.deepEqual(paths(inner.calls), ['/a', '/b'])
+  assert.equal(inner.calls[1].priority, 'hidden')
+})
+
+test('raising a lane releases a held shared request that another lane opened', async () => {
+  const { inner, governor } = blockedFor(30)
+  void inLane('prs', 'hidden', () => governor.json(get('/_apis/projects')))
+  const laneB = inLane('pipelines', 'hidden', () => {
+    void governor.json(get('/_apis/projects'))
+    return currentContext().lane
+  })
+  await drain()
+  assert.equal(inner.calls.length, 0)
+
+  raise(laneB)
+  await drain()
+  assert.deepEqual(paths(inner.calls), ['/_apis/projects'])
+  assert.equal(inner.calls[0].priority, 'user')
+})
+
+test('a queued shared request aborted by every caller leaves the queue and is never sent', async () => {
+  const { inner, governor } = setup()
+  fill(governor)
+  const first = new AbortController()
+  const second = new AbortController()
+  const a = caught(governor.json(get('/_apis/projects', { signal: first.signal })))
+  const b = caught(governor.json(get('/_apis/projects', { signal: second.signal })))
+  await drain()
+
+  first.abort(new Error('first closed'))
+  await drain()
+  inner.calls[0].answer()
+  await drain()
+  assert.deepEqual(paths(inner.calls.slice(MAX_IN_FLIGHT)), ['/_apis/projects'], 'the second caller still wants it')
+
+  const fresh = setup()
+  fill(fresh.governor)
+  const third = new AbortController()
+  const fourth = new AbortController()
+  const c = caught(fresh.governor.json(get('/_apis/projects', { signal: third.signal })))
+  const d = caught(fresh.governor.json(get('/_apis/projects', { signal: fourth.signal })))
+  await drain()
+  const thirdReason = new Error('third closed')
+  const fourthReason = new Error('fourth closed')
+  third.abort(thirdReason)
+  fourth.abort(fourthReason)
+  await drain()
+  assert.deepEqual([c, d], [{ settled: true, error: thirdReason }, { settled: true, error: fourthReason }])
+
+  fresh.inner.calls[0].answer()
+  await drain()
+  assert.equal(fresh.inner.calls.length, MAX_IN_FLIGHT)
+  assert.deepEqual([a.settled, b.settled], [true, false])
+})
+
+test('a held shared request aborted by every caller is never sent', async () => {
+  const { clock, inner, governor } = blockedFor(30)
+  const first = new AbortController()
+  const second = new AbortController()
+  const a = caught(inLane('prs', 'hidden', () => governor.json(get('/_apis/projects', { signal: first.signal }))))
+  const b = caught(inLane('pipelines', 'hidden', () => governor.json(get('/_apis/projects', { signal: second.signal }))))
+  await drain()
+
+  const firstReason = new Error('first closed')
+  const secondReason = new Error('second closed')
+  first.abort(firstReason)
+  await drain()
+  assert.deepEqual([a, b.settled], [{ settled: true, error: firstReason }, false])
+  second.abort(secondReason)
+  await drain()
+  assert.deepEqual(b, { settled: true, error: secondReason })
+
+  await clock.tick(60_000)
+  assert.equal(inner.calls.length, 0)
+})
+
+test('a background request is held whenever the level reads blocked, even at the resumeAt boundary', async () => {
+  const { clock, pressure, inner, governor } = setup('blocked')
+  void inLane('pipelines', 'hidden', () => governor.json(get('/_apis/build/builds')))
+  await drain()
+  assert.equal(inner.calls.length, 0)
+
+  pressure.set('normal')
+  await clock.tick(1_000)
+  assert.deepEqual(paths(inner.calls), ['/_apis/build/builds'])
+})
+
+test('a disposed governor no longer hears raises', async () => {
+  const { inner, governor } = blockedFor(30)
+  const lane = inLane('pipelines', 'hidden', () => {
+    void governor.json(get('/_apis/build/builds'))
+    return currentContext().lane
+  })
+  await drain()
+  governor.dispose()
+  raise(lane)
+  await drain()
+  assert.equal(inner.calls.length, 0)
 })
 
 test('errors pass through unchanged, including unauthorized', async () => {

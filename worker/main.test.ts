@@ -479,6 +479,32 @@ test('ado.projects and ado.teams list sorted names through the connected org', a
   })
 })
 
+test('the org handlers go through the governor, so identical lists in flight share one request', async () => {
+  const reads: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    reads.push(new URL(new Request(input, init).url).pathname)
+    return fakeFetch(input, init)
+  }) as typeof fetch
+  try {
+    await withConnected(async w => {
+      reads.length = 0
+      await Promise.all([
+        w.request('ado.projects', { org: 'contoso' }),
+        w.request('orgs.setBoards', { org: 'contoso', projectId: 'proj-boards', teamId: 'team-ops' }),
+        w.request('orgs.setCodeProjects', { org: 'contoso', projects: ['proj-web'] }),
+        w.request('ado.teams', { org: 'contoso', projectId: 'proj-web' }),
+        w.request('ado.teams', { org: 'contoso', projectId: 'proj-web' })
+      ])
+      assert.deepEqual(reads.filter(path => path.endsWith('/_apis/projects')), ['/contoso/_apis/projects'])
+      assert.deepEqual(reads.filter(path => path.endsWith('/proj-web/teams')), ['/contoso/_apis/projects/proj-web/teams'])
+      assert.equal(w.refusals.length, 0)
+    })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
 test('ado.projects refuses an org that is not connected', async () => {
   await withFakeFetch(async () => {
     await withWorker(worker, {}, async w => {

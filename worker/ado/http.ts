@@ -1,3 +1,4 @@
+import { currentContext } from '../data/context'
 import { orgSearchUrl, orgVsspsUrl, orgWebUrl } from './org'
 
 export type AdoErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'precondition_failed'
@@ -140,7 +141,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
       if (isThrottle(res)) {
         const retryAfterMs = parseRetryAfter(res.headers)
         const waitMs = retryAfterMs ?? DEFAULT_RETRY_AFTER_MS
-        if (throttleRetries >= MAX_THROTTLE_RETRIES || waitMs > MAX_RETRY_WAIT_MS)
+        if (currentContext().lane.priority !== 'user' || throttleRetries >= MAX_THROTTLE_RETRIES || waitMs > MAX_RETRY_WAIT_MS)
           throw adoError('rate_limited', res, problem.message, retryAfterMs)
         throttleRetries += 1
         await sleep(waitMs)
