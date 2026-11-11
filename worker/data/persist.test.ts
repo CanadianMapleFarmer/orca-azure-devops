@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { OrgState, OrgStatus } from '../../src/shared/types'
 import { fakeClock, memoryCache } from '../test-support'
-import { cacheKey, createPersisted, REFRESH_EVERY_MS, TOTAL_BUDGET_BYTES, VALUE_BUDGET_BYTES, WRITE_EVERY_MS, type Saved } from './persist'
+import { cacheKey, createPersisted, REFRESH_EVERY_MS, TOTAL_BUDGET_BYTES, VALUE_BUDGET_BYTES, WRITE_EVERY_MS, type CachePort, type Saved } from './persist'
 
 const T0 = Date.parse('2026-11-11T10:00:00Z')
 const MINUTE = 60_000
@@ -28,12 +28,21 @@ function setup(initial: Record<string, unknown> = {}) {
   const clock = fakeClock(T0)
   const cache = memoryCache(initial)
   const logs: string[] = []
+  const refused = new Set<string>()
+  const port: CachePort = {
+    ...cache.port,
+    set: async (key, value) => {
+      if (refused.has(key)) throw new Error(`${key} could not be written`)
+      await cache.port.set(key, value)
+    }
+  }
   let orgs = [status('contoso', ADA), status('fabrikam', ADA)]
-  const persisted = createPersisted({ port: cache.port, orgs: async () => orgs, now: clock.now, clock, log: message => logs.push(message) })
+  const persisted = createPersisted({ port, orgs: async () => orgs, now: clock.now, clock, log: message => logs.push(message) })
   return {
     clock,
     cache,
     logs,
+    refused,
     persisted,
     setOrgs(next: OrgStatus[]) {
       orgs = next
@@ -158,6 +167,86 @@ test('a saved copy is never more than 15 minutes older than the last time its co
   }
 })
 
+test('a value whose content is unchanged waits for the 15-minute refresh, however the stamps the caller names moved', async () => {
+  const s = setup()
+  const META = cacheKey('contoso', 'meta')
+  const rows = (value: number) => ({ rows: [['k', value, s.clock.now()]] })
+  const written: number[] = []
+  for (let minute = 0; minute <= 30; minute += 1) {
+    const before = countOf(s.cache.writes, META)
+    s.persisted.save('contoso', 'meta', ADA, rows(1), { rows: [['k', 1]] })
+    await s.clock.tick(0)
+    if (countOf(s.cache.writes, META) > before) written.push(minute)
+    await s.clock.tick(MINUTE)
+  }
+  assert.deepEqual(written, [0, 15, 30])
+  assert.deepEqual((s.cache.data[META] as Saved<unknown>).value, { rows: [['k', 1, T0 + 30 * MINUTE]] })
+
+  s.persisted.save('contoso', 'meta', ADA, rows(2), { rows: [['k', 2]] })
+  await s.clock.tick(WRITE_EVERY_MS)
+  assert.equal(countOf(s.cache.writes, META), 4, 'a change of content is written within the debounce')
+})
+
+test('flush writes the stamps a time-only change held back', async () => {
+  const s = setup()
+  s.persisted.save('contoso', 'work', ADA, { n: 1, updatedAt: s.clock.now() })
+  await s.clock.tick(5 * MINUTE)
+  s.persisted.save('contoso', 'work', ADA, { n: 1, updatedAt: s.clock.now() })
+  await s.clock.tick(0)
+  assert.equal(countOf(s.cache.writes, WORK), 1)
+
+  await s.persisted.flush()
+  assert.equal(countOf(s.cache.writes, WORK), 2)
+  const work = s.cache.data[WORK] as Saved<Stamped>
+  assert.deepEqual([work.savedAt, work.value.updatedAt], [T0 + 5 * MINUTE, T0 + 5 * MINUTE])
+
+  await s.persisted.flush()
+  assert.equal(countOf(s.cache.writes, WORK), 2, 'nothing is left to flush')
+})
+
+test("the index records a use only when an entry's content is written, so refreshes leave it alone", async () => {
+  const s = setup()
+  for (let minute = 0; minute <= 60; minute += 1) {
+    s.persisted.save('contoso', 'work', ADA, { n: 1, updatedAt: s.clock.now() })
+    await s.clock.tick(MINUTE)
+  }
+  assert.equal(countOf(s.cache.writes, WORK), 5)
+  assert.equal(countOf(s.cache.writes, INDEX), 1)
+  assert.deepEqual((s.cache.data[INDEX] as Record<string, { usedAt: number }>)[WORK].usedAt, T0)
+
+  s.persisted.save('contoso', 'work', ADA, { n: 2, updatedAt: s.clock.now() })
+  await s.clock.tick(WRITE_EVERY_MS)
+  assert.equal(countOf(s.cache.writes, INDEX), 2)
+  assert.deepEqual((s.cache.data[INDEX] as Record<string, { usedAt: number }>)[WORK].usedAt, T0 + 61 * MINUTE)
+})
+
+test('a write the store refuses evicts nothing, leaves the index as it was, and is tried again on the next save', async () => {
+  const s = setup()
+  for (let view = 0; view < 10; view += 1) {
+    s.persisted.save('contoso', `view${view}`, ADA, { text: 'x'.repeat(BIG) })
+    await s.clock.tick(1_000)
+  }
+  await s.persisted.flush()
+  const kept = cacheKeys(s.cache.data)
+  const index = structuredClone(s.cache.data[INDEX])
+  const FABRIKAM = cacheKey('fabrikam', 'work')
+  s.refused.add(FABRIKAM)
+
+  s.persisted.save('fabrikam', 'work', ADA, { text: 'x'.repeat(BIG) })
+  await s.clock.tick(0)
+  await s.persisted.flush()
+  assert.deepEqual(cacheKeys(s.cache.data), kept, 'nothing was evicted for it')
+  assert.deepEqual(s.cache.data[INDEX], index)
+  assert.match(s.logs.at(-1) ?? '', /fabrikam:work could not be written/)
+
+  s.refused.delete(FABRIKAM)
+  s.persisted.save('fabrikam', 'work', ADA, { text: 'x'.repeat(BIG) })
+  await s.clock.tick(WRITE_EVERY_MS)
+  assert.ok(cacheKeys(s.cache.data).includes(FABRIKAM))
+  assert.ok(!cacheKeys(s.cache.data).includes(cacheKey('contoso', 'view0')), 'the least recently used entry made room')
+  assert.ok(totalBytes(s.cache.data) <= TOTAL_BUDGET_BYTES)
+})
+
 test('a pending write is dropped when its org is no longer connected or its account changed', async () => {
   const s = setup()
   s.persisted.save('contoso', 'work', ADA, { n: 1 })
@@ -225,11 +314,11 @@ test('entries the index does not know count toward the budget and go first', asy
   assert.ok(totalBytes(s.cache.data) <= TOTAL_BUDGET_BYTES)
 })
 
-test('at most 3 boards are kept per org', async () => {
+test('at most 4 boards are kept per org, as many as the editor holds', async () => {
   const s = setup()
   s.persisted.save('contoso', 'work', ADA, { n: 1 })
   s.persisted.save('fabrikam', 'board:t1:b1', ADA, { n: 1 })
-  for (const board of ['b1', 'b2', 'b3', 'b4']) {
+  for (const board of ['b1', 'b2', 'b3', 'b4', 'b5']) {
     await s.clock.tick(1_000)
     s.persisted.save('contoso', `board:t1:${board}`, ADA, { board })
   }
@@ -239,6 +328,7 @@ test('at most 3 boards are kept per org', async () => {
     'adoCache:v1:contoso:board:t1:b2',
     'adoCache:v1:contoso:board:t1:b3',
     'adoCache:v1:contoso:board:t1:b4',
+    'adoCache:v1:contoso:board:t1:b5',
     WORK,
     'adoCache:v1:fabrikam:board:t1:b1'
   ])

@@ -1,13 +1,17 @@
 import { assert, test } from 'orca/testing'
+import type { OrgStatus } from '../../src/shared/types'
 import type { BoardConfig } from '../../src/shared/work'
 import { byteLength } from '../budget'
+import { drain, fakeClock, memoryCache } from '../test-support'
 import { createEntities } from './entities'
-import { VALUE_BUDGET_BYTES } from './persist'
+import { cacheKey, createPersisted, VALUE_BUDGET_BYTES, type Saved } from './persist'
 import { prKey, type CheckRecord, type PrRecord } from './records'
-import { MAX_SAVED_PRS, metaOf, prRecordsOf, seedMeta, seedPrRecords } from './saved-tables'
+import { createSavedTables, MAX_SAVED_PRS, metaOf, prRecordsOf, seedMeta, seedPrRecords, type SavedPrRecords } from './saved-tables'
 
 const T0 = Date.parse('2026-11-11T10:00:00Z')
 const HOUR = 3_600_000
+const MINUTE = 60_000
+const ADA = '5e6f7a8b-1111-4c2d-9e3f-4a5b6c7d8e9f'
 const PROJECT = '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d'
 const REPO = '7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f'
 const REVIEWERS = 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d:10,b2c3d4e5-6666-4b7c-9d8e-0f1a2b3c4d5e:0'
@@ -76,4 +80,55 @@ test('seeding restores the tables with their original age and never replaces a n
   seedMeta(untouched, { configs: 'none', states: [['k', null, 1]], projects: [[1, [], 2]] })
   seedPrRecords(untouched, { repos: [{ projectId: PROJECT }, { projectId: PROJECT, repoId: REPO, prs: [{ prId: 'x' }] }] })
   assert.deepEqual([untouched.typeStates.entries(), untouched.projects.entries(), untouched.prs.entries()], [[], [], []])
+})
+
+test("meta and PR records whose rows changed only their age are written again only once their saved copy is 15 minutes old, and on flush", async () => {
+  const clock = fakeClock(T0)
+  const cache = memoryCache()
+  const entities = createEntities(clock.now)
+  const connected: OrgStatus = {
+    org: 'contoso',
+    url: 'https://dev.azure.com/contoso',
+    method: 'pat',
+    state: 'connected',
+    account: { adoId: ADA, uniqueName: 'dev@contoso.example', displayName: 'Dev', tenantId: null, objectId: null },
+    tokenStore: { kind: 'orca-secrets' },
+    boards: null,
+    codeProjects: 'all'
+  }
+  const persisted = createPersisted({ port: cache.port, orgs: async () => [connected], now: clock.now, clock, log: () => {} })
+  const saved = createSavedTables(entities, persisted)
+  const tables = entities.of('contoso')
+  const keys = [cacheKey('contoso', 'meta'), cacheKey('contoso', 'pr-records')]
+  const writes = () => keys.map(key => cache.writes.filter(written => written === key).length)
+  const reread = async (minute: number) => {
+    const [older, newer] = minute % 2 === 0 ? [1, 2] : [2, 1]
+    tables.projects.put('all', [{ id: 'p', name: 'Web' }])
+    tables.prs.put(prKey(record(older)), record(older), clock.now() - 1)
+    tables.prs.put(prKey(record(newer)), record(newer))
+    tables.prChecks.put(prKey(record(1)), CHECKS)
+    await drain()
+    saved.save('contoso', ADA)
+  }
+  const written: number[][] = [[], []]
+  for (let minute = 0; minute <= 30; minute += 1) {
+    const before = writes()
+    await reread(minute)
+    await clock.tick(0)
+    writes().forEach((count, index) => count > before[index] && written[index].push(minute))
+    await clock.tick(MINUTE)
+  }
+  assert.deepEqual(written, [[0, 15, 30], [0, 15, 30]])
+
+  await reread(31)
+  await persisted.flush()
+  assert.deepEqual(writes(), [4, 4])
+  const prs = (cache.data[keys[1]] as Saved<SavedPrRecords>).value.repos[0].prs
+  assert.deepEqual(
+    prs.map(pr => [pr.prId, pr.at, pr.checks?.at]),
+    [
+      [1, T0 + 31 * MINUTE, T0 + 31 * MINUTE],
+      [2, T0 + 31 * MINUTE - 1, undefined]
+    ]
+  )
 })

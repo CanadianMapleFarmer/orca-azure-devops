@@ -827,6 +827,7 @@ test('a quiet Pipelines tab keeps loading in full without rewriting its saved co
   await h.clock.tick(14 * MINUTE)
   assert.ok(h.ado.count(isMineRuns) >= loads + 2 * 10, 'every project kept loading')
   assert.equal(writes(), 1, 'written once, after the first load')
+  assert.deepEqual(h.cache.writes.filter((key, index) => h.cache.writes.indexOf(key) !== index), [], 'the meta and the index are written once too')
   await h.clock.tick(2 * MINUTE)
   assert.equal(writes(), 2)
 })
@@ -837,6 +838,19 @@ async function savedRuns(): Promise<{ live: RunsSnapshot; cache: Record<string, 
   await before.persisted.flush()
   return { live, cache: structuredClone(before.cache.data) }
 }
+
+test('saved runs whose read finishes after the org expired are not served', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const painting = h.service.snapshot(ORG)
+  h.setOrgs([status({ state: 'expired' })])
+
+  assert.equal((await rejection(painting)).message, NOT_CONNECTED)
+  await drain()
+  assert.deepEqual(h.posts, [])
+  assert.equal(h.service.cachedRun(ORG, ACTIVE[0]), null)
+})
 
 test('the Pipelines tab paints saved runs at once, stale, then live', async () => {
   const { live, cache } = await savedRuns()

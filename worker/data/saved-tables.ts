@@ -59,8 +59,14 @@ export function createSavedTables(entities: Entities, persisted: Persisted): Sav
       if (!parts) return
       dirty.delete(org)
       const tables = entities.of(org)
-      if (parts.has('meta')) persisted.save(org, 'meta', account, metaOf(tables))
-      if (parts.has('pr-records')) persisted.save(org, 'pr-records', account, prRecordsOf(tables))
+      if (parts.has('meta')) {
+        const meta = metaOf(tables)
+        persisted.save(org, 'meta', account, meta, timelessMeta(meta))
+      }
+      if (parts.has('pr-records')) {
+        const records = prRecordsOf(tables)
+        persisted.save(org, 'pr-records', account, records, timelessPrRecords(records))
+      }
     },
 
     forget(org) {
@@ -94,6 +100,16 @@ export function prRecordsOf(tables: Pick<OrgEntities, 'prs' | 'prChecks'>): Save
   const kept = newestThatFit([...repoOf.keys()], room, pr => pr.at, MAX_SAVED_PRS)
   for (const pr of kept) repoOf.get(pr)!.prs.push(pr)
   return { repos: [...repos.values()].filter(repo => repo.prs.length > 0) }
+}
+
+function timelessMeta({ configs, states, projects }: SavedMeta): unknown {
+  const timeless = (rows: Row<unknown>[]) => rows.map(([key, value]) => [key, value])
+  return { configs: timeless(configs), states: timeless(states), projects: timeless(projects) }
+}
+
+function timelessPrRecords({ repos }: SavedPrRecords): unknown {
+  const byId = (a: SavedPr, b: SavedPr) => a.prId - b.prId
+  return repos.map(({ prs, ...repo }) => ({ ...repo, prs: [...prs].sort(byId).map(({ at, checks, ...pr }) => ({ ...pr, checks: checks?.value })) }))
 }
 
 export function seedMeta(tables: Pick<OrgEntities, 'boardConfigs' | 'typeStates' | 'projects'>, meta: unknown): void {

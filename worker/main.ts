@@ -7,6 +7,7 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
 import { createEntraProvider } from './auth/entra-provider'
+import { untilAborted } from './abort'
 import { closeAllListeners, listenForRedirect } from './auth/loopback'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
@@ -63,6 +64,7 @@ import type { HostCall } from './workspace/focused'
 import { registerWorkspaceHandlers } from './workspace/handlers'
 
 const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
+const FLUSH_WITHIN_MS = 1_500
 
 let stopPolling = () => {}
 let stopSignIns = () => {}
@@ -72,8 +74,7 @@ export async function deactivate(): Promise<void> {
   stopPolling()
   stopSignIns()
   closeAllListeners()
-  await flushSaved()
-  return stopAllCommands(SHUTDOWN)
+  await Promise.all([flushSaved(), stopAllCommands(SHUTDOWN)])
 }
 
 async function readUpTo(file: string, maxBytes: number): Promise<string> {
@@ -135,7 +136,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     log
   })
   void persisted.sweep()
-  flushSaved = () => persisted.flush()
+  flushSaved = () =>
+    untilAborted(persisted.flush(), AbortSignal.timeout(FLUSH_WITHIN_MS)).catch(() => log(`Saved data: not every view was written within ${FLUSH_WITHIN_MS} ms of shutting down.`))
   const savedTables = createSavedTables(entities, persisted)
   const connections = createConnections({
     store,

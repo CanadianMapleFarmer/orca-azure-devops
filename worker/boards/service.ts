@@ -76,7 +76,7 @@ interface OrgWork extends Synced {
   snapshot: WorkSnapshot | null
   failure: unknown
   loading: Flight<WorkSnapshot> | null
-  restored: WorkSnapshot | null
+  restored: boolean
   restoring?: Promise<void>
   forceAudit: boolean
 }
@@ -107,7 +107,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     now,
     load: loadBoard,
     restore: savedBoard,
-    polls: org => connected.has(org),
+    connected: org => connected.has(org),
     changed: deps.postBoard,
     dropped: key => recent.drop(key)
   })
@@ -175,13 +175,15 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
 
   async function restoreWork(entry: OrgWork, status: OrgStatus, account: string): Promise<void> {
     const saved = await deps.persisted.load(status.org, 'work', account)
-    if (work.get(status.org) !== entry || entry.snapshot || !isSavedWork(saved?.value, status)) return
-    entry.snapshot = entry.restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
+    if (work.get(status.org) !== entry || entry.snapshot || !connected.has(status.org) || !isSavedWork(saved?.value, status)) return
+    Object.assign(entry, { snapshot: { ...saved.value, stale: true, message: SHOWING_SAVED }, restored: true })
   }
 
   function unrestore(org: string): void {
     const entry = work.get(org)
-    if (entry?.restored && entry.snapshot === entry.restored) Object.assign(entry, { snapshot: null, restored: null, restoring: undefined })
+    if (!entry) return
+    if (entry.restored) Object.assign(entry, { snapshot: null, restored: false })
+    entry.restoring = undefined
   }
 
   function revalidate(org: string): void {
@@ -191,9 +193,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
 
   async function savedBoard(request: BoardRequest, boardId: string): Promise<SavedBoard | null> {
     const account = accountOf(await statusOf(request.org))
-    if (!account) return null
+    if (!account || !connected.has(request.org)) return null
     const saved = await deps.persisted.load(request.org, savedBoardName(request.args.teamId, boardId), account)
-    if (!saved || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
+    if (!saved || !connected.has(request.org) || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
     return { result: { ...saved.value.result, stale: true, updatedAt: saved.savedAt }, savedAt: saved.savedAt }
   }
 
@@ -204,7 +206,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function workOf(org: string): OrgWork {
-    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: null, forceAudit: false }
+    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: false, forceAudit: false }
     work.set(org, entry)
     return entry
   }
@@ -266,7 +268,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
         if (!status.boards) return noBoards(org)
         const { snapshot, projected, sync, known, forced } = await build(status, entry, signal)
         if (work.get(org) !== entry) return snapshot
-        Object.assign(entry, { snapshot, sync, known, failure: null, restored: null })
+        Object.assign(entry, { snapshot, sync, known, failure: null, restored: false })
         if (forced) entry.forceAudit = false
         deps.post(snapshot)
         persist(status, 'work', () => capSnapshot(projected, VALUE_BUDGET_BYTES))
@@ -449,7 +451,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const entry = work.get(org)
       const current = entry?.snapshot
       if (!entry || !current || !sameTarget(current.board, status.boards)) return load(org)
-      if (current === entry.restored) revalidate(org)
+      if (entry.restored) revalidate(org)
       return current
     },
 
@@ -473,9 +475,11 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     },
 
     cachedItem(org, id) {
-      const snapshot = work.get(org)?.snapshot
+      const servable = (held: { restored: boolean }) => !held.restored || connected.has(org)
+      const entry = work.get(org)
+      const snapshot = entry && servable(entry) ? entry.snapshot : null
       const listed = [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(item => item.id === id)
-      return listed ?? boardViews.of(org).flatMap(view => view.result.items).find(item => item.id === id) ?? null
+      return listed ?? boardViews.of(org).filter(servable).flatMap(view => view.result.items).find(item => item.id === id) ?? null
     },
 
     async itemInfo(org, id, signal) {

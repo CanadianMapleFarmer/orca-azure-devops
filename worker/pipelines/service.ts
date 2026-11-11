@@ -123,6 +123,10 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     entries.delete(org)
   }
 
+  function connected(org: string): boolean {
+    return jobs.has(org)
+  }
+
   function runsKey(org: string): string {
     return `runs:${org}`
   }
@@ -173,7 +177,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
   async function restoreFrom(org: string, entry: OrgRuns, account: string): Promise<RunsSnapshot | null> {
     const saved = await deps.persisted.load(org, 'runs', account)
-    if (entries.get(org) !== entry || painted(entry) || !isSavedRuns(saved?.value, org)) return null
+    if (entries.get(org) !== entry || !connected(org) || painted(entry) || !isSavedRuns(saved?.value, org)) return null
     entry.source.seed(saved.value.runs)
     entry.restored = true
     const restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
@@ -366,7 +370,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const entry = entries.get(org)
     if (fresh(entry)) return entry.snapshot
     const restored = await restore(org, status)
-    if (restored) return restored
+    if (restored && connected(org)) return restored
     try {
       return await load(org, 'full')
     } catch (error) {

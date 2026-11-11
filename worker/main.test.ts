@@ -714,6 +714,25 @@ test('the Work view is saved on deactivate, painted from storage at the next sta
   })
 })
 
+test('deactivate returns within its 2 s budget while a saved view cannot be written', async () => {
+  const ado = fakeAdo()
+  let unstick = () => {}
+  const stuck = new Promise<null>(resolve => (unstick = () => resolve(null)))
+  const host = boardsHost(BOARDS, { 'storage.set': ({ key }: { key: string }) => (key.startsWith('adoCache:') ? stuck : null) })
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host }, async w => {
+      await w.request('work.snapshot', { org: 'contoso' })
+      assert.ok(await until(() => w.host.calls.some(call => call.method === 'storage.set')), 'a saved view is being written')
+
+      const started = Date.now()
+      const finished = await Promise.race([worker.deactivate().then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3_000))])
+      const took = Date.now() - started
+      unstick()
+      assert.ok(finished && took < 2_000, `deactivate took ${took} ms`)
+    })
+  })
+})
+
 test('work.nudgeRules reads and saves the rules of the boards team', async () => {
   const ado = fakeAdo()
   await withFetch(signedIn(ado), async () => {

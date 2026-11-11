@@ -741,6 +741,7 @@ test('a quiet PRs tab keeps loading in full without rewriting its saved copy unt
   await h.clock.tick(14 * MINUTE)
   assert.ok(h.ado.count(isMineActive) >= loads + 14, 'the hot project kept loading every minute')
   assert.equal(writes(), 1, 'written once, after the first load')
+  assert.deepEqual(h.cache.writes.filter((key, index) => h.cache.writes.indexOf(key) !== index), [], 'the PR records, the meta and the index are written once too')
   await h.clock.tick(2 * MINUTE)
   assert.equal(writes(), 2)
 })
@@ -751,6 +752,19 @@ async function savedPrs(): Promise<{ live: PrSnapshot; cache: Record<string, unk
   await before.persisted.flush()
   return { live, cache: structuredClone(before.cache.data) }
 }
+
+test('saved PRs whose read finishes after the org expired are not served', async () => {
+  const { cache } = await savedPrs()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const painting = h.service.snapshot(ORG)
+  h.setOrgs([status({ state: 'expired' })])
+
+  assert.deepEqual(await rejection(painting), new AdoError('unauthorized', 401, NOT_CONNECTED))
+  await drain()
+  assert.deepEqual(h.posts, [])
+  assert.deepEqual(h.counts.filter(([, count]) => count !== null), [])
+})
 
 test('the PRs tab paints saved PRs at once, stale, then live', async () => {
   const { live, cache } = await savedPrs()

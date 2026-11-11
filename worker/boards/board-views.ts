@@ -9,7 +9,7 @@ export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; mes
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
 export interface Synced { sync: SyncState | null; known: number[] }
 export interface BoardLoad extends Synced { result: BoardResult }
-export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult }
+export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult; restored: boolean }
 export interface BoardRef { teamId: string; boardId: string }
 export interface SavedBoard { result: BoardResult; savedAt: number }
 
@@ -18,7 +18,7 @@ export interface BoardViewsDeps {
   now: () => number
   load: (request: BoardRequest & Synced, signal?: AbortSignal) => Promise<BoardLoad>
   restore: (request: BoardRequest, boardId: string) => Promise<SavedBoard | null>
-  polls: (org: string) => boolean
+  connected: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
 }
@@ -71,7 +71,7 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     }
     if (views.get(key) !== view) return
     const unchanged = sameApartFromTime(view.result, loaded.result)
-    Object.assign(view, loaded, { at: deps.now() })
+    Object.assign(view, loaded, { at: deps.now(), restored: false })
     if (unchanged) return 'unchanged'
     changed(view)
   }
@@ -87,9 +87,13 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   }
 
   function sync(org: string): void {
-    const active = deps.polls(org)
-    for (const view of views.values()) {
+    const active = deps.connected(org)
+    for (const view of [...views.values()]) {
       if (view.org !== org) continue
+      if (!active && view.restored) {
+        drop(view.key)
+        continue
+      }
       if (!active || isHidden(view)) {
         deps.scheduler.remove(view.key)
         continue
@@ -150,14 +154,14 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       const request = { key, org, args, everyone }
       const generation = generationOf(org, key)
       const saved = held ? null : await deps.restore(request, boardId)
-      if (saved && generationOf(org, key) === generation && !views.has(key)) {
-        hold({ ...request, result: saved.result, sync: null, known: [], at: Math.min(saved.savedAt, deps.now() - BOARD_MS.visibleMs) })
+      if (saved && deps.connected(org) && generationOf(org, key) === generation && !views.has(key)) {
+        hold({ ...request, result: saved.result, sync: null, known: [], at: Math.min(saved.savedAt, deps.now() - BOARD_MS.visibleMs), restored: true })
         void deps.scheduler.runNow(key)
         return saved.result
       }
       const loaded = await deps.load({ ...request, sync: null, known: [] })
       if (generationOf(org, key) !== generation) return loaded.result
-      hold({ ...request, ...loaded, at: deps.now() })
+      hold({ ...request, ...loaded, at: deps.now(), restored: false })
       return loaded.result
     },
 

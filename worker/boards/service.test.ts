@@ -7,7 +7,7 @@ import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { currentContext, type Priority } from '../data/context'
 import { createEntities } from '../data/entities'
-import { cacheKey, createPersisted } from '../data/persist'
+import { cacheKey, createPersisted, type CachePort } from '../data/persist'
 import { createSavedTables } from '../data/saved-tables'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock, memoryCache } from '../test-support'
@@ -51,6 +51,7 @@ const NEEDS_CODE_READ = 'Linked PR status needs Code (Read) access.'
 const NOT_CONNECTED = 'Connect this organization first.'
 const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 const INTERRUPTED = 'Sign-in was interrupted. Try again.'
+const REJECTED = 'Azure DevOps rejected the credentials.'
 const FILTER_NOT_SAVED = "Couldn't save this board's filter."
 const DATE_PRECISION = 'You cannot supply a time with the date when running a query using date precision.'
 const COLUMNS = ['New', 'Active', 'In Review', 'Resolved', 'Closed']
@@ -98,8 +99,18 @@ function harness(first: OrgStatus = status(), restart: { cache?: Record<string, 
   const scheduler = createScheduler(clock)
   const entities = createEntities(clock.now)
   const cache = memoryCache(restart.cache)
+  const heldCacheReads = new Map<string, Promise<void>>()
+  const port: CachePort = {
+    ...cache.port,
+    get: async key => {
+      const gate = heldCacheReads.get(key)
+      heldCacheReads.delete(key)
+      await gate
+      return cache.port.get(key)
+    }
+  }
   const logs: string[] = []
-  const persisted = createPersisted({ port: cache.port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: message => logs.push(message) })
+  const persisted = createPersisted({ port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: message => logs.push(message) })
   const service = createBoardsService({
     http,
     orgs: async () => structuredClone(orgs),
@@ -133,6 +144,11 @@ function harness(first: OrgStatus = status(), restart: { cache?: Record<string, 
     holdRead(key: string): { release(): void } {
       let release = () => {}
       heldReads.set(key, new Promise<void>(resolve => (release = resolve)))
+      return { release: () => release() }
+    },
+    holdCacheRead(key: string): { release(): void } {
+      let release = () => {}
+      heldCacheReads.set(key, new Promise<void>(resolve => (release = resolve)))
       return { release: () => release() }
     }
   }
@@ -2135,12 +2151,59 @@ test('a saved snapshot is not served while the org is expired', async () => {
   assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED, 'served once it reconnects')
 })
 
-test('a sign-in interrupted by a restart keeps the saved data', async () => {
+test('a saved snapshot is not served once the org expires while its revalidation is being rejected', async () => {
   const { cache } = await savedWork()
   const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  h.ado.on(() => true, () => json(401, {}))
+  assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED)
+
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  await drain()
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.equal((await rejection(h.service.snapshot(ORG))).message, NOT_CONNECTED)
+  assert.deepEqual(h.posts, [])
+
+  h.setOrgs([status({ account: ALEX })])
+  assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED, 'served again once it reconnects')
+})
+
+test('a restored Work snapshot whose revalidation was rejected is dropped when the org expires', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  h.ado.on(() => true, () => json(401, {}))
+  assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED)
+  await drain()
+  assert.deepEqual([h.posts.at(-1)?.stale, h.posts.at(-1)?.message], [true, REJECTED])
+  assert.ok(h.service.cachedItem(ORG, 1204), 'still held while the org is connected')
+
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.equal((await rejection(h.service.snapshot(ORG))).message, NOT_CONNECTED)
+})
+
+test('a saved Work snapshot whose read finishes after the org expired is not served', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  await drain()
+
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.equal((await rejection(h.service.snapshot(ORG))).message, NOT_CONNECTED)
+  assert.deepEqual(h.posts, [])
+})
+
+test('a sign-in interrupted by a restart drops the restored view from memory, and it is restored again once connected', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  await drain()
+  assert.ok(h.service.cachedItem(ORG, 1204))
+
   h.setOrgs([status({ account: ALEX, state: 'disconnected', message: INTERRUPTED })])
-  await h.clock.tick(5 * MINUTE)
-  assert.deepEqual(Object.keys(h.cache.data).sort(), Object.keys(cache).sort())
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
 
   h.setOrgs([status({ account: ALEX })])
   assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED)
@@ -2166,6 +2229,38 @@ test('the board paints a saved view at once when no view is held, and revalidate
   assert.equal(live.stale, undefined)
   assert.equal(live.message, undefined)
   assert.equal(live.items.find(entry => entry.id === 1205)?.rev, view.items.find(entry => entry.id === 1205)!.rev + 1)
+})
+
+test('a restored board view is dropped when its org expires, even after its revalidation was rejected', async () => {
+  const { cache } = await savedBoard()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  h.ado.on(() => true, () => json(401, {}))
+  assert.equal((await h.service.board(STORIES_BOARD)).stale, true)
+  await drain()
+  const rejected = await h.service.board(STORIES_BOARD)
+  assert.equal(rejected.stale, true)
+  assert.match(rejected.message ?? '', /rejected the credentials/)
+
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.equal((await rejection(h.service.board(STORIES_BOARD))).message, NOT_CONNECTED)
+})
+
+test('a saved board view whose read finishes after the org expired is not served', async () => {
+  const { cache } = await savedBoard()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  const read = h.holdCacheRead(cacheKey(ORG, `board:${TEAM}:${STORIES}`))
+  const opening = h.service.board(STORIES_BOARD)
+  await drain()
+
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  read.release()
+  assert.equal((await rejection(opening)).message, NOT_CONNECTED)
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.deepEqual(h.boardPosts, [])
 })
 
 test('a saved board view is served only for the filter it was saved with', async () => {
@@ -2219,12 +2314,14 @@ test('a quiet Work tab and board keep polling without rewriting their saved copi
   assert.deepEqual(written, [[0], [0]])
   const loads = [h.ado.count(isMineWiql), h.ado.count(isBoardWiql)]
 
+  const settled = h.cache.writes.length
   for (let minute = 1; minute <= 10; minute += 1) {
     await h.clock.tick(MINUTE)
     record()
   }
   assert.ok(h.ado.count(isMineWiql) >= loads[0] + 4 && h.ado.count(isBoardWiql) >= loads[1] + 8, 'both views kept polling')
   assert.deepEqual(written, [[0], [0]], 'nothing changed, so nothing was written')
+  assert.deepEqual(h.cache.writes.slice(settled), [], 'nor the meta, the PR records or the index')
 
   for (let minute = 11; minute <= 60; minute += 1) {
     await h.clock.tick(MINUTE)

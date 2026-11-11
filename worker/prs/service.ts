@@ -120,6 +120,10 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     entries.delete(org)
   }
 
+  function connected(org: string): boolean {
+    return jobs.has(org)
+  }
+
   function resetBaseline(org: string): void {
     baselined.delete(org)
     deps.notifier.forget(org)
@@ -159,7 +163,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
   async function restoreFrom(org: string, entry: OrgPrs, account: string): Promise<PrSnapshot | null> {
     const saved = await deps.persisted.load(org, 'prs', account)
-    if (entries.get(org) !== entry || painted(entry) || !isSavedPrs(saved?.value, org)) return null
+    if (entries.get(org) !== entry || !connected(org) || painted(entry) || !isSavedPrs(saved?.value, org)) return null
     entry.restored = true
     const restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
     entry.base = restored
@@ -340,7 +344,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const entry = entries.get(org)
       if (fresh(entry)) return entry.snapshot
       const restored = await restore(org, status)
-      if (restored) return restored
+      if (restored && connected(org)) return restored
       try {
         return await load(org, 'full')
       } catch (error) {
