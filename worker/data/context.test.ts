@@ -11,7 +11,9 @@ import {
   raise,
   withUserContext,
   type Feature,
-  type Lane
+  type Flight,
+  type Lane,
+  type Priority
 } from './context'
 
 function seen() {
@@ -138,6 +140,34 @@ test('raise tells every onRaise listener once', () => {
     stopFirst()
     stopSecond()
   }
+})
+
+test('raising a lane later also raises the flights it is waiting on', async () => {
+  const release = gate()
+  let inner: Flight<Priority> | undefined
+  const outer = inLane('prs', 'hidden', () =>
+    fly(async () => {
+      inner = fly(async () => {
+        await release.opened
+        return currentContext().lane.priority
+      })
+      return join(inner)
+    })
+  )
+  const waited = inner ?? assert.fail('the inner flight started')
+  assert.equal(waited.lane.priority, 'hidden', 'a background join leaves the inner flight where it was')
+
+  const raised: Lane[] = []
+  const stop = onRaise(lane => raised.push(lane))
+  try {
+    inLane('prs', 'user', () => join(outer))
+  } finally {
+    stop()
+  }
+  assert.deepEqual([outer.lane.priority, waited.lane.priority], ['user', 'user'])
+  assert.deepEqual(raised, [outer.lane, waited.lane])
+  release.open()
+  assert.equal(await outer.promise, 'user')
 })
 
 test('withUserContext runs every handler as a user request for its feature, and leaves the rest of the API working', async () => {

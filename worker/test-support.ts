@@ -5,6 +5,8 @@ import type { Timeout } from './auth/entra'
 import type { Listen, Redirect } from './auth/loopback'
 import type { SecretsPort } from './auth/pat'
 import type { StorePort } from './connections'
+import { createPressure, paceOf, type Pressure } from './data/rate-limit'
+import { createScheduler, type Scheduler } from './poll/scheduler'
 
 export async function drain(turns = 100): Promise<void> {
   for (let turn = 0; turn < turns; turn += 1) await new Promise(resolve => setImmediate(resolve))
@@ -105,6 +107,11 @@ export function fakeClock(start = 0) {
 }
 
 export type FakeClock = ReturnType<typeof fakeClock>
+
+export function paced(clock: FakeClock): { pressure: Pressure; scheduler: Scheduler } {
+  const pressure = createPressure(clock.now)
+  return { pressure, scheduler: createScheduler(clock, paceOf(pressure)) }
+}
 
 export function memoryStore(initial: Record<string, unknown> = {}): { data: Record<string, unknown>; store: StorePort } {
   const data: Record<string, unknown> = { ...initial }

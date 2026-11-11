@@ -7,6 +7,7 @@ import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import type { RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
+import { fly, join, type Flight } from '../data/context'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
@@ -60,7 +61,7 @@ export interface BoardsService {
 interface OrgWork {
   snapshot: WorkSnapshot | null
   failure: unknown
-  loading: Promise<WorkSnapshot> | null
+  loading: Flight<WorkSnapshot> | null
 }
 
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
@@ -150,7 +151,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
 
   function load(org: string, signal?: AbortSignal): Promise<WorkSnapshot> {
     const entry = workOf(org)
-    entry.loading ??= (async () => {
+    entry.loading ??= fly(async () => {
       try {
         const status = await statusOf(org)
         if (!status.boards) return noBoards(org)
@@ -171,8 +172,8 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       } finally {
         entry.loading = null
       }
-    })()
-    return entry.loading
+    })
+    return join(entry.loading)
   }
 
   async function loadBoard(request: BoardRequest, signal?: AbortSignal): Promise<BoardResult> {
@@ -304,7 +305,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const [org, target] of wanted) {
         if (polled.has(org)) continue
         polled.set(org, target)
-        scheduler.upsert({ key: mineKey(org), ...MINE_MS, run: async signal => void (await load(org, signal)) })
+        scheduler.upsert({ key: mineKey(org), org, ...MINE_MS, run: async signal => void (await load(org, signal)) })
         scheduler.setVisible(mineKey(org), workVisible.has(org))
       }
       boardViews.syncAll()

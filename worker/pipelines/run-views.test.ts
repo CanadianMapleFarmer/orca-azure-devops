@@ -6,9 +6,8 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawRecord, RawTimeline } from '../ado/timeline'
 import { fixture, json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
-import { createScheduler } from '../poll/scheduler'
 import { PLATFORM } from '../prs/fake-prs'
-import { fakeClock } from '../test-support'
+import { fakeClock, paced } from '../test-support'
 import {
   APPROVAL_4520,
   buildIdOf,
@@ -22,7 +21,6 @@ import {
   ME,
   type FakePipelines
 } from './fake-pipelines'
-import { createPressure } from './pressure'
 import { createRunViews } from './run-views'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
@@ -59,12 +57,12 @@ function harness() {
   const changes: { org: string; buildId: number }[] = []
   const watched = new Set<number>()
   let orgs = [status()]
-  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const { pressure, scheduler } = paced(clock)
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {}, observe: pressure.observe })
   const views = createRunViews({
     http,
     orgs: async () => structuredClone(orgs),
-    scheduler: createScheduler(clock),
-    pressure: createPressure(clock.now),
+    scheduler,
     watched: (org, buildId) => org === ORG && watched.has(buildId),
     changed: change => changes.push(change),
     now: clock.now
@@ -76,6 +74,7 @@ function harness() {
     changes,
     watched,
     views,
+    pressure,
     view: (buildId: number) => views.view({ org: ORG, projectId: PROJECT, buildId }),
     show: (buildId: number, visible = true) => views.setVisible({ org: ORG, visible, run: { projectId: PROJECT, buildId } }),
     setOrgs(next: OrgStatus[]) {
@@ -380,7 +379,7 @@ test('hidden views are cached ten at a time and a visible one is never dropped',
   assert.equal(h.since(cached).builds, 1, 'the oldest hidden view was dropped')
 })
 
-test('pressure slows a run view to thirty seconds', async () => {
+test('a delayed org polls an active run view at forty seconds', async () => {
   const h = harness()
   const reads: number[] = []
   h.ado.on(
@@ -392,9 +391,9 @@ test('pressure slows a run view to thirty seconds', async () => {
   )
   h.show(4520)
   await h.clock.tick(0)
-  await h.clock.tick(5 * MINUTE + 10_000)
-  assert.deepEqual(reads.slice(0, 3), [0, 30_000, 60_000], 'slowed to thirty seconds')
-  assert.deepEqual(reads.slice(-3), [300_000, 305_000, 310_000], 'and back to five seconds once the pressure ends')
+  await h.clock.tick(5 * MINUTE + 30_000)
+  assert.deepEqual(reads.slice(0, 3), [0, 40_000, 80_000], 'eight times the five seconds')
+  assert.deepEqual(reads.slice(-3), [320_000, 325_000, 330_000], 'and back to five seconds once the delay has passed')
 })
 
 test('a run action reloads its open view in full at once', async () => {
@@ -520,8 +519,9 @@ test('a failed poll keeps the last view as stale, tells the tab once, recovers a
   await h.clock.tick(5_000)
   const throttled = h.ado.calls.length
   assert.equal((await h.view(4520)).stale, true)
+  assert.equal(h.pressure.state(ORG).resumeAt, h.clock.now() + 90_000, 'the org is blocked for what ADO asked')
   await h.clock.tick(80_000)
-  assert.deepEqual(h.since(throttled), NO_CALLS, 'polling pauses for what ADO asked')
+  assert.deepEqual(h.since(throttled), NO_CALLS, 'polling waits out the org\'s resumeAt')
   failing = null
   await h.clock.tick(10_000)
   assert.equal(h.since(throttled).builds, 1, 'and resumes after it')

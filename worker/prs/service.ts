@@ -4,6 +4,7 @@ import { linkedAbort, untilAborted } from '../abort'
 import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import { fly, join, type Flight } from '../data/context'
 import {
   failureMessage,
   joinMessages,
@@ -15,7 +16,7 @@ import {
   PRS_WORK_ITEMS_NEED_ACCESS
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
-import type { Scheduler } from '../poll/scheduler'
+import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource, type ThreadRead } from './load'
 import { watchedPrs, type PrNotifier, type PrThreads } from './notify'
 import { newestCreatedAt, releaseSets, reviewedOf, toReviewOf } from './release-sets'
@@ -56,7 +57,7 @@ interface OrgPrs {
   mine: PrSummary[]
   review: PrSummary[]
   failure: AdoError | null
-  loading: { kind: Kind; promise: Promise<PrSnapshot> } | null
+  loading: { kind: Kind; flight: Flight<PrSnapshot> } | null
   pausedUntil: number
   threadsPausedUntil: number
 }
@@ -151,13 +152,13 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   function load(org: string, kind: Kind): Promise<PrSnapshot> {
     const entry = entryOf(org)
     const current = entry.loading
-    if (current && (current.kind === 'full' || kind === 'reviews')) return current.promise
-    const loading = { kind, promise: run() }
+    if (current && (current.kind === 'full' || kind === 'reviews')) return join(current.flight)
+    const loading = { kind, flight: fly(run) }
     entry.loading = loading
-    return loading.promise
+    return join(loading.flight)
 
     async function run(): Promise<PrSnapshot> {
-      await current?.promise.catch(() => {})
+      if (current) await join(current.flight).catch(() => {})
       try {
         return await attempt(org, entry, kind)
       } finally {
@@ -222,7 +223,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     const entry = entryOf(org)
     const loads = entry.fullLoads
     void scheduler.runNow(jobKey(org))
-    await entry.loading?.promise.catch(() => {})
+    if (entry.loading) await join(entry.loading.flight).catch(() => {})
     if (entry.fullLoads === loads && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
@@ -291,7 +292,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       for (const org of signedIn) {
         if (jobs.has(org)) continue
         jobs.add(org)
-        scheduler.upsert({ key: jobKey(org), ...PRS_MS, run: signal => poll(org, signal) })
+        scheduler.upsert({ key: jobKey(org), org, ...PRS_MS, quietCapMs: NOTIFY_CAP_MS, run: signal => poll(org, signal) })
         scheduler.setVisible(jobKey(org), visible.has(org))
       }
     },
@@ -320,7 +321,8 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
     async reloadFresh(org) {
       await statusOf(org)
-      await entryOf(org).loading?.promise.catch(() => {})
+      const loading = entryOf(org).loading
+      if (loading) await join(loading.flight).catch(() => {})
       return load(org, 'full')
     },
 

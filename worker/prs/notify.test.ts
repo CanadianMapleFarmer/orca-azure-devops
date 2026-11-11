@@ -6,8 +6,7 @@ import { createAdoHttp } from '../ado/http'
 import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
-import { createScheduler } from '../poll/scheduler'
-import { drain, fakeClock, withWorker } from '../test-support'
+import { drain, fakeClock, paced, withWorker } from '../test-support'
 import { fakePrs, isMineActive, isReviewList, isThreads, ME, projectOf, threadsPrIdOf } from './fake-prs'
 import { createPrNotifier, MAX_WATCHED_PRS } from './notify'
 import { createPrsService, type PrsService } from './service'
@@ -90,6 +89,7 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
   const host = mockHost({ results: { 'notifications.show': { delivered: true } } })
   const ado = fakePrs()
   const clock = fakeClock(T0)
+  const { pressure, scheduler } = paced(clock)
   const review = fixture<{ value: RawPullRequest[] }>('pull-requests-review').value
   const mine = fixture<{ value: RawPullRequest[] }>('pull-requests-mine').value
   const threads = new Map<number, RawThread[]>()
@@ -105,9 +105,9 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
       const log = (message: string) => orca.log(message)
       const notifier = createPrNotifier({ show: n => orca.host.call('notifications.show', n), prefs: () => prefs, log })
       made.service = createPrsService({
-        http: createAdoHttp({ fetch: ado.fetch, authHeader: async () => AUTHORIZATION, sleep: async () => {} }),
+        http: createAdoHttp({ fetch: ado.fetch, authHeader: async () => AUTHORIZATION, sleep: async () => {}, observe: pressure.observe }),
         orgs: async () => structuredClone(orgs),
-        scheduler: createScheduler(clock),
+        scheduler,
         autoComplete: () => AUTO,
         post: () => {},
         counts: () => {},
@@ -428,7 +428,7 @@ test('a pull request whose comments could not be read keeps its baseline, so wha
   })
 })
 
-test('a throttled thread read pauses the PRs job for the retry wait and logs nothing', async () => {
+test('a throttled thread read holds the PRs job until the retry wait has passed, and logs nothing', async () => {
   await withPrNotifications(async h => {
     h.setOrgs([status()])
     await h.poll(0)
@@ -443,10 +443,11 @@ test('a throttled thread read pauses the PRs job for the retry wait and logs not
     const [paused, listed] = [reads(), lists()]
 
     throttled.now = false
-    await h.clock.tick(5 * MINUTE)
-    assert.deepEqual([reads(), lists()], [paused, listed], 'the job stays paused for the retry wait')
-    await h.clock.tick(5 * MINUTE)
-    assert.equal(reads(), paused + 5, 'polling resumes when the pause ends')
+    await h.clock.tick(10 * MINUTE - 1)
+    assert.deepEqual([reads(), lists()], [paused, listed], 'no PRs job runs for the 600 s')
+    await h.clock.tick(1)
+    assert.equal(reads(), paused + 5, 'then one runs')
+    assert.ok(lists() > listed)
     assert.deepEqual(h.logs(), [], 'a throttle pauses; it is not logged')
   })
 })

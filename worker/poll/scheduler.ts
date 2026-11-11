@@ -1,4 +1,5 @@
-import { AdoError } from '../ado/http'
+import { featureOfJob, fly, inLane, join, type Flight } from '../data/context'
+import type { Pace } from '../data/rate-limit'
 
 export interface Clock {
   now(): number
@@ -6,11 +7,16 @@ export interface Clock {
   clearTimeout(handle: unknown): void
 }
 
+export const NOTIFY_CAP_MS = 5 * 60_000
+
 export interface Job {
   key: string
+  org?: string
   visibleMs: number
-  backgroundMs: number
-  run(signal: AbortSignal): Promise<void>
+  backgroundMs: number | null
+  quietMax?: number
+  quietCapMs?: number
+  run(signal: AbortSignal): Promise<void | 'unchanged'>
 }
 
 export interface Scheduler {
@@ -21,8 +27,8 @@ export interface Scheduler {
   dispose(): void
 }
 
-const DEFAULT_RATE_LIMIT_PAUSE_MS = 60_000
-const MAX_RATE_LIMIT_PAUSE_MS = 15 * 60_000
+type Outcome = 'unchanged' | 'changed'
+
 const MIN_DELAY_MS = 1000
 const MAX_DELAY_MS = 2 ** 31 - 1
 
@@ -36,26 +42,30 @@ interface Entry {
   job: Job
   visible: boolean
   timer: { handle: unknown } | undefined
-  inFlight: Promise<void> | undefined
+  flight: Flight<void> | undefined
   abort: AbortController | undefined
   lastRunAt: number | undefined
-  pausedUntil: number
-}
-
-function rateLimitPauseMs(retryAfterMs: number | undefined): number {
-  if (retryAfterMs === undefined || Number.isNaN(retryAfterMs)) return DEFAULT_RATE_LIMIT_PAUSE_MS
-  return Math.min(Math.max(retryAfterMs, 0), MAX_RATE_LIMIT_PAUSE_MS)
+  streak: number
 }
 
 function assertValidIntervals(job: Job): void {
-  for (const ms of [job.visibleMs, job.backgroundMs]) {
+  const intervals = job.backgroundMs === null ? [job.visibleMs] : [job.visibleMs, job.backgroundMs]
+  for (const ms of intervals) {
     if (!Number.isFinite(ms) || ms < MIN_DELAY_MS) {
       throw new Error(`Polling job "${job.key}" needs finite intervals of at least ${MIN_DELAY_MS} ms.`)
     }
   }
 }
 
-export function createScheduler(clock: Clock): Scheduler {
+async function attempt(job: Job, signal: AbortSignal): Promise<Outcome> {
+  try {
+    return (await job.run(signal)) === 'unchanged' ? 'unchanged' : 'changed'
+  } catch {
+    return 'changed'
+  }
+}
+
+export function createScheduler(clock: Clock, pace?: Pace): Scheduler {
   const entries = new Map<string, Entry>()
   let disposed = false
 
@@ -65,61 +75,70 @@ export function createScheduler(clock: Clock): Scheduler {
     entry.timer = undefined
   }
 
-  function intervalOf(entry: Entry): number {
+  function factorOf(job: Job): number {
+    return pace && job.org !== undefined ? pace.factor(job.org) : 1
+  }
+
+  function resumeAtOf(job: Job): number {
+    return pace && job.org !== undefined ? pace.resumeAt(job.org) : 0
+  }
+
+  function baseOf(entry: Entry): number | null {
     return entry.visible ? entry.job.visibleMs : entry.job.backgroundMs
   }
 
-  function remainingMs(entry: Entry): number {
-    const now = clock.now()
-    const cadenceDue = entry.lastRunAt === undefined ? now : entry.lastRunAt + intervalOf(entry)
-    return Math.max(cadenceDue, entry.pausedUntil) - now
+  function intervalOf(entry: Entry, base: number): number {
+    const { quietMax = 1, quietCapMs = Infinity } = entry.job
+    const quiet = Math.min(2 ** entry.streak, quietMax)
+    return Math.min(base * quiet, Math.max(base, quietCapMs)) * factorOf(entry.job)
   }
 
-  function timeoutFor(entry: Entry): number {
-    const remaining = remainingMs(entry)
-    if (remaining <= 0) return 0
-    const wait = Number.isFinite(remaining) ? remaining : intervalOf(entry)
-    return Math.min(Math.max(wait, MIN_DELAY_MS), MAX_DELAY_MS)
+  function dueAt(entry: Entry, base: number): number {
+    const cadenceDue = entry.lastRunAt === undefined ? -Infinity : entry.lastRunAt + intervalOf(entry, base)
+    return Math.max(cadenceDue, resumeAtOf(entry.job))
+  }
+
+  function timeoutFor(entry: Entry, base: number): number {
+    const now = clock.now()
+    const resumeAt = resumeAtOf(entry.job)
+    const wakeAt = resumeAt > now ? resumeAt : dueAt(entry, base)
+    if (wakeAt <= now) return 0
+    return Math.min(Math.max(wakeAt - now, MIN_DELAY_MS), MAX_DELAY_MS)
   }
 
   function schedule(entry: Entry): void {
-    if (entry.inFlight) return
+    if (entry.flight) return
     clearTimer(entry)
-    const handle = clock.setTimeout(() => fire(entry), timeoutFor(entry))
+    const base = baseOf(entry)
+    if (base === null) return
+    const handle = clock.setTimeout(() => fire(entry), timeoutFor(entry, base))
     entry.timer = { handle }
   }
 
   function fire(entry: Entry): void {
     entry.timer = undefined
-    if (remainingMs(entry) > 0) schedule(entry)
-    else void start(entry)
+    const base = baseOf(entry)
+    if (base === null) return
+    if (dueAt(entry, base) > clock.now()) schedule(entry)
+    else inLane(featureOfJob(entry.job.key), entry.visible ? 'visible' : 'hidden', () => launch(entry))
   }
 
-  async function attempt(job: Job, signal: AbortSignal): Promise<number> {
-    try {
-      await job.run(signal)
-      return 0
-    } catch (error) {
-      if (!(error instanceof AdoError) || error.code !== 'rate_limited') return 0
-      return clock.now() + rateLimitPauseMs(error.retryAfterMs)
-    }
-  }
-
-  function start(entry: Entry): Promise<void> {
-    if (entry.inFlight) return entry.inFlight
+  function launch(entry: Entry): Flight<void> {
     clearTimer(entry)
     const abort = new AbortController()
     entry.abort = abort
-    const inFlight = attempt(entry.job, abort.signal).then(pausedUntil => {
-      entry.inFlight = undefined
-      entry.abort = undefined
-      if (abort.signal.aborted) return
-      entry.pausedUntil = pausedUntil
-      entry.lastRunAt = clock.now()
-      schedule(entry)
-    })
-    entry.inFlight = inFlight
-    return inFlight
+    const flight = fly(() => attempt(entry.job, abort.signal).then(outcome => settle(entry, abort, outcome)))
+    entry.flight = flight
+    return flight
+  }
+
+  function settle(entry: Entry, abort: AbortController, outcome: Outcome): void {
+    entry.flight = undefined
+    entry.abort = undefined
+    if (abort.signal.aborted) return
+    entry.streak = outcome === 'unchanged' ? entry.streak + 1 : 0
+    entry.lastRunAt = clock.now()
+    schedule(entry)
   }
 
   function stop(entry: Entry): void {
@@ -141,10 +160,10 @@ export function createScheduler(clock: Clock): Scheduler {
         job,
         visible: false,
         timer: undefined,
-        inFlight: undefined,
+        flight: undefined,
         abort: undefined,
         lastRunAt: undefined,
-        pausedUntil: 0
+        streak: 0
       }
       entries.set(job.key, entry)
       schedule(entry)
@@ -161,12 +180,15 @@ export function createScheduler(clock: Clock): Scheduler {
       const entry = entries.get(key)
       if (!entry || entry.visible === visible) return
       entry.visible = visible
+      if (visible) entry.streak = 0
       schedule(entry)
     },
 
     runNow(key) {
       const entry = entries.get(key)
-      return entry ? start(entry) : Promise.resolve()
+      if (!entry) return Promise.resolve()
+      entry.streak = 0
+      return entry.flight ? join(entry.flight) : launch(entry).promise
     },
 
     dispose() {

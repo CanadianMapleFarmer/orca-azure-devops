@@ -7,9 +7,8 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawTimeline } from '../ado/timeline'
 import { json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
-import { createScheduler } from '../poll/scheduler'
 import { isRepositories, PLATFORM } from '../prs/fake-prs'
-import { drain, fakeClock, memoryStore } from '../test-support'
+import { drain, fakeClock, memoryStore, paced } from '../test-support'
 import {
   APPROVAL_4520,
   APPROVAL_4531,
@@ -28,7 +27,6 @@ import {
   type FakePipelines
 } from './fake-pipelines'
 import { createNotifier } from './notify'
-import { createPressure } from './pressure'
 import { createPipelinesService } from './service'
 import { createRunSignals, type RunSignals } from './signals'
 import { createWatchList } from './watched'
@@ -72,8 +70,8 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
   const failing = { orgs: false }
   const memory = options.store ?? memoryStore()
   let orgs = [status()]
-  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
-  const scheduler = createScheduler(clock)
+  const { pressure, scheduler } = paced(clock)
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {}, observe: pressure.observe })
   const service = createPipelinesService({
     http,
     orgs: async () => {
@@ -82,7 +80,6 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     },
     scheduler,
     watchList: createWatchList(memory.store),
-    pressure: createPressure(clock.now),
     signals: options.signals?.(clock.now) ?? { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
     post: snapshot => posts.push(structuredClone(snapshot)),
     now: clock.now
@@ -95,6 +92,7 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     failing,
     service,
     scheduler,
+    pressure,
     data: memory.data,
     setOrgs(next: OrgStatus[]) {
       orgs = next
@@ -442,35 +440,25 @@ test('the watch list survives a restart', async () => {
   assert.equal(third.updates.at(-1)?.[1]?.find(run => run.buildId === 4531)?.watched, false, 'a dropped run is not watched after a restart, so it cannot notify again')
 })
 
-test('pressure moves the org to the background cadence for five minutes', async () => {
+test('a delayed org polls its runs at eight times the interval', async () => {
   const h = harness()
-  let pressured = true
-  h.ado.on(
-    call => pressured && isMineRuns(call),
-    () => {
-      pressured = false
-      return json(200, { value: [] }, { 'retry-after': '1' })
-    }
-  )
   h.setOrgs([status()])
+  h.pressure.observe({ org: ORG, path: '/_apis/build/builds' }, 200, new Headers({ 'X-RateLimit-Delay': '1' }))
   h.show()
   await h.clock.tick(0)
-  assert.equal(h.ado.count(isMineRuns), 2)
+  const load = h.ado.count(isMineRuns)
+  assert.ok(load > 0, 'showing the tab still loads at once')
 
-  await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
-  await h.clock.tick(0)
-  const batches = h.ado.count(isBuildsByIds)
-  await h.clock.tick(2 * MINUTE - 1)
-  assert.deepEqual([h.ado.count(isMineRuns), h.ado.count(isBuildsByIds)], [2, batches], 'no visible 30 s load and no 30 s watch')
+  await h.clock.tick(240_000 - 1)
+  assert.equal(h.ado.count(isMineRuns), load, 'no visible 30 s load while the org is delayed')
   await h.clock.tick(1)
-  assert.equal(h.ado.count(isBuildsByIds), batches + 1, 'the watch runs every 2 minutes')
-
-  await h.clock.tick(3 * MINUTE - 1)
-  assert.equal(h.ado.count(isMineRuns), 2)
+  assert.equal(h.ado.count(isMineRuns), 2 * load, 'the next load comes 240 s later')
+  await h.clock.tick(240_000 - 1)
+  assert.equal(h.ado.count(isMineRuns), 2 * load)
   await h.clock.tick(1)
-  assert.equal(h.ado.count(isMineRuns), 4, 'the next load comes 5 minutes later')
+  assert.equal(h.ado.count(isMineRuns), 3 * load, 'and the one after that')
   await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isMineRuns), 6, 'and then every 30 s again')
+  assert.equal(h.ado.count(isMineRuns), 4 * load, 'and every 30 s once the delay has passed')
 })
 
 test('a forbidden builds list pauses the org; a forbidden approvals list only turns approvals off', async () => {

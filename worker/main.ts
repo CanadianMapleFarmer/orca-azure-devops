@@ -14,7 +14,7 @@ import { createConnections, type StorePort } from './connections'
 import { withUserContext } from './data/context'
 import { createGovernor } from './data/governor'
 import { createMetrics, metricsLines } from './data/metrics'
-import { createPressure } from './data/rate-limit'
+import { createPressure, paceOf } from './data/rate-limit'
 import { NETWORK } from './messages'
 import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
 import { registerOrgHandlers } from './org-handlers'
@@ -22,7 +22,6 @@ import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier, type Shown } from './pipelines/notify'
 import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './pipelines/open-file'
-import { createPressure as createSlowDown } from './pipelines/pressure'
 import { openRun } from './pipelines/run-file'
 import { createRunViews } from './pipelines/run-views'
 import { createPipelinesService } from './pipelines/service'
@@ -155,10 +154,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now,
     log
   })
-  const scheduler = createScheduler(realClock)
-  const governor = createGovernor({ http: connections.http, pressure, now: Date.now, clock: realClock })
-  const slowDown = createSlowDown(Date.now)
-  const http = slowDown.wrapByOrg(governor)
+  const scheduler = createScheduler(realClock, paceOf(pressure))
+  const http = createGovernor({ http: connections.http, pressure, now: Date.now, clock: realClock })
   const boards = createBoardsService({
     http,
     orgs: () => connections.list(),
@@ -187,20 +184,18 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     log
   })
   const pipelines = createPipelinesService({
-    http: governor,
+    http,
     orgs: () => connections.list(),
     scheduler,
     watchList: createWatchList(store),
-    pressure: slowDown,
     signals: createRunSignals({ bar, notifier, now: Date.now }),
     post: snapshot => orca.panels.post('runs.changed', snapshot),
     now: Date.now
   })
   const runViews = createRunViews({
-    http: governor,
+    http,
     orgs: () => connections.list(),
     scheduler,
-    pressure: slowDown,
     watched: (org, buildId) => pipelines.isWatched(org, buildId),
     changed: change => orca.panels.post('runs.viewChanged', change),
     now: Date.now

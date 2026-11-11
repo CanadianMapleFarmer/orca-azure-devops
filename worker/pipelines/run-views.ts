@@ -20,6 +20,7 @@ import { mapLimit } from '../ado/limit'
 import { isMalformed } from '../ado/shape'
 import { failuresOf, getTimeline, mergeTimeline, runStages, type RawTimeline } from '../ado/timeline'
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes } from '../budget'
+import { fly, join, type Flight } from '../data/context'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -36,13 +37,11 @@ import {
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
 import { placeApproval, placeIsUnsettled, placeKey, waitingIf, type ApprovalPlace } from './load'
-import type { Pressure } from './pressure'
 
 export interface RunViewsDeps {
   http: AdoHttp
   orgs: () => Promise<OrgStatus[]>
   scheduler: Scheduler
-  pressure: Pressure
   watched: (org: string, buildId: number) => boolean
   changed: (change: { org: string; buildId: number }) => void
   now: () => number
@@ -63,7 +62,6 @@ interface RunTarget extends RunKey {
 
 interface OrgScope {
   controller: AbortController
-  http: AdoHttp
 }
 
 interface Reads {
@@ -81,7 +79,7 @@ interface Held extends RunTarget {
   view: RunView | null
   at: number
   generation: number
-  loading: { generation: number; promise: Promise<Loaded> } | null
+  loading: { generation: number; flight: Flight<Loaded> } | null
 }
 
 interface Loaded {
@@ -91,7 +89,6 @@ interface Loaded {
 }
 
 const ACTIVE_MS = { visibleMs: 5_000, backgroundMs: 5_000 }
-const SLOWED_MS = { visibleMs: 30_000, backgroundMs: 30_000 }
 const FINISHED_MS = { visibleMs: 60_000, backgroundMs: 60_000 }
 const FRESH_MS = 5_000
 const MAX_CACHED_VIEWS = 10
@@ -117,7 +114,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
   function scopeOf(org: string): OrgScope {
     const existing = scopes.get(org)
     if (existing) return existing
-    const scope = { controller: new AbortController(), http: deps.pressure.wrap(deps.http, org) }
+    const scope = { controller: new AbortController() }
     scopes.set(org, scope)
     return scope
   }
@@ -154,8 +151,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
 
   function intervalsOf(target: RunTarget) {
     const build = views.get(viewKey(target.org, target.buildId))?.reads?.build
-    if (build && finishedStatus(build.status)) return FINISHED_MS
-    return deps.pressure.slowed(target.org) ? SLOWED_MS : ACTIVE_MS
+    return build && finishedStatus(build.status) ? FINISHED_MS : ACTIVE_MS
   }
 
   function sync(key: string): void {
@@ -164,7 +160,8 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
       scheduler.remove(key)
       return
     }
-    scheduler.upsert({ key, ...intervalsOf(target), run: signal => poll(target, signal) })
+    scheduler.upsert({ key, org: target.org, ...intervalsOf(target), run: signal => poll(target, signal) })
+    scheduler.setVisible(key, true)
   }
 
   async function poll(target: RunTarget, signal: AbortSignal): Promise<void> {
@@ -190,15 +187,16 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
 
   function load(held: Held): Promise<Loaded> {
     const current = held.loading
-    if (current && current.generation === held.generation) return current.promise
-    const loading = { generation: held.generation, promise: run() }
+    if (current && current.generation === held.generation) return join(current.flight)
+    const generation = held.generation
+    const loading = { generation, flight: fly(run) }
     held.loading = loading
-    return loading.promise
+    return join(loading.flight)
 
     async function run(): Promise<Loaded> {
-      await current?.promise.catch(() => {})
+      if (current) await join(current.flight).catch(() => {})
       try {
-        return await settle(held, loading.generation)
+        return await settle(held, generation)
       } finally {
         if (held.loading === loading) held.loading = null
       }
@@ -243,7 +241,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
     try {
       if (link.signal.aborted) throw notConnected()
       const me = (await statusOf(held.org)).account.adoId
-      const reads = await read(withSignal(scope.http, link.signal), held, held.reads, me)
+      const reads = await read(withSignal(deps.http, link.signal), held, held.reads, me)
       link.signal.throwIfAborted()
       return reads && { reads, view: viewOf(held, reads, me) }
     } catch (error) {
@@ -364,7 +362,7 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
       try {
         if (link.signal.aborted) throw notConnected()
         await statusOf(org)
-        const http = withSignal(scope.http, link.signal)
+        const http = withSignal(deps.http, link.signal)
         const held = views.get(viewKey(org, buildId))
         const counted = held?.projectId === projectId ? held.reads?.logLines.get(logId) : undefined
         const total = counted ?? (await listLogs(http, org, projectId, buildId)).get(logId) ?? 0

@@ -5,6 +5,7 @@ import { loadBoardConfig } from '../ado/board-config'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
+import { currentContext, type Priority } from '../data/context'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import {
@@ -236,6 +237,38 @@ test('a board-type item with no column is listed under Other and moves by state,
   assert.deepEqual([moved.state, moved.column, moved.rev], ['Active', null, 4])
   assert.deepEqual(h.posts.at(-1)?.other.map(entry => entry.id), [1207, 1205])
 })
+
+const JOINERS: Record<string, (service: ReturnType<typeof harness>['service']) => Promise<WorkSnapshot>> = {
+  'a Work snapshot request': service => service.snapshot(ORG),
+  'a Work refresh': service => service.refresh(ORG)
+}
+
+for (const [name, request] of Object.entries(JOINERS)) {
+  test(`${name} that joins a background load raises its lane`, async () => {
+    const h = harness()
+    const priorities: Priority[] = []
+    h.ado.on(
+      () => {
+        priorities.push(currentContext().lane.priority)
+        return false
+      },
+      () => assert.fail('only records')
+    )
+    const held = h.ado.hold(() => true)
+    h.setOrgs([status()])
+    await h.clock.tick(0)
+    assert.ok(priorities.length > 0, 'the background load is waiting on its first answer')
+    assert.deepEqual(priorities.filter(priority => priority !== 'hidden'), [], 'in its hidden lane')
+
+    const answer = request(h.service)
+    await drain()
+    held.release()
+    assert.equal((await answer).org, ORG)
+    const joined = priorities.indexOf('user')
+    assert.ok(joined > 0, 'calls after the join were made')
+    assert.deepEqual(priorities.slice(joined).filter(priority => priority !== 'user'), [], 'every call after the join is a user call')
+  })
+}
 
 test('a failed refresh keeps the last snapshot as stale', async () => {
   const h = harness()

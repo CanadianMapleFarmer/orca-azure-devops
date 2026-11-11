@@ -5,6 +5,7 @@ import { linkedAbort, untilAborted } from '../abort'
 import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import { fly, join, type Flight } from '../data/context'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -19,9 +20,8 @@ import {
   RUNS_TRIMMED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
-import type { Scheduler } from '../poll/scheduler'
+import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
 import { carriedChips, createRunSource, waitingIf, type RunSource, type RunsLoad } from './load'
-import type { Pressure } from './pressure'
 import type { RunSignals } from './signals'
 import type { WatchList } from './watched'
 
@@ -30,7 +30,6 @@ export interface PipelinesServiceDeps {
   orgs: () => Promise<OrgStatus[]>
   scheduler: Scheduler
   watchList: WatchList
-  pressure: Pressure
   signals: RunSignals
   post: (snapshot: RunsSnapshot) => void
   now: () => number
@@ -61,16 +60,14 @@ interface OrgRuns {
   fullAt: number | null
   fullLoads: number
   failure: AdoError | null
-  loading: { kind: Kind; promise: Promise<RunsSnapshot> } | null
-  watching: Promise<void> | null
+  loading: { kind: Kind; flight: Flight<RunsSnapshot> } | null
+  watching: Flight<void> | null
   pausedUntil: number
   watched: RunKey[]
 }
 
-const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000 }
-const RUNS_SLOWED_MS = { visibleMs: 300_000, backgroundMs: 300_000 }
+const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000, quietCapMs: NOTIFY_CAP_MS }
 const WATCH_MS = { visibleMs: 30_000, backgroundMs: 30_000 }
-const WATCH_SLOWED_MS = { visibleMs: 120_000, backgroundMs: 120_000 }
 const FRESH_MS = 30_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
 const MAX_RUNS = 100
@@ -89,11 +86,10 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function entryOf(org: string): OrgRuns {
     const existing = entries.get(org)
     if (existing) return existing
-    const http = deps.pressure.wrap(deps.http, org)
     const entry: OrgRuns = {
       controller: new AbortController(),
-      source: createRunSource(http, org, now),
-      projects: cachedCodeProjects(http, org, now),
+      source: createRunSource(deps.http, org, now),
+      projects: cachedCodeProjects(deps.http, org, now),
       base: null,
       snapshot: null,
       fullAt: null,
@@ -122,12 +118,12 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   function upsertRuns(org: string): void {
-    scheduler.upsert({ key: runsKey(org), ...(deps.pressure.slowed(org) ? RUNS_SLOWED_MS : RUNS_MS), run: signal => poll(org, signal) })
+    scheduler.upsert({ key: runsKey(org), org, ...RUNS_MS, run: signal => poll(org, signal) })
   }
 
   function syncWatchJob(org: string): void {
     if (jobs.has(org) && (entries.get(org)?.watched.length ?? 0) > 0) {
-      scheduler.upsert({ key: watchKey(org), ...(deps.pressure.slowed(org) ? WATCH_SLOWED_MS : WATCH_MS), run: signal => pollWatched(org, signal) })
+      scheduler.upsert({ key: watchKey(org), org, ...WATCH_MS, run: signal => pollWatched(org, signal) })
     } else {
       scheduler.remove(watchKey(org))
     }
@@ -187,13 +183,13 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function load(org: string, kind: Kind): Promise<RunsSnapshot> {
     const entry = entryOf(org)
     const current = entry.loading
-    if (current && (current.kind === 'full' || kind === 'background')) return current.promise
-    const loading = { kind, promise: run() }
+    if (current && (current.kind === 'full' || kind === 'background')) return join(current.flight)
+    const loading = { kind, flight: fly(run) }
     entry.loading = loading
-    return loading.promise
+    return join(loading.flight)
 
     async function run(): Promise<RunsSnapshot> {
-      await current?.promise.catch(() => {})
+      if (current) await join(current.flight).catch(() => {})
       try {
         return await attempt(org, entry, kind)
       } finally {
@@ -241,12 +237,14 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function watchLoad(org: string): Promise<void> {
     const entry = entries.get(org)
     if (!entry) return Promise.resolve()
-    if (entry.watching) return entry.watching
-    const watching = watchOnce(org, entry).finally(() => {
-      if (entry.watching === watching) entry.watching = null
-    })
+    if (entry.watching) return join(entry.watching)
+    const watching = fly(() =>
+      watchOnce(org, entry).finally(() => {
+        if (entry.watching === watching) entry.watching = null
+      })
+    )
     entry.watching = watching
-    return watching
+    return join(watching)
   }
 
   async function watchOnce(org: string, entry: OrgRuns): Promise<void> {
@@ -366,7 +364,8 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
     async reloadFresh(org) {
       await statusOf(org)
-      await entryOf(org).loading?.promise.catch(() => {})
+      const loading = entryOf(org).loading
+      if (loading) await join(loading.flight).catch(() => {})
       return load(org, 'full')
     },
 

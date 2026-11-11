@@ -9,6 +9,7 @@ export interface Flight<T> { readonly promise: Promise<T>; readonly lane: Lane }
 
 class MutableLane implements Lane {
   #priority: Priority
+  readonly #waitingOn = new Set<MutableLane>()
 
   constructor(priority: Priority) {
     this.#priority = priority
@@ -16,6 +17,14 @@ class MutableLane implements Lane {
 
   get priority(): Priority {
     return this.#priority
+  }
+
+  get waitingOn(): readonly MutableLane[] {
+    return [...this.#waitingOn]
+  }
+
+  waitOn(lane: MutableLane): void {
+    this.#waitingOn.add(lane)
   }
 
   raise(): boolean {
@@ -72,6 +81,7 @@ export function currentContext(): RequestContext {
 export function raise(lane: Lane): void {
   if (!(lane instanceof MutableLane) || !lane.raise()) return
   for (const listener of [...raiseListeners]) listener(lane)
+  for (const waited of lane.waitingOn) raise(waited)
 }
 
 export function onRaise(listener: (lane: Lane) => void): () => void {
@@ -87,7 +97,9 @@ export function fly<T>(run: () => Promise<T>): Flight<T> {
 }
 
 export function join<T>(flight: Flight<T>): Promise<T> {
-  if (currentContext().lane.priority === 'user') raise(flight.lane)
+  const caller = currentContext().lane
+  if (caller.priority === 'user') raise(flight.lane)
+  else if (caller instanceof MutableLane && flight.lane instanceof MutableLane) caller.waitOn(flight.lane)
   return flight.promise
 }
 

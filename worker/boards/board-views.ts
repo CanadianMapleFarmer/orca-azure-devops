@@ -75,7 +75,7 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
         deps.scheduler.remove(view.key)
         continue
       }
-      deps.scheduler.upsert({ key: view.key, ...BOARD_MS, run: signal => reload(view.key, signal) })
+      deps.scheduler.upsert({ key: view.key, org, ...BOARD_MS, run: signal => reload(view.key, signal) })
       deps.scheduler.setVisible(view.key, true)
     }
   }
