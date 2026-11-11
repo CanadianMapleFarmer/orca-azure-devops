@@ -160,7 +160,7 @@ function wide(id: number, changedAt: number): WorkItemSummary {
 
 test('capBoard keeps the newest items that fit in 900 KiB, in their order, and says how many', () => {
   const items = Array.from({ length: 400 }, (_, index) => wide(index, index % 2 === 0 ? 10_000 - index : index))
-  const capped = capBoard({ board: BOARD, items, message: 'Linked PR status needs Code (Read) access.' }, false)
+  const capped = capBoard({ board: BOARD, items, message: 'Linked PR status needs Code (Read) access.', updatedAt: 0 }, false)
   const count = capped.items.length
   assert.ok(count > 100 && count < 400, String(count))
   assert.ok(Buffer.byteLength(JSON.stringify(capped)) <= BOARD_BUDGET)
@@ -171,11 +171,11 @@ test('capBoard keeps the newest items that fit in 900 KiB, in their order, and s
 
 test('capBoard says how many are shown when the query hit its 500-item limit', () => {
   const items = [tiny(1, 1), tiny(2, 2)]
-  assert.deepEqual(capBoard({ board: BOARD, items }, true), { board: BOARD, items, message: 'Showing the 2 most recently changed items.' })
+  assert.deepEqual(capBoard({ board: BOARD, items, updatedAt: 0 }, true), { board: BOARD, items, updatedAt: 0, message: 'Showing the 2 most recently changed items.' })
 })
 
 test('capBoard returns a board that fits unchanged', () => {
-  const result = { board: BOARD, items: [tiny(1, 1), tiny(2, 2)] }
+  const result = { board: BOARD, items: [tiny(1, 1), tiny(2, 2)], updatedAt: 0 }
   assert.equal(capBoard(result, false), result)
 })
 
@@ -183,7 +183,7 @@ test('capSnapshot and capBoard keep the newest items that fit a budget they are 
   const budget = 160 * 1024
   const items = Array.from({ length: 400 }, (_, index) => wide(index, index))
   const snapshot = capSnapshot(snapshotOf(items), budget)
-  const board = capBoard({ board: BOARD, items }, false, budget)
+  const board = capBoard({ board: BOARD, items, updatedAt: 0 }, false, budget)
   for (const capped of [snapshot.mine, board.items]) {
     assert.ok(capped.length > 10 && capped.length < 100, String(capped.length))
     assert.equal(capped.at(-1)?.id, 399)

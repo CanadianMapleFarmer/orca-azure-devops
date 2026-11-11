@@ -5,7 +5,7 @@ import type { Scheduler } from '../poll/scheduler'
 import type { SyncState } from './sync'
 
 export interface BoardChange { org: string; teamId: string; boardId: string }
-export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean }
+export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean; updatedAt: number }
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
 export interface Synced { sync: SyncState | null; known: number[] }
 export interface BoardLoad extends Synced { result: BoardResult }
@@ -40,6 +40,10 @@ export function boardKey(org: string, teamId: string, boardId: string): string {
   return `board:${org}:${teamId}:${boardId}`
 }
 
+function sameApartFromTime(a: BoardResult, b: BoardResult): boolean {
+  return JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 })
+}
+
 export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   const views = new Map<string, BoardView>()
   const hidden = new Set<string>()
@@ -66,9 +70,9 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       throw error
     }
     if (views.get(key) !== view) return
-    const before = JSON.stringify(view.result)
+    const unchanged = sameApartFromTime(view.result, loaded.result)
     Object.assign(view, loaded, { at: deps.now() })
-    if (JSON.stringify(loaded.result) === before) return 'unchanged'
+    if (unchanged) return 'unchanged'
     changed(view)
   }
 

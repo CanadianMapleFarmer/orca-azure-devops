@@ -6,7 +6,7 @@ import { attachDrag } from './drag'
 import { layoutBoard, parentOptions, withParent, type Cell } from './layout'
 import { showPicker } from './picker'
 import { parseBoardRef, type BoardRef } from './ref'
-import { boardGrid, button, createCards, createToolbar, el, focusSelectorOf } from './render'
+import { boardGrid, button, createCards, createToolbar, el, focusSelectorOf, noteText } from './render'
 
 interface State {
   ref: BoardRef
@@ -14,6 +14,8 @@ interface State {
   base: WorkItemSummary[]
   pending: Map<number, WorkItemSummary>
   message: string | undefined
+  stale: boolean
+  updatedAt: number | null
   everyone: boolean | null
   parent: number | null
   toggled: Set<string>
@@ -24,6 +26,7 @@ interface State {
 
 const root = document.getElementById('app') as HTMLElement
 const READ_FAILED = "Couldn't read this board file."
+const AGE_REPAINT_MS = 60_000
 
 const cards = createCards()
 const toolbar = createToolbar({
@@ -58,6 +61,7 @@ let shownText: string | null = null
 let reported: BoardRef | null = null
 let seq = 0
 let deferred = false
+let aging: ReturnType<typeof setInterval> | null = null
 
 function moveOf(id: number, cell: Cell) {
   const item = state?.base.find(entry => entry.id === id)
@@ -65,6 +69,7 @@ function moveOf(id: number, cell: Cell) {
 }
 
 function paint(): void {
+  keepAging(Boolean(state?.stale && state.updatedAt !== null))
   deferred = drag.dragging()
   if (!state || deferred) return
   const current = state
@@ -76,7 +81,8 @@ function paint(): void {
   banner.hidden = current.banner === null
   if (current.banner) banner.append(el('span', '', current.banner), button('Dismiss', () => dismissBanner(), 'button secondary'))
   const items = withParent(all, current.parent)
-  note.textContent = current.board && items.length === 0 && !current.loading ? joined(current.message, 'No work items match.') : (current.message ?? '')
+  const empty = Boolean(current.board) && items.length === 0 && !current.loading
+  note.textContent = noteText({ stale: current.stale, updatedAt: current.updatedAt, message: current.message, empty }, Date.now(), orca.locale)
   note.hidden = note.textContent === ''
   cards.keep(new Set(all.map(item => item.id)))
   const focused = focusedSelector()
@@ -95,8 +101,12 @@ function focusedSelector(): string | null {
   return active instanceof HTMLElement && scroller.contains(active) ? focusSelectorOf(active) : null
 }
 
-function joined(...parts: (string | undefined)[]): string {
-  return parts.filter(Boolean).join(' ')
+function keepAging(on: boolean): void {
+  if (on && aging === null) aging = setInterval(paint, AGE_REPAINT_MS)
+  if (!on && aging !== null) {
+    clearInterval(aging)
+    aging = null
+  }
 }
 
 function dismissBanner(): void {
@@ -126,6 +136,8 @@ async function load(options: { remember?: true } = {}): Promise<void> {
     current.board = result.board
     current.base = result.items
     current.message = result.message
+    current.stale = result.stale === true
+    current.updatedAt = result.updatedAt
     current.failure = null
   } catch (error) {
     if (mine !== seq || state !== current) return
@@ -173,7 +185,7 @@ function sameBoard(a: BoardRef, b: BoardRef | null): boolean {
 }
 
 function openRef(ref: BoardRef): void {
-  state = { ref, board: null, base: [], pending: new Map(), message: undefined, everyone: null, parent: null, toggled: new Set(), banner: null, failure: null, loading: false }
+  state = { ref, board: null, base: [], pending: new Map(), message: undefined, stale: false, updatedAt: null, everyone: null, parent: null, toggled: new Set(), banner: null, failure: null, loading: false }
   root.replaceChildren(toolbar.node, banner, note, scroller)
   reportVisibility()
   void load()
