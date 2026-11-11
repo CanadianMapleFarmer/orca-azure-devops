@@ -86,7 +86,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   function entryOf(org: string): OrgPrs {
     const entry = entries.get(org) ?? {
       controller: new AbortController(),
-      source: createPrSource(http, org, now),
+      source: createPrSource(http, org, now, deps.entities.of(org)),
       projects: cachedCodeProjects(http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,

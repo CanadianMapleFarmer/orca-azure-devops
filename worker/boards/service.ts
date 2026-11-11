@@ -8,7 +8,7 @@ import { moveItem } from '../ado/move'
 import { boardClause, mineClause, readFields, textOr, workItemUrl, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { fly, inLane, join, type Flight } from '../data/context'
-import type { Entities } from '../data/entities'
+import type { Entities, OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
@@ -29,6 +29,7 @@ import {
   loadMine,
   movesByState,
   patchFamilies,
+  rechip,
   restate,
   type ItemSource,
   type Me,
@@ -101,6 +102,44 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     changed: deps.postBoard,
     dropped: key => recent.drop(key)
   })
+  const rechipping = new Set<string>()
+  entities.watch('prs', queueRechip)
+  entities.watch('prChecks', queueRechip)
+
+  function queueRechip(org: string): void {
+    if (rechipping.size === 0) queueMicrotask(rechipQueued)
+    rechipping.add(org)
+  }
+
+  function rechipQueued(): void {
+    const orgs = [...rechipping]
+    rechipping.clear()
+    for (const org of orgs) void rechipViews(org).catch(() => {})
+  }
+
+  async function rechipViews(org: string): Promise<void> {
+    if (!sources.has(org)) return
+    const tables = entities.of(org)
+    for (const view of boardViews.of(org)) {
+      const items = rechip(view.result.items, tables)
+      if (items !== view.result.items) boardViews.update(view, capBoard({ ...view.result, items }, false))
+    }
+    await rechipWork(org, tables)
+  }
+
+  async function rechipWork(org: string, tables: OrgEntities): Promise<void> {
+    const entry = work.get(org)
+    const held = entry?.snapshot
+    if (!entry || !held?.board || (rechip(held.mine, tables) === held.mine && rechip(held.other, tables) === held.other)) return
+    const [rules, dismissed] = await Promise.all([nudges.rules(org, held.board.teamId), nudges.dismissed(org)])
+    const snapshot = entry.snapshot
+    if (work.get(org) !== entry || !snapshot?.board) return
+    const mine = rechip(snapshot.mine, tables)
+    const next = capSnapshot({ ...snapshot, mine, other: rechip(snapshot.other, tables), nudges: findNudges(snapshot.board, mine, rules, dismissed) })
+    if (JSON.stringify(next) === JSON.stringify(snapshot)) return
+    entry.snapshot = next
+    deps.post(next)
+  }
 
   async function statusOf(org: string): Promise<OrgStatus> {
     const status = (await deps.orgs()).find(item => item.org === org)

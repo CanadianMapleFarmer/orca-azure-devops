@@ -13,12 +13,13 @@ import {
 import { DONE_CATEGORIES, loadTypeStates, type TypeState } from '../ado/board-config'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
-import { loadPrChips, type PrChipCache } from '../ado/pr-links'
+import { chipOf, loadPrChips } from '../ado/pr-links'
 import { shaped } from '../ado/shape'
 import {
   childIdsOf,
   displayName,
   hydrate,
+  prRefsOf,
   readFields,
   TASK_FIELDS,
   textOr,
@@ -31,7 +32,7 @@ import {
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import type { OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
-import type { ItemRecord } from '../data/records'
+import { prKey, type ItemRecord } from '../data/records'
 import { joinMessages, MALFORMED, showingNewest, TASKS_NOT_LOADED } from '../messages'
 import type { BoardResult } from './board-views'
 
@@ -65,7 +66,7 @@ export interface ViewIds { members: number[]; stale: ReadonlySet<number> }
 export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean; chips: PrChip[] }
 
 export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number, tables: OrgEntities): ItemSource {
-  const chipCache: PrChipCache = new Map()
+  const missingPrs = new Map<string, number>()
   const { workItems } = tables
   let chipsOffUntil = -Infinity
   const held = (id: number) => workItems.get(String(id))?.value
@@ -98,7 +99,7 @@ export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now
     async chips(refs) {
       if (now() < chipsOffUntil) return null
       try {
-        return await loadPrChips(scoped, org, refs, chipCache, now)
+        return await loadPrChips(scoped, org, refs, tables, now, missingPrs)
       } catch (error) {
         if (!(error instanceof AdoError) || error.code !== 'forbidden') throw error
         chipsOffUntil = now() + CHIPS_OFF_MS
@@ -255,6 +256,20 @@ export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
   const kept = newestThatFit(result.items, ANSWER_BUDGET_BYTES - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result
   return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
+}
+
+export function rechip(items: WorkItemSummary[], tables: Pick<OrgEntities, 'workItems' | 'prs' | 'prChecks'>): WorkItemSummary[] {
+  const next = items.map(item => {
+    const record = tables.workItems.get(String(item.id))?.value
+    if (!record?.withRelations) return item
+    const keys = [...new Set(prRefsOf(record).map(prKey))]
+    const prs = foldChips(keys.flatMap(key => {
+      const pr = tables.prs.get(key)?.value
+      return pr ? [chipOf(pr, tables.prChecks.get(key)?.value)] : []
+    }))
+    return JSON.stringify(prs) === JSON.stringify(item.prs) ? item : { ...item, prs }
+  })
+  return next.every((item, index) => item === items[index]) ? items : next
 }
 
 export function foldChips(chips: PrChip[]): PrChip[] {

@@ -1,5 +1,6 @@
 import type { PrKey, PrReviewer, PrSummary } from '../../src/shared/prs'
 import type { OrgStatus } from '../../src/shared/types'
+import { reviewersSignature, type PrRecord } from '../data/records'
 import { MALFORMED } from '../messages'
 import { byName, listProjects, type NamedItem } from './core'
 import { AdoError, type AdoHttp } from './http'
@@ -34,6 +35,7 @@ export interface RawPullRequest {
   completionOptions?: { deleteSourceBranch?: boolean }
   description?: string
   forkSource?: unknown
+  lastMergeSourceCommit?: { commitId?: string }
 }
 
 export interface PrCriteria {
@@ -149,6 +151,24 @@ export function toPrSummary(raw: RawPullRequest, org: string): PrSummary {
       autoComplete: Boolean(raw.autoCompleteSetBy),
       workItemIds: [],
       checks: null
+    }
+  })
+}
+
+export function toPrRecord(raw: RawPullRequest, org: string): PrRecord {
+  return shape(() => {
+    const projectId = expectText(raw.repository.project.id)
+    const repoId = expectText(raw.repository.id)
+    const prId = expectPrId(raw.pullRequestId)
+    return {
+      projectId,
+      repoId,
+      prId,
+      status: statusOf(expectText(raw.status)),
+      target: branchName(expectText(raw.targetRefName)),
+      sourceCommit: textOr(raw.lastMergeSourceCommit?.commitId, null),
+      reviewers: reviewersSignature(raw.reviewers),
+      url: pullRequestUrl(org, raw.repository.webUrl, projectId, repoId, prId)
     }
   })
 }

@@ -1,4 +1,7 @@
 import type { PrChecks, PrKey } from '../../src/shared/prs'
+import type { Stamped } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
+import type { CheckRecord, PrRecord } from '../data/records'
 import { MALFORMED } from '../messages'
 import type { AdoHttp } from './http'
 import { expectList, shaped } from './shape'
@@ -16,6 +19,8 @@ export interface RawEvaluation {
 type BuildState = PrChecks['build']
 type PolicyState = PrChecks['policies']
 
+export const MAX_CHECK_READS = 8
+
 const BUILD_POLICY_TYPE = 'Build'
 const BUILD_SEVERITY: Record<BuildState, number> = { none: 0, succeeded: 1, running: 2, failed: 3 }
 const POLICY_SEVERITY: Record<PolicyState, number> = { none: 0, approved: 1, pending: 2, rejected: 3 }
@@ -29,6 +34,24 @@ export async function loadEvaluations(http: AdoHttp, org: string, key: PrKey): P
     apiVersion: '7.1-preview.1'
   })
   return shaped(() => expectList<RawEvaluation>(data.value), MALFORMED.pullRequest)
+}
+
+export function checksDue(pr: PrRecord, checks: Stamped<CheckRecord> | undefined, now: number): boolean {
+  if (pr.status !== 'active') return false
+  if (!checks) return true
+  const { value, at } = checks
+  const age = now - at
+  return (
+    value.commit !== pr.sourceCommit ||
+    value.reviewers !== pr.reviewers ||
+    (value.build === 'running' && age >= FRESHNESS.checksRunning) ||
+    age >= FRESHNESS.checksIdle
+  )
+}
+
+export async function readChecks(http: AdoHttp, org: string, pr: PrRecord): Promise<CheckRecord> {
+  const evaluations = await loadEvaluations(http, org, pr)
+  return { build: buildStateOf(evaluations), policies: policyStateOf(evaluations), commit: pr.sourceCommit, reviewers: pr.reviewers }
 }
 
 export function buildStateOf(evaluations: RawEvaluation[]): BuildState {

@@ -9,6 +9,7 @@ import {
   getPullRequest,
   listPullRequests,
   pullRequestWorkItems,
+  toPrRecord,
   toPrSummary,
   toReviewer,
   type RawPullRequest,
@@ -135,6 +136,25 @@ test('toPrSummary percent-encodes a raw space in webUrl and falls back to names 
   const unparsable = mine(0)
   unparsable.repository.webUrl = 'not a url'
   assert.equal(toPrSummary(unparsable, ORG).url, 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/4101')
+})
+
+test('toPrRecord reads the source commit and a reviewer signature', () => {
+  const raw = mine(0)
+  assert.deepEqual(toPrRecord(raw, ORG), {
+    projectId: PROJECT,
+    repoId: REPO,
+    prId: 4101,
+    status: 'active',
+    target: 'develop',
+    sourceCommit: 'b263ed8cb23de78f9aec393aca76a99736d25e5e',
+    reviewers: `${GRACE}:10,${DENNIS}:-5,${TEAM}:0`,
+    url: `${WEB_URL}/pullrequest/4101`
+  })
+  const bare = toPrRecord({ ...raw, status: 'abandoned', lastMergeSourceCommit: undefined, reviewers: undefined }, ORG)
+  assert.deepEqual([bare.status, bare.sourceCommit, bare.reviewers], ['abandoned', null, ''])
+  const unnamed = mine(0)
+  delete unnamed.repository.webUrl
+  assert.equal(toPrRecord(unnamed, ORG).url, `${ORG_URL}/${PROJECT}/_git/${REPO}/pullrequest/4101`)
 })
 
 test('toReviewer maps a group and treats a missing vote as 0', () => {

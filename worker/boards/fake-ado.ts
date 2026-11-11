@@ -110,6 +110,7 @@ export function fakeAdo(options: { now?: () => number } = {}) {
       const answer = (raw: RawWorkItem) => (fields ? onlyFields(raw, fields) : structuredClone(raw))
       return json(200, { count: ids.length, value: ids.map(id => (items.has(id) ? answer(items.get(id)!) : null)) })
     }
+    if (isActiveList(call) && path === `/${ORG}/${PROJECT}/_apis/git/pullrequests`) return json(200, { value: openPullRequests() })
     const pr = new RegExp(`^/${ORG}/${PROJECT}/_apis/git/pullrequests/(\\d+)$`).exec(path)
     if (method === 'GET' && pr && PULL_REQUESTS[Number(pr[1])]) return json(200, fixture(PULL_REQUESTS[Number(pr[1])]))
     if (method === 'GET' && path === `/${ORG}/${PROJECT}/_apis/policy/evaluations`) return json(200, fixture('policy-evaluations'))
@@ -232,6 +233,12 @@ export function addChildren(ado: FakeAdo, parentId: number, children: RawWorkIte
   }
 }
 
+function openPullRequests(): { status: string }[] {
+  return Object.values(PULL_REQUESTS)
+    .map(name => fixture<{ status: string }>(name))
+    .filter(pr => pr.status === 'active')
+}
+
 function onlyFields(raw: RawWorkItem, names: string[]): RawWorkItem {
   const all: Record<string, unknown> = { 'System.Id': raw.id, ...raw.fields }
   const fields = Object.fromEntries(names.filter(name => all[name] !== undefined).map(name => [name, structuredClone(all[name])]))
@@ -257,4 +264,6 @@ export const isRevRead = (call: AdoCall) => isBatch(call) && Array.isArray(call.
 export const isFieldsBatch = (call: AdoCall) => isBatch(call) && Array.isArray(call.body?.fields) && !isRevRead(call)
 export const isPatch = (call: AdoCall) => call.method === 'PATCH'
 export const isPullRequest = (call: AdoCall) => /\/_apis\/git\/pullrequests\/\d+$/.test(call.path)
+export const isActiveList = (call: AdoCall) =>
+  call.method === 'GET' && call.path.endsWith('/_apis/git/pullrequests') && call.query.get('searchCriteria.status') === 'active'
 export const isTypeStates = (type: string) => (call: AdoCall) => call.path.endsWith(`/_apis/wit/workitemtypes/${type}/states`)

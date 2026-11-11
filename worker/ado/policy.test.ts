@@ -1,10 +1,15 @@
 import { assert, test } from 'orca/testing'
 import { fakeAdo, fixture, json, ORG, PROJECT, type AdoCall } from '../boards/fake-ado'
+import type { Stamped } from '../data/entities'
+import type { CheckRecord, PrRecord } from '../data/records'
 import { MALFORMED } from '../messages'
 import { AdoError, createAdoHttp } from './http'
-import { buildStateOf, loadEvaluations, policyStateOf, type RawEvaluation } from './policy'
+import { buildStateOf, checksDue, loadEvaluations, policyStateOf, readChecks, type RawEvaluation } from './policy'
 
 const REVIEWERS_POLICY = 'Minimum number of reviewers'
+const NOW = Date.parse('2026-11-05T09:00:00Z')
+const MINUTE = 60_000
+const PR: PrRecord = { projectId: PROJECT, repoId: 'repo', prId: 4101, status: 'active', target: 'main', sourceCommit: 'c1', reviewers: 'a:10', url: '' }
 const BUILD_POLICY = 'Build'
 
 interface EvaluationOptions {
@@ -103,6 +108,34 @@ test("buildStateOf keeps pr-links' worst-build rule", () => {
   assert.equal(buildStateOf([build('approved'), build('running')]), 'running')
   assert.equal(buildStateOf([build('approved'), build('running'), build('rejected')]), 'failed')
   assert.equal(buildStateOf([build('approved'), build('approved')]), 'succeeded')
+})
+
+function held(value: Partial<CheckRecord>, ageMs: number): Stamped<CheckRecord> {
+  return { value: { build: 'succeeded', policies: 'approved', commit: 'c1', reviewers: 'a:10', ...value }, at: NOW - ageMs }
+}
+
+test('checks are due when missing, after a push, after a reviewer or vote change, while running for 2 minutes, or at 30 minutes', () => {
+  const cases: [string, PrRecord, Stamped<CheckRecord> | undefined, boolean][] = [
+    ['no checks yet', PR, undefined, true],
+    ['fresh checks', PR, held({}, MINUTE), false],
+    ['a push', { ...PR, sourceCommit: 'c2' }, held({}, 0), true],
+    ['a vote change', { ...PR, reviewers: 'a:-5' }, held({}, 0), true],
+    ['a new reviewer', { ...PR, reviewers: 'a:10,b:0' }, held({}, 0), true],
+    ['a running build under 2 minutes', PR, held({ build: 'running' }, 2 * MINUTE - 1), false],
+    ['a running build at 2 minutes', PR, held({ build: 'running' }, 2 * MINUTE), true],
+    ['pending policies at 2 minutes', PR, held({ policies: 'pending' }, 2 * MINUTE), false],
+    ['idle checks under 30 minutes', PR, held({}, 30 * MINUTE - 1), false],
+    ['idle checks at 30 minutes', PR, held({}, 30 * MINUTE), true],
+    ['a completed PR with no checks', { ...PR, status: 'completed' }, undefined, false],
+    ['an abandoned PR after a push', { ...PR, status: 'abandoned', sourceCommit: 'c2' }, held({}, 60 * MINUTE), false]
+  ]
+  for (const [name, pr, checks, due] of cases) assert.equal(checksDue(pr, checks, NOW), due, name)
+})
+
+test('readChecks keeps the commit and reviewers it read the evaluations at', async () => {
+  const { ado, http } = setup()
+  assert.deepEqual(await readChecks(http, ORG, PR), { build: 'succeeded', policies: 'approved', commit: 'c1', reviewers: 'a:10' })
+  assert.equal(ado.calls[0].query.get('artifactId'), `vstfs:///CodeReview/CodeReviewId/${PROJECT}/4101`)
 })
 
 test('malformed responses become the fixed error', async () => {

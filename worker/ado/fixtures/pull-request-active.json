@@ -5,6 +5,11 @@
   "title": "Fix pagination offset",
   "sourceRefName": "refs/heads/bugfix/1205-pagination-offset",
   "targetRefName": "refs/heads/main",
+  "lastMergeSourceCommit": { "commitId": "1c5fcb59bcc13516ee13df9e6753388b1941d3b4" },
+  "reviewers": [
+    { "id": "a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d", "displayName": "Grace Hopper", "uniqueName": "grace@contoso.example", "vote": 10, "isRequired": true },
+    { "id": "b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e", "displayName": "Dennis Ritchie", "uniqueName": "dennis@contoso.example", "vote": 0 }
+  ],
   "mergeStatus": "queued",
   "repository": {
     "id": "7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f",

@@ -166,8 +166,12 @@ export function toSummary(raw: RawWorkItem, cfg: BoardConfig, orgUrl: string): O
     parentId: typeof fields['System.Parent'] === 'number' ? fields['System.Parent'] : null,
     changedAt: timestamp(fields['System.ChangedDate']),
     url: workItemUrl(orgUrl, project, raw.id),
-    prRefs: (raw.relations ?? []).filter(link => link.rel === 'ArtifactLink').flatMap(link => parsePrRef(link.url) ?? [])
+    prRefs: prRefsOf(raw)
   }
+}
+
+export function prRefsOf(raw: RawWorkItem): PrRef[] {
+  return (raw.relations ?? []).filter(link => link.rel === 'ArtifactLink').flatMap(link => parsePrRef(link.url) ?? [])
 }
 
 export function parsePrRef(artifactUrl: string): PrRef | null {

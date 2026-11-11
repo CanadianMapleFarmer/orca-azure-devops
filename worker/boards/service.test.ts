@@ -16,6 +16,7 @@ import {
   fakeAdo,
   FEATURES,
   FEATURES_WEF,
+  isActiveList,
   isBatch,
   isDelta,
   isFieldsBatch,
@@ -733,6 +734,75 @@ test('an item shows one chip per target branch, and its details give every linke
     details.links.filter(link => link.kind === 'pr').map(link => link.title),
     ['Pull request 321 (merged)', 'Pull request 401 (abandoned)', 'Pull request 402 (open)', 'Pull request 403 (merged)', 'Pull request 404 (open)']
   )
+})
+
+test('new checks from the PRs tab update board and Work chips without a request', async () => {
+  const h = harness()
+  linkPullRequests(h, 1204, { 402: { status: 'active', target: 'dev' } })
+  boardIds(h, [1204])
+  const chipOf402 = (items: WorkItemSummary[] | undefined) => items?.find(entry => entry.id === 1204)?.prs.find(chip => chip.prId === 402)
+  assert.equal(chipOf402((await h.service.refresh(ORG)).mine)?.build, 'succeeded')
+  assert.equal(chipOf402((await h.service.board({ ...STORIES_BOARD, everyone: true })).items)?.build, 'succeeded')
+  const calls = h.ado.calls.length
+  const boardPosts = h.boardPosts.length
+
+  const key = `${PROJECT}/${REPO}/402`
+  const checks = h.entities.of(ORG).prChecks
+  checks.put(key, { ...checks.get(key)!.value, build: 'failed' })
+  await drain()
+
+  assert.equal(chipOf402(h.posts.at(-1)?.mine)?.build, 'failed')
+  assert.deepEqual(h.boardPosts.slice(boardPosts), [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.equal(chipOf402((await h.service.board({ ...STORIES_BOARD, everyone: true })).items)?.build, 'failed')
+  assert.equal(h.ado.calls.length, calls)
+})
+
+test('a PR that merges updates the Work tab\'s nudges without a request', async () => {
+  const h = harness()
+  h.storage[`nudgeRules:${ORG}:${TEAM}`] = [{ branch: 'dev', column: 'Resolved' }]
+  linkPullRequests(h, 1204, { 402: { status: 'active', target: 'dev' } })
+  assert.deepEqual((await h.service.refresh(ORG)).nudges, [])
+  const calls = h.ado.calls.length
+  const posts = h.posts.length
+
+  const key = `${PROJECT}/${REPO}/402`
+  const prs = h.entities.of(ORG).prs
+  prs.put(key, { ...prs.get(key)!.value, status: 'completed' })
+  await drain()
+
+  assert.equal(h.posts.length, posts + 1)
+  assert.deepEqual(h.posts.at(-1)?.nudges, [{ itemId: 1204, prId: 402, branch: 'dev', toColumn: 'Resolved' }])
+  assert.equal(item(h.posts.at(-1), 1204)?.prs.find(chip => chip.prId === 402)?.state, 'merged')
+  assert.equal(h.ado.calls.length, calls)
+})
+
+test('a PR store change that leaves the chips as they were posts nothing', async () => {
+  const h = harness()
+  linkPullRequests(h, 1204, { 402: { status: 'active', target: 'dev' } })
+  boardIds(h, [1204])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  const posts = h.posts.length
+  const boardPosts = h.boardPosts.length
+
+  const tables = h.entities.of(ORG)
+  const key = `${PROJECT}/${REPO}/402`
+  tables.prs.put(key, tables.prs.get(key)!.value)
+  tables.prChecks.put(`${PROJECT}/${REPO}/777`, { build: 'failed', policies: 'rejected', commit: null, reviewers: '' })
+  await drain()
+
+  assert.equal(h.posts.length, posts)
+  assert.equal(h.boardPosts.length, boardPosts)
+})
+
+test('an hour later merged PR chips are not read again', async () => {
+  const h = harness()
+  assert.equal(item(await h.service.refresh(ORG), 1204)?.prs[0].state, 'merged')
+  assert.deepEqual([h.ado.count(isActiveList), h.ado.count(isPullRequest)], [1, 1], 'one sweep, then the merged PR by id')
+
+  await h.clock.tick(61 * MINUTE)
+  assert.equal(item(await h.service.refresh(ORG), 1204)?.prs[0].state, 'merged')
+  assert.deepEqual([h.ado.count(isActiveList), h.ado.count(isPullRequest)], [1, 1])
 })
 
 test('a snapshot keeps the newest items that fit in one post', async () => {
