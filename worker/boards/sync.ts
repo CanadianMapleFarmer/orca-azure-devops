@@ -55,10 +55,11 @@ async function delta(http: AdoHttp, scope: SyncScope, previous: SyncState, known
 
   const listed = new Set(known)
   const held = new Set(previous.members)
-  const fresh = changed.filter(id => !listed.has(id))
-  const recheck = changed.filter(id => held.has(id))
-  const dropped = recheck.length === 0 ? [] : without(recheck, (await query(http, scope, stillInWiql(scope.clause, recheck), false)).ids)
-  const members = [...new Set([...without(kept, dropped), ...fresh])]
+  const recheck = changed.filter(id => held.has(id) || listed.has(id))
+  const matching = new Set(recheck.length === 0 ? [] : (await query(http, scope, stillInWiql(scope.clause, recheck), false)).ids)
+  const dropped = recheck.filter(id => held.has(id) && !matching.has(id))
+  const added = changed.filter(id => !held.has(id) && (matching.has(id) || !listed.has(id)))
+  const members = [...new Set([...without(kept, dropped), ...added])]
   return { state: { ...base, members }, members, stale: new Set(changed), gone }
 }
 

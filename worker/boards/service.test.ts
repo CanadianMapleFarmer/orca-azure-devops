@@ -1825,3 +1825,51 @@ test('a quiet board tick reports unchanged and backs off', async () => {
   await h.clock.tick(30_000)
   assert.equal(h.ado.calls.length, calls + 2)
 })
+
+const isWorkItemRead = (call: AdoCall) => isWiql(call) || isBatch(call)
+
+test('a parent that becomes assigned to me joins the Work view on the next delta', async () => {
+  const h = harness()
+  await shownWork(h)
+  assert.equal(item(h.posts.at(-1), 1100), undefined, 'the Feature is only the parent of a listed item')
+  const calls = h.ado.calls.length
+
+  h.ado.change(1100, { fields: { 'System.AssignedTo': ALEX_IDENTITY } })
+  h.ado.setMembers([...h.ado.state.wiql, 1100])
+  await h.clock.tick(MINUTE)
+  const tick = h.ado.calls.slice(calls).filter(isWorkItemRead)
+  assert.deepEqual(tick.map(call => [isDelta(call), isStillIn(call), isHydrate(call)]), [[true, false, false], [false, true, false], [false, false, true]])
+  assert.ok(tick[1].body.query.endsWith('[System.Id] IN (1100)'), tick[1].body.query)
+  assert.deepEqual([item(h.posts.at(-1), 1100)?.title, item(h.posts.at(-1), 1100)?.assignedTo], ['Vehicle search', 'Alex Contoso'])
+})
+
+test("a child task moved onto the board's requirement types joins the board on the next delta", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  const stories = [1204, 1205]
+  boardIds(h, stories)
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+
+  h.ado.change(1207, { fields: { 'System.WorkItemType': 'User Story', [`${WEF}.Column`]: 'Active' } })
+  stories.push(1207)
+  await h.clock.tick(30_000)
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: true })).items.map(entry => entry.id), [1204, 1205, 1207])
+})
+
+test('a parent assigned to me joins a board filtered to me on the next delta', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.ado.items.get(1206)!.fields['System.Parent'] = 1205
+  const stories = [1206]
+  boardIds(h, stories)
+  await h.service.board({ ...STORIES_BOARD, everyone: false })
+  const calls = h.ado.calls.length
+
+  h.ado.change(1205, { fields: { 'System.AssignedTo': ALEX_IDENTITY } })
+  stories.push(1205)
+  await h.clock.tick(30_000)
+  const recheck = h.ado.calls.slice(calls).filter(isStillIn)
+  assert.deepEqual(recheck.map(call => call.body.query.endsWith('[System.Id] IN (1205)')), [true])
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: false })).items.map(entry => entry.id), [1206, 1205])
+})

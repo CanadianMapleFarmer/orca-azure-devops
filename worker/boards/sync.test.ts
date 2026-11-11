@@ -116,11 +116,31 @@ test('a member that changed and still matches stays in the view', async () => {
   assert.deepEqual(result.stale, new Set([2]))
 })
 
-test('a changed child that is not a member is only marked stale', async () => {
-  const { http, requests } = scripted(wiql([40]))
+test("a known non-member that changes but still doesn't match stays out", async () => {
+  const { http, requests } = scripted(wiql([40]), wiql([]))
   const result = await syncView(http, SCOPE, state(), [1, 2, 3, 40], unknown, at(NOW))
-  assert.equal(requests.length, 1)
+  assert.equal(requests.length, 2)
+  assert.equal(queryOf(requests[1]), stillInWiql(CLAUSE, [40]))
   assert.deepEqual(result.members, [1, 2, 3])
+  assert.deepEqual(result.stale, new Set([40]))
+})
+
+test('one re-check lets a known non-member that now matches join and a member that no longer matches leave', async () => {
+  const { http, requests } = scripted(wiql([40, 2, 9]), wiql([40]))
+  const result = await syncView(http, SCOPE, state(), [1, 2, 3, 40, 41], unknown, at(NOW))
+  assert.equal(requests.length, 2)
+  assert.equal(queryOf(requests[1]), stillInWiql(CLAUSE, [40, 2]))
+  assert.deepEqual(result.members, [1, 3, 40, 9])
+  assert.deepEqual(result.state.members, [1, 3, 40, 9])
+  assert.deepEqual(result.stale, new Set([40, 2, 9]))
+})
+
+test('a day-precision delta re-checks a known non-member whose revision changed', async () => {
+  const { http, requests } = scripted(wiql([40, 41]), revs([[40, 2], [41, 5]]), wiql([40]))
+  const result = await syncView(http, SCOPE, state({ precision: 'day' }), [1, 2, 3, 40, 41], revsOf({ 40: 1, 41: 5 }), at(NOW))
+  assert.equal(requests.length, 3)
+  assert.equal(queryOf(requests[2]), stillInWiql(CLAUSE, [40]))
+  assert.deepEqual(result.members, [1, 2, 3, 40])
   assert.deepEqual(result.stale, new Set([40]))
 })
 
