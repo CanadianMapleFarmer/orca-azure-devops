@@ -378,6 +378,24 @@ test('one forbidden pull request is skipped without pausing the org', async () =
   })
 })
 
+test('a forbidden pull request does not pause the others once they back off', async () => {
+  await withPrNotifications(async h => {
+    const open = thread(201, [comment(1, GRACE, T0 - MINUTE, 'Please add a test.')])
+    h.threads.set(4101, [open])
+    h.setOrgs([status()])
+    await h.poll(0)
+    h.ado.on(call => isThreads(call) && threadsPrIdOf(call) === 4103, () => json(403, { message: 'TF401019: no access.' }))
+    await h.poll()
+    await h.poll()
+
+    const reads = h.ado.calls.filter(isThreads).length
+    await h.poll()
+    assert.deepEqual(h.ado.calls.filter(isThreads).slice(reads).map(threadsPrIdOf), [4103], 'only the refused one is due')
+    open.comments?.push(comment(2, GRACE, T0 + 15 * MINUTE, 'And a changelog line.'))
+    assert.deepEqual((await h.poll()).map(note => note.title), ['New comment on Pull Request 4101'])
+  })
+})
+
 test('a pull request that answers 404 is skipped silently and the other two still notify', async () => {
   await withPrNotifications(async h => {
     const ids = [5001, 5002, 5003]
@@ -464,6 +482,7 @@ test('refresh resolves once the pull requests load, not when the comment reads f
   await withPrNotifications(async h => {
     h.setOrgs([status()])
     await h.poll(0)
+    await h.clock.tick(2 * MINUTE)
     const hung = h.ado.hang(isThreads)
     h.review.push(requested(4120, 'Tighten the redirect check'))
 
@@ -579,7 +598,9 @@ test('my 20 newest active pull requests are watched, from the tab load while it 
     const lists = h.ado.count(isMineActive)
     h.service.visibility({ org: ORG, visible: true })
     await drain()
-    assert.equal(h.ado.count(isMineActive), lists + 2, 'the full load lists them, and the thread reads use that list')
-    assert.equal(read().length, 40)
+    assert.equal(h.ado.count(isMineActive), lists + 2, 'the full load lists them')
+    await h.clock.tick(3 * MINUTE)
+    assert.equal(read().length, 40, 'their threads are read again once due')
+    assert.equal(h.ado.count(isMineActive), lists + 4, 'from the lists of the tab loads, with no list of their own')
   })
 })

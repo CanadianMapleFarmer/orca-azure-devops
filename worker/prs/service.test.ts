@@ -2,6 +2,7 @@ import { assert, test } from 'orca/testing'
 import type { AutoCompleteOptions, PrSnapshot } from '../../src/shared/prs'
 import type { OrgStatus } from '../../src/shared/types'
 import { AdoError, createAdoHttp } from '../ado/http'
+import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
@@ -20,10 +21,12 @@ import {
   isPrWorkItems,
   isRepositories,
   isReviewList,
+  isThreads,
   ME,
   NO_PR_NOTIFICATIONS,
   PLATFORM,
-  projectOf
+  projectOf,
+  threadsPrIdOf
 } from './fake-prs'
 import { createPrNotifier, type PrNotifier } from './notify'
 import { createPrsService } from './service'
@@ -264,9 +267,9 @@ test("a visible PR tick lists only hot projects and keeps the cold projects' las
   const first = h.posts.at(-1)
   reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, T0, 'Asked in a quiet project'))])
 
-  for (let minute = 1; minute < 5; minute += 1) {
+  for (const minute of [1, 3]) {
     const before = h.ado.calls.length
-    await h.clock.tick(MINUTE)
+    await h.clock.tick(T0 + minute * MINUTE - h.clock.now())
     assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, `minute ${minute}`)
     assert.deepEqual(h.posts.at(-1), { ...first, updatedAt: T0 + minute * MINUTE }, 'the cold project and the completed lists keep their last results')
   }
@@ -303,7 +306,7 @@ test('Refresh lists every project', async () => {
   assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'a reload after an action')
 
   before = h.ado.calls.length
-  await h.clock.tick(MINUTE)
+  await h.clock.tick(2 * MINUTE)
   assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, 'the next tick lists hot projects only')
 })
 
@@ -343,6 +346,122 @@ test('a review request in a cold project appears within 5 minutes, visible or hi
   }
 })
 
+async function minutesThatRan(h: ReturnType<typeof harness>, minutes: number): Promise<number[]> {
+  const ran: number[] = []
+  for (let minute = 1; minute <= minutes; minute += 1) {
+    const before = h.ado.count(isReviewList)
+    await h.clock.tick(MINUTE)
+    if (h.ado.count(isReviewList) > before) ran.push(minute)
+  }
+  return ran
+}
+
+test('an unchanged PR poll backs off to 120 seconds', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  assert.deepEqual(await minutesThatRan(h, 8), [1, 3, 5, 7], 'every 2 minutes while nothing changes')
+
+  reviewsAlso(h.ado, [toReviewPr(4300, T0, 'A new request')])
+  assert.deepEqual(await minutesThatRan(h, 4), [1, 2, 4], 'a change brings it back to every minute, then it backs off again')
+})
+
+test('a hidden PR poll never backs off past 5 minutes', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await minutesThatRan(h, 5)
+  h.show(false)
+
+  for (let tick = 1; tick <= 4; tick += 1) {
+    const before = h.ado.count(isReviewList)
+    await h.clock.tick(5 * MINUTE)
+    assert.ok(h.ado.count(isReviewList) > before, `hidden tick ${tick}`)
+  }
+})
+
+test('opening the PRs tab shows the last load at once, even when older than a minute, and refreshes it', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const last = h.posts.at(-1)
+  h.show(false)
+  await h.clock.tick(3 * MINUTE)
+
+  const gate = h.ado.hold(() => true)
+  const loads = h.ado.count(isMineActive)
+  let answered: PrSnapshot | null = null
+  const opening = h.service.snapshot(ORG).then(snapshot => (answered = snapshot))
+  await drain()
+  assert.deepEqual(answered, last, 'the last load, three minutes old, at once')
+
+  gate.release()
+  await opening
+  await drain()
+  assert.ok(h.ado.count(isMineActive) > loads, 'then it is loaded again')
+  assert.deepEqual(h.posts.at(-1), { ...last, updatedAt: T0 + 3 * MINUTE })
+})
+
+test('the last load is shown at once only to the account it was loaded for', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  assert.equal((await h.service.snapshot(ORG)).me, ME)
+  h.setOrgs([status({ account: { ...status().account!, adoId: OTHER_ACCOUNT } })])
+
+  const snapshot = await h.service.snapshot(ORG)
+  assert.deepEqual([snapshot.me, snapshot.stale], [OTHER_ACCOUNT, false])
+})
+
+const GRACE = { id: 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d', displayName: 'Grace Hopper' }
+
+function commentAt(id: number, at: number, content: string): NonNullable<RawThread['comments']>[number] {
+  return { id, author: GRACE, content, publishedDate: new Date(at).toISOString(), commentType: 'text' }
+}
+
+test('a new comment on a quiet PR notifies once within 10 minutes', async () => {
+  for (const visible of [true, false]) {
+    const mode = visible ? 'visible' : 'hidden'
+    const shown: Shown[] = []
+    const notifier = createPrNotifier({ show: async note => shown.push(note), prefs: () => ({ reviews: false, comments: true }), log: () => {} })
+    const h = harness({ notifier })
+    const open: RawThread = { id: 201, status: 'active', comments: [commentAt(1, T0 - HOUR, 'Please add a test.')] }
+    h.ado.on(isThreads, call => json(200, { value: threadsPrIdOf(call) === 4101 ? [open] : [] }))
+    h.setOrgs([status()])
+    h.show(visible)
+    await h.clock.tick(0)
+    await h.clock.tick(30 * MINUTE)
+    const reads = h.ado.calls.filter(call => isThreads(call) && threadsPrIdOf(call) === 4101).length
+    assert.equal(reads, 5, `${mode}: its threads were re-read after 2 or more, then 4, 8 and 10 minutes`)
+
+    open.comments?.push(commentAt(2, h.clock.now(), 'One more thing.'))
+    await h.clock.tick(10 * MINUTE)
+    assert.deepEqual(shown.map(note => note.title), ['New comment on Pull Request 4101'], mode)
+    await h.clock.tick(10 * MINUTE)
+    assert.equal(shown.length, 1, `${mode}: once`)
+  }
+})
+
+test('a hidden observe lists active PRs only in hot projects', async () => {
+  const notifier = createPrNotifier({ show: async () => {}, prefs: () => ({ reviews: false, comments: true }), log: () => {} })
+  const h = harness({ notifier })
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  h.show(false)
+
+  let before = h.ado.calls.length
+  await h.clock.tick(5 * MINUTE)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)).active, [], 'the tab load is under 10 minutes old, so its list is reused')
+  for (let tick = 2; tick <= 4; tick += 1) {
+    before = h.ado.calls.length
+    await h.clock.tick(5 * MINUTE)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PLATFORM, PROJECT] }, `hidden tick ${tick}`)
+  }
+})
+
 test('the snapshot holds release sets, to-review PRs and the saved auto-complete options', async () => {
   const h = harness()
   const snapshot = await h.service.snapshot(ORG)
@@ -377,8 +496,9 @@ test('the snapshot holds release sets, to-review PRs and the saved auto-complete
   assert.deepEqual(await h.service.snapshot(ORG), snapshot)
   assert.equal(h.ado.calls.length, calls, 'a snapshot younger than a minute is answered from memory')
   await h.clock.tick(MINUTE)
-  await h.service.snapshot(ORG)
-  assert.equal(h.ado.count(isMineActive), 3, 'an older one is loaded again')
+  assert.deepEqual(await h.service.snapshot(ORG), snapshot, 'an older one is answered at once')
+  await drain()
+  assert.equal(h.ado.count(isMineActive), 3, 'and loaded again')
 
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4101 }), search.prs[0])
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4110 }), snapshot.toReview[0])
@@ -466,11 +586,11 @@ test('a forbidden enrichment turns off only that enrichment for 10 minutes', asy
 
     const tried = h.ado.count(refused)
     await h.clock.tick(9 * MINUTE)
-    assert.equal(h.ado.count(isMineActive), 12, 'the lists keep loading every minute')
+    assert.equal(h.ado.count(isMineActive), 8, 'the lists keep loading, every 2 minutes once nothing changes')
     assert.equal(h.ado.count(refused), tried, 'the refused enrichment is not asked for 10 minutes')
     assert.equal(h.posts.at(-1)?.message, message)
 
-    await h.clock.tick(MINUTE)
+    await h.clock.tick(2 * MINUTE)
     assert.ok(h.ado.count(refused) > tried, 'and is asked again after 10 minutes')
   }
 })
@@ -739,7 +859,7 @@ test('a quiet PRs tab keeps loading in full without rewriting its saved copy unt
   const loads = h.ado.count(isMineActive)
 
   await h.clock.tick(14 * MINUTE)
-  assert.ok(h.ado.count(isMineActive) >= loads + 14, 'the hot project kept loading every minute')
+  assert.ok(h.ado.count(isMineActive) >= loads + 7, 'the hot project kept loading every 2 minutes')
   assert.equal(writes(), 1, 'written once, after the first load')
   assert.deepEqual(h.cache.writes.filter((key, index) => h.cache.writes.indexOf(key) !== index), [], 'the PR records, the meta and the index are written once too')
   await h.clock.tick(2 * MINUTE)
