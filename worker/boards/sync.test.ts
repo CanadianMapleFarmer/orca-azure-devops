@@ -40,7 +40,7 @@ function revsOf(pairs: Record<number, number>) {
 }
 
 function state(over: Partial<SyncState> = {}): SyncState {
-  return { clause: CLAUSE, members: [1, 2, 3], watermark: WATERMARK, auditedAt: NOW - MINUTE, audits: 1, precision: 'time', ...over }
+  return { clause: CLAUSE, members: [1, 2, 3], watermark: WATERMARK, auditedAt: NOW - MINUTE, audits: 1, precision: 'time', seen: new Map(), ...over }
 }
 
 const queryOf = (req: AdoRequest) => (req.body as { query: string }).query
@@ -57,7 +57,7 @@ test('the first sync audits with one query and no revision read when the store i
     members: [1, 2, 3],
     stale: new Set([1, 2, 3]),
     gone: [],
-    state: { clause: CLAUSE, members: [1, 2, 3], watermark: AS_OF, auditedAt: NOW, audits: 1, precision: 'time' }
+    state: { clause: CLAUSE, members: [1, 2, 3], watermark: AS_OF, auditedAt: NOW, audits: 1, precision: 'time', seen: new Map() }
   })
 })
 
@@ -137,7 +137,7 @@ test('one re-check lets a known non-member that now matches join and a member th
 
 test('a day-precision delta re-checks a known non-member whose revision changed', async () => {
   const { http, requests } = scripted(wiql([40, 41]), revs([[40, 2], [41, 5]]), wiql([40]))
-  const result = await syncView(http, SCOPE, state({ precision: 'day' }), [1, 2, 3, 40, 41], revsOf({ 40: 1, 41: 5 }), at(NOW))
+  const result = await syncView(http, SCOPE, state({ precision: 'day', seen: new Map([[40, 1], [41, 5]]) }), [1, 2, 3, 40, 41], revsOf({ 40: 1, 41: 5 }), at(NOW))
   assert.equal(requests.length, 3)
   assert.equal(queryOf(requests[2]), stillInWiql(CLAUSE, [40]))
   assert.deepEqual(result.members, [1, 2, 3, 40])
@@ -145,14 +145,14 @@ test('a day-precision delta re-checks a known non-member whose revision changed'
 })
 
 test('a date-precision 400 switches the view to day precision with a revision check', async () => {
-  const { http, requests } = scripted(new AdoError('bad_request', 400, PRECISION), wiql([2, 3]), revs([[2, 4], [3, 1]]), wiql([2]))
+  const { http, requests } = scripted(new AdoError('bad_request', 400, PRECISION), wiql([2, 3]), revs([[2, 4], [3, 1]]), wiql([2, 3]))
   const result = await syncView(http, SCOPE, state(), [1, 2, 3], revsOf({ 1: 1, 2: 3, 3: 1 }), at(NOW))
   assert.equal(requests.length, 4)
   assert.equal(requests[0].query?.timePrecision, true)
   assert.ok(queryOf(requests[1]).includes('[System.ChangedDate] >= @Today - 1 AND'), queryOf(requests[1]))
   assert.equal(requests[1].query?.timePrecision, undefined)
   assert.deepEqual(requests[2].body, { ids: [2, 3], fields: ['System.Id'], errorPolicy: 'omit' })
-  assert.equal(queryOf(requests[3]), stillInWiql(CLAUSE, [2]))
+  assert.equal(queryOf(requests[3]), stillInWiql(CLAUSE, [2, 3]), 'the view has seen no revision yet, so it re-checks every id it holds')
   assert.deepEqual(result.stale, new Set([2]))
   assert.deepEqual(result.members, [1, 2, 3])
   assert.equal(result.state.precision, 'day')
@@ -168,9 +168,33 @@ test('a date-precision 400 switches the view to day precision with a revision ch
 
 test('day precision drops the known ids the revision read omits and skips unchanged revisions', async () => {
   const { http } = scripted(wiql([2, 3, 8]), revs([[2, 3], [3, null], [8, null]]))
-  const result = await syncView(http, SCOPE, state({ precision: 'day' }), [1, 2, 3], revsOf({ 1: 1, 2: 3, 3: 1 }), at(NOW))
+  const result = await syncView(http, SCOPE, state({ precision: 'day', seen: new Map([[2, 3], [3, 1]]) }), [1, 2, 3], revsOf({ 1: 1, 2: 3, 3: 1 }), at(NOW))
   assert.deepEqual(result.gone, [3])
   assert.deepEqual(result.members, [1, 2])
+  assert.deepEqual(result.stale, new Set())
+  assert.deepEqual(result.state.seen, new Map([[2, 3]]))
+})
+
+test('a day-precision delta re-checks a member whose new revision another view already stored', async () => {
+  const { http, requests } = scripted(wiql([2]), revs([[2, 4]]), wiql([]))
+  const previous = state({ precision: 'day', seen: new Map([[2, 3]]) })
+  const result = await syncView(http, SCOPE, previous, [1, 2, 3], revsOf({ 1: 1, 2: 4, 3: 1 }), at(NOW))
+  assert.equal(requests.length, 3)
+  assert.equal(queryOf(requests[2]), stillInWiql(CLAUSE, [2]))
+  assert.deepEqual(result.members, [1, 3])
+  assert.deepEqual(result.stale, new Set(), 'the store already holds rev 4')
+
+  const next = scripted(wiql([2]), revs([[2, 4]]))
+  const again = await syncView(next.http, SCOPE, result.state, [1, 2, 3], revsOf({ 1: 1, 2: 4, 3: 1 }), at(NOW + MINUTE))
+  assert.equal(next.requests.length, 2, 'a revision this view has re-checked is not re-checked again')
+  assert.deepEqual(again.members, [1, 3])
+})
+
+test('a day-precision delta lets in a new match whose revision another view already stored', async () => {
+  const { http, requests } = scripted(wiql([9]), revs([[9, 2]]))
+  const result = await syncView(http, SCOPE, state({ precision: 'day' }), [1, 2, 3], revsOf({ 1: 1, 2: 1, 3: 1, 9: 2 }), at(NOW))
+  assert.equal(requests.length, 2)
+  assert.deepEqual(result.members, [1, 2, 3, 9])
   assert.deepEqual(result.stale, new Set())
 })
 
@@ -192,7 +216,7 @@ test('a changed clause resets the state and audits', async () => {
   const { http, requests } = scripted(wiql([4, 5]))
   const result = await syncView(http, { ...SCOPE, clause }, state({ audits: 3, precision: 'day', auditedAt: NOW }), [], unknown, at(NOW))
   assert.equal(queryOf(requests[0]), membershipWiql(clause))
-  assert.deepEqual(result.state, { clause, members: [4, 5], watermark: AS_OF, auditedAt: NOW, audits: 1, precision: 'time' })
+  assert.deepEqual(result.state, { clause, members: [4, 5], watermark: AS_OF, auditedAt: NOW, audits: 1, precision: 'time', seen: new Map() })
 })
 
 test('an answer at $top makes the next sync an audit', async () => {

@@ -50,6 +50,8 @@ const NEEDS_CODE_READ = 'Linked PR status needs Code (Read) access.'
 const NOT_CONNECTED = 'Connect this organization first.'
 const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 const INTERRUPTED = 'Sign-in was interrupted. Try again.'
+const FILTER_NOT_SAVED = "Couldn't save this board's filter."
+const DATE_PRECISION = 'You cannot supply a time with the date when running a query using date precision.'
 const COLUMNS = ['New', 'Active', 'In Review', 'Resolved', 'Closed']
 const MINE_QUERY =
   "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Removed') ORDER BY [System.ChangedDate] DESC"
@@ -106,7 +108,8 @@ function harness(first: OrgStatus = status(), restart: { cache?: Record<string, 
     postBoard: change => boardPosts.push(change),
     now: clock.now,
     entities,
-    persisted
+    persisted,
+    log: message => logs.push(message)
   })
   return {
     ado,
@@ -1485,6 +1488,19 @@ test('a load that re-sends the current filter does not overwrite a remembered ch
   assert.equal(await filters.everyone(ORG, TEAM, STORIES), false, 'remember without a filter stores nothing')
 })
 
+test('a filter choice that cannot be saved is logged and the board still opens', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  h.store.set = async () => {
+    throw new Error('storage unavailable')
+  }
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: false, remember: true })
+  assert.equal(view.everyone, false)
+  assert.deepEqual(view.items.map(entry => entry.id), [1204, 1205])
+  assert.deepEqual(h.logs, [FILTER_NOT_SAVED])
+})
+
 test('without a board, a move prefers a board holding the item that maps its type', async () => {
   const h = harness()
   boardIds(h, [1204, 1205], [1204])
@@ -1846,6 +1862,34 @@ test("the user's move survives a delta that returns the older rev", async () => 
   assert.deepEqual(item(h.posts.at(-1), 1204), moved)
 })
 
+test("a comment whose reload hits a lagging replica keeps the user's move in Work and on the board", async () => {
+  const h = harness()
+  boardIds(h, [1204, 1205])
+  await h.service.refresh(ORG)
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  const before = structuredClone(h.ado.items.get(1204)!)
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  assert.equal(moved.rev, 10)
+
+  let lagging = 0
+  h.ado.on(
+    call => lagging === 0 && isHydrate(call) && call.body.ids.includes(1204),
+    () => {
+      lagging += 1
+      return json(200, { count: 1, value: [before] })
+    }
+  )
+  await h.service.comment(ORG, 1204, 'Ready for review')
+  assert.equal(lagging, 1, 'the reload hit a lagging replica')
+  assert.deepEqual(item(h.posts.at(-1), 1204), moved)
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: true })).items.find(entry => entry.id === 1204), moved)
+
+  const card = item(h.posts.at(-1), 1204)!
+  const again = await h.service.move({ org: ORG, id: 1204, rev: card.rev, to: { column: 'Closed' } })
+  assert.deepEqual(h.ado.calls.filter(isPatch).at(-1)?.body[0], { op: 'test', path: '/rev', value: 10 })
+  assert.equal(again.rev, 11)
+})
+
 test('a deleted item leaves the board at the next audit', async () => {
   const h = harness()
   h.setOrgs([status()])
@@ -1893,6 +1937,24 @@ test('Refresh forces an audit', async () => {
   assert.equal(h.ado.count(isDelta), 2, 'later ticks are deltas again')
 })
 
+test('Refresh pressed while a delta is in flight makes the next run audit', async () => {
+  const h = harness()
+  await shownWork(h)
+  const held = h.ado.hold(call => isDelta(call) && isMineWiql(call))
+  await h.clock.tick(MINUTE)
+  assert.equal(h.ado.count(isDelta), 1, 'a delta is in flight')
+
+  const refreshing = h.service.refresh(ORG)
+  await drain()
+  held.release()
+  await refreshing
+  const calls = h.ado.calls.length
+  await h.clock.tick(2 * MINUTE)
+  const next = h.ado.calls.slice(calls)
+  assert.equal(next[0]?.body.query, MINE_QUERY, 'the next run audits')
+  assert.ok(isRevRead(next[1]), 'with a revision read')
+})
+
 test('a quiet board tick reports unchanged and backs off', async () => {
   const h = harness()
   h.setOrgs([status()])
@@ -1912,6 +1974,31 @@ test('a quiet board tick reports unchanged and backs off', async () => {
 })
 
 const isWorkItemRead = (call: AdoCall) => isWiql(call) || isBatch(call)
+
+function onlyDayPrecision(h: ReturnType<typeof harness>): void {
+  h.ado.on(call => isDelta(call) && call.query.get('timePrecision') === 'true', () => json(400, { message: DATE_PRECISION }))
+}
+
+test('in day precision a card leaves the board even when the Work tab stored its new rev first', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  const stories = [1204, 1205]
+  boardIds(h, stories)
+  onlyDayPrecision(h)
+  await h.service.refresh(ORG)
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  await h.clock.tick(30_000)
+  assert.ok(h.ado.calls.some(call => isDelta(call) && isStoriesWiql(call) && !call.query.has('timePrecision')), 'the board fell back to day precision')
+
+  h.ado.change(1205, { fields: { 'System.AreaPath': 'Fabrikam Web\\Support' } })
+  stories.splice(stories.indexOf(1205), 1)
+  await h.service.refresh(ORG)
+  assert.equal(h.entities.of(ORG).workItems.get('1205')?.value.rev, h.ado.items.get(1205)!.rev, 'the Work tab stored the new rev first')
+
+  await h.clock.tick(2 * MINUTE)
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: true })).items.map(entry => entry.id), [1204])
+})
 
 test('a parent that becomes assigned to me joins the Work view on the next delta', async () => {
   const h = harness()

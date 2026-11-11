@@ -6,11 +6,12 @@ export const AUDIT_EVERY_MS = 15 * 60_000
 export const DEEP_AUDIT_EVERY = 4
 export const MAX_KNOWN_FOR_DELTA = 1500
 
-export interface SyncState { clause: string; members: number[]; watermark: string; auditedAt: number; audits: number; precision: 'time' | 'day' }
+export interface SyncState { clause: string; members: number[]; watermark: string; auditedAt: number; audits: number; precision: 'time' | 'day'; seen: ReadonlyMap<number, number> }
 export interface SyncScope { org: string; projectId: string; teamId: string; clause: string }
 export interface SyncResult { state: SyncState; members: number[]; stale: Set<number>; gone: number[] }
 
 type RevOf = (id: number) => number | undefined
+interface Revised { changed: number[]; stale: Set<number>; gone: number[]; seen: ReadonlyMap<number, number> }
 
 const ANY_CHANGE_SINCE = '@Today - 1'
 
@@ -41,17 +42,17 @@ async function audit(http: AdoHttp, scope: SyncScope, previous: SyncState | null
   }
   const members = without(ids, gone)
   if (audits % DEEP_AUDIT_EVERY === 0) for (const id of members) stale.add(id)
-  const state: SyncState = { clause: scope.clause, members, watermark: asOf, auditedAt: now(), audits, precision: previous?.precision ?? 'time' }
+  const state: SyncState = { clause: scope.clause, members, watermark: asOf, auditedAt: now(), audits, precision: previous?.precision ?? 'time', seen: previous?.seen ?? new Map() }
   return { state, members, stale, gone }
 }
 
 async function delta(http: AdoHttp, scope: SyncScope, previous: SyncState, known: readonly number[], revOf: RevOf): Promise<SyncResult> {
   const precise = previous.precision === 'time' ? await timeDelta(http, scope, previous, known) : null
   const { ids, asOf } = precise ?? (await query(http, scope, deltaWiql(scope.clause, ANY_CHANGE_SINCE, known), false))
-  const { changed, gone } = precise ? { changed: ids, gone: [] } : await revised(http, scope, ids, known, revOf)
+  const { changed, stale, gone, seen } = precise ? { changed: ids, stale: new Set(ids), gone: [], seen: previous.seen } : await revised(http, scope, ids, known, revOf, previous)
   const kept = without(previous.members, gone)
-  const base: SyncState = { ...previous, watermark: asOf, precision: precise ? 'time' : 'day', auditedAt: ids.length >= WIQL_TOP ? -Infinity : previous.auditedAt }
-  if (changed.length === 0) return { state: { ...base, members: kept }, members: kept, stale: new Set(), gone }
+  const base: SyncState = { ...previous, seen, watermark: asOf, precision: precise ? 'time' : 'day', auditedAt: ids.length >= WIQL_TOP ? -Infinity : previous.auditedAt }
+  if (changed.length === 0) return { state: { ...base, members: kept }, members: kept, stale, gone }
 
   const listed = new Set(known)
   const held = new Set(previous.members)
@@ -60,7 +61,7 @@ async function delta(http: AdoHttp, scope: SyncScope, previous: SyncState, known
   const dropped = recheck.filter(id => held.has(id) && !matching.has(id))
   const added = changed.filter(id => !held.has(id) && (matching.has(id) || !listed.has(id)))
   const members = [...new Set([...without(kept, dropped), ...added])]
-  return { state: { ...base, members }, members, stale: new Set(changed), gone }
+  return { state: { ...base, members }, members, stale, gone }
 }
 
 async function timeDelta(http: AdoHttp, scope: SyncScope, previous: SyncState, known: readonly number[]): Promise<IdsAt | null> {
@@ -73,13 +74,21 @@ async function timeDelta(http: AdoHttp, scope: SyncScope, previous: SyncState, k
   }
 }
 
-async function revised(http: AdoHttp, scope: SyncScope, ids: number[], known: readonly number[], revOf: RevOf): Promise<{ changed: number[]; gone: number[] }> {
-  if (ids.length === 0) return { changed: [], gone: [] }
+async function revised(http: AdoHttp, scope: SyncScope, ids: number[], known: readonly number[], revOf: RevOf, previous: SyncState): Promise<Revised> {
+  if (ids.length === 0) return { changed: [], stale: new Set(), gone: [], seen: previous.seen }
   const revs = await readRevs(http, scope.org, scope.projectId, ids)
   const listed = new Set(known)
+  const found = ids.filter(id => revs.has(id))
+  const gone = ids.filter(id => listed.has(id) && !revs.has(id))
+  const watched = new Set([...previous.members, ...known])
+  const seen = new Map([...previous.seen].filter(([id]) => watched.has(id)))
+  for (const id of gone) seen.delete(id)
+  for (const [id, rev] of revs) seen.set(id, rev)
   return {
-    changed: ids.filter(id => revs.has(id) && revs.get(id) !== revOf(id)),
-    gone: ids.filter(id => listed.has(id) && !revs.has(id))
+    changed: found.filter(id => revs.get(id) !== previous.seen.get(id)),
+    stale: new Set(found.filter(id => revs.get(id) !== revOf(id))),
+    gone,
+    seen
   }
 }
 

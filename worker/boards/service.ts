@@ -12,7 +12,7 @@ import type { Entities, OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
 import { createSavedTables } from '../data/saved-tables'
-import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
 import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type SavedBoard, type Synced } from './board-views'
@@ -51,6 +51,7 @@ export interface BoardsServiceDeps {
   now: () => number
   entities: Entities
   persisted: Persisted
+  log: (message: string) => void
 }
 
 export interface BoardsService {
@@ -76,9 +77,10 @@ interface OrgWork extends Synced {
   loading: Flight<WorkSnapshot> | null
   restored: WorkSnapshot | null
   restoring?: Promise<void>
+  forceAudit: boolean
 }
 
-interface Built extends Synced { snapshot: WorkSnapshot; projected: WorkSnapshot }
+interface Built extends Synced { snapshot: WorkSnapshot; projected: WorkSnapshot; forced: boolean }
 
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
@@ -202,7 +204,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function workOf(org: string): OrgWork {
-    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: null }
+    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: null, forceAudit: false }
     work.set(org, entry)
     return entry
   }
@@ -234,8 +236,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   async function build(status: OrgStatus, entry: OrgWork, signal?: AbortSignal): Promise<Built> {
     const cfg = await defaultConfig(status, signal)
     const source = sourceOf(status).withSignal(signal)
+    const forced = entry.forceAudit
     const held = sameTarget(entry.snapshot?.board, cfg) ? entry : { sync: null, known: [] }
-    const { ids, sync } = await synced(source, cfg, mineClause(doneStatesOf(cfg)), held)
+    const { ids, sync } = await synced(source, cfg, mineClause(doneStatesOf(cfg)), forced ? forcingAudit(held) : held)
     const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg, meOf(status), ids), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
     const families = await restatedRows(source, cfg, loaded.families, items.filter((item, index) => item !== loaded.items[index]))
@@ -252,7 +255,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       stale: false,
       ...(message ? { message } : {})
     }
-    return { snapshot: capSnapshot(projected), projected, sync, known: loaded.known }
+    return { snapshot: capSnapshot(projected), projected, sync, known: loaded.known, forced }
   }
 
   function load(org: string, signal?: AbortSignal): Promise<WorkSnapshot> {
@@ -261,9 +264,10 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       try {
         const status = await statusOf(org)
         if (!status.boards) return noBoards(org)
-        const { snapshot, projected, sync, known } = await build(status, entry, signal)
+        const { snapshot, projected, sync, known, forced } = await build(status, entry, signal)
         if (work.get(org) !== entry) return snapshot
         Object.assign(entry, { snapshot, sync, known, failure: null, restored: null })
+        if (forced) entry.forceAudit = false
         deps.post(snapshot)
         persist(status, 'work', () => capSnapshot(projected, VALUE_BUDGET_BYTES))
         return snapshot
@@ -359,11 +363,11 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   async function publish(status: OrgStatus, raw: RawWorkItem, like: WorkItemSummary): Promise<void> {
     const { org } = status
     const source = sourceOf(status)
-    source.put(raw)
-    recent.record([mineKey(org), ...boardViews.of(org).map(view => view.key)], { raw, like })
+    const kept = source.put(raw)
+    recent.record([mineKey(org), ...boardViews.of(org).map(view => view.key)], { raw: kept, like })
     for (const view of boardViews.of(org)) {
       if (!view.result.items.some(item => item.id === raw.id)) continue
-      const item = await restate(source, view.result.board, raw, like)
+      const item = await restate(source, view.result.board, kept, like)
       boardViews.update(view, { ...view.result, items: replaced(view.result.items, item) })
     }
     const entry = work.get(org)
@@ -371,7 +375,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     if (!entry?.snapshot || !board || !holds(entry.snapshot, raw.id)) return
     const listed = hasTask(entry.snapshot.families, raw.id)
     const [item, rules, dismissed] = await Promise.all([
-      restate(source, board, raw, like),
+      restate(source, board, kept, like),
       nudges.rules(org, board.teamId),
       nudges.dismissed(org)
     ])
@@ -454,7 +458,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const status = await statusOf(org)
       if (!status.boards) return noBoards(org)
       const held = work.get(org)
-      if (held?.sync) held.sync = { ...held.sync, auditedAt: -Infinity }
+      if (held) held.forceAudit = true
       if (polled.has(org)) await scheduler.runNow(mineKey(org))
       else await load(org).catch(() => {})
       const entry = work.get(org)
@@ -509,7 +513,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const { boardId } = await config(args)
       homes.set(`${args.org}/${args.teamId}`, args.projectId)
       const filter = everyone ?? (await filters.everyone(args.org, args.teamId, boardId))
-      if (remember === true && everyone !== undefined) await filters.remember(args.org, args.teamId, boardId, everyone)
+      if (remember === true && everyone !== undefined) await filters.remember(args.org, args.teamId, boardId, everyone).catch(() => deps.log(FILTER_NOT_SAVED))
       return { ...(await boardViews.open(args.org, args, boardId, filter)), everyone: filter }
     },
 
@@ -603,6 +607,10 @@ async function restatedRows(source: ItemSource, cfg: BoardConfig, families: Work
     if (hasTask(patched, item.id)) patched = patchFamilies(patched, item, await isCompleted(source, cfg, item))
   }
   return patched
+}
+
+function forcingAudit(held: Synced): Synced {
+  return { sync: held.sync && { ...held.sync, auditedAt: -Infinity }, known: held.known }
 }
 
 function sameTarget(board: BoardConfig | null | undefined, target: Pick<BoardConfig, 'projectId' | 'teamId'>): boolean {

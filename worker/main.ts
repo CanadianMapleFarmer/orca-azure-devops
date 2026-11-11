@@ -190,7 +190,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     postBoard: change => orca.panels.post('work.boardChanged', change),
     now: Date.now,
     entities,
-    persisted
+    persisted,
+    log
   })
   const showNotification = (n: Shown) => orca.host.call('notifications.show', n)
   const prs = createPrsService({

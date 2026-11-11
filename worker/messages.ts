@@ -68,6 +68,7 @@ export const SHARE_PREFS_NOT_SAVED = "Couldn't save the share choices."
 export const CHANNEL_SECRET_LEFT = "Couldn't remove the saved URL of a Teams channel that failed to save."
 export const UNKNOWN_SHARE_KIND = "That can't be shared."
 export const NOTIFY_FAILED = "Couldn't show a desktop notification."
+export const FILTER_NOT_SAVED = "Couldn't save this board's filter."
 export const MORE_UPDATES_BODY = 'Open the Pipelines tab in the Azure DevOps panel to see them.'
 export const MORE_PR_UPDATES_BODY = 'Open the PRs tab in the Azure DevOps panel to see them.'
 export const PR_COMMENTS_UNREAD = "Couldn't read the comments on your pull requests for notifications."
