@@ -11,6 +11,9 @@ import { closeAllListeners, listenForRedirect } from './auth/loopback'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
+import { withUserContext } from './data/context'
+import { createGovernor } from './data/governor'
+import { createPressure } from './data/rate-limit'
 import { NETWORK } from './messages'
 import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
 import { registerOrgHandlers } from './org-handlers'
@@ -18,7 +21,7 @@ import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier, type Shown } from './pipelines/notify'
 import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './pipelines/open-file'
-import { createPressure } from './pipelines/pressure'
+import { createPressure as createSlowDown } from './pipelines/pressure'
 import { openRun } from './pipelines/run-file'
 import { createRunViews } from './pipelines/run-views'
 import { createPipelinesService } from './pipelines/service'
@@ -111,6 +114,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     set: (key, value) => orca.storage.set(key, value as JsonValue)
   }
 
+  const pressure = createPressure(Date.now)
   const connections = createConnections({
     store,
     secrets: orca.secrets,
@@ -142,12 +146,14 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       wiki.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
+    observe: pressure.observe,
     now: Date.now,
     log
   })
   const scheduler = createScheduler(realClock)
-  const pressure = createPressure(Date.now)
-  const http = pressure.wrapByOrg(connections.http)
+  const governor = createGovernor({ http: connections.http, pressure, now: Date.now, clock: realClock })
+  const slowDown = createSlowDown(Date.now)
+  const http = slowDown.wrapByOrg(governor)
   const boards = createBoardsService({
     http,
     orgs: () => connections.list(),
@@ -176,20 +182,20 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     log
   })
   const pipelines = createPipelinesService({
-    http: connections.http,
+    http: governor,
     orgs: () => connections.list(),
     scheduler,
     watchList: createWatchList(store),
-    pressure,
+    pressure: slowDown,
     signals: createRunSignals({ bar, notifier, now: Date.now }),
     post: snapshot => orca.panels.post('runs.changed', snapshot),
     now: Date.now
   })
   const runViews = createRunViews({
-    http: connections.http,
+    http: governor,
     orgs: () => connections.list(),
     scheduler,
-    pressure,
+    pressure: slowDown,
     watched: (org, buildId) => pipelines.isWatched(org, buildId),
     changed: change => orca.panels.post('runs.viewChanged', change),
     now: Date.now
@@ -253,32 +259,33 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     log,
     isFileInside: fileInside(fs)
   }
-  await registerWorkspaceHandlers(orca, { boards, store, call, arm })
-  orca.panels.handle('plugin.ping', () => ({ version: manifest.version }))
-  registerOrgHandlers(orca, connections)
-  registerWorkHandlers(orca, { boards, http, call })
-  registerPrHandlers(orca, { prs, actions: prActions })
-  registerReviewHandlers(orca, {
+  const host = withUserContext(orca)
+  await registerWorkspaceHandlers(host, { boards, store, call, arm })
+  host.panels.handle('plugin.ping', () => ({ version: manifest.version }))
+  registerOrgHandlers(host, connections)
+  registerWorkHandlers(host, { boards, http, call })
+  registerPrHandlers(host, { prs, actions: prActions })
+  registerReviewHandlers(host, {
     reviews,
     actions: reviewActions,
     checkout: key => checkoutPr({ call, remotes, arm, pullRequest: input => reviews.pullRequest(input), log }, key)
   })
   const drafts = createDrafts({ store, fs, call, wiki, now: Date.now, log })
-  registerWikiHandlers(orca, {
+  registerWikiHandlers(host, {
     wiki,
     drafts,
     publisher: createPublisher({ http, drafts, wiki, now: Date.now }),
     reader: createReader({ wiki, call, fs })
   })
-  registerPipelineHandlers(orca, {
+  registerPipelineHandlers(host, {
     pipelines,
     actions: runActions,
     views: runViews,
     openRun: input => openRun({ call, fs, now: Date.now }, input),
     openFile: input => openRunFile(openFileDeps, input)
   })
-  registerShareHandlers(orca, share)
-  registerVisibilityHandler(orca, { boards, prs, pipelines, runViews })
+  registerShareHandlers(host, share)
+  registerVisibilityHandler(host, { boards, prs, pipelines, runViews })
   orca.commands.register('status', async () => statusText(await connections.list(), bar.counts(), network.notes()))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
