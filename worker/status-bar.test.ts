@@ -85,6 +85,26 @@ test('status text lists network notes after the org lines, and after the not-con
   assert.equal(statusText([], undefined, []), statusText([]))
 })
 
+test("statusText adds each connected org's detail lines under it", () => {
+  const details = (name: string) => [`  ${name} detail 1`, `  ${name} detail 2`]
+  assert.equal(
+    statusText([org('contoso', 'connected'), org('fabrikam', 'expired'), org('adatum', 'connected')], counts({ contoso: 1 }), ['A note.'], details),
+    [
+      'contoso — connected as ada@contoso.com',
+      '  contoso detail 1',
+      '  contoso detail 2',
+      'fabrikam — expired',
+      'adatum — connected as ada@adatum.com',
+      '  adatum detail 1',
+      '  adatum detail 2',
+      '1 pull request to review: contoso 1',
+      'A note.'
+    ].join('\n')
+  )
+  const orgs = [org('contoso', 'connected')]
+  assert.equal(statusText(orgs, undefined, [], () => []), statusText(orgs))
+})
+
 function counts(entries: Record<string, number>): OrgCounts {
   return new Map(Object.entries(entries).map(([name, toReview]) => [name, { toReview }]))
 }

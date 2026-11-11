@@ -13,6 +13,7 @@ import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { withUserContext } from './data/context'
 import { createGovernor } from './data/governor'
+import { createMetrics, metricsLines } from './data/metrics'
 import { createPressure } from './data/rate-limit'
 import { NETWORK } from './messages'
 import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
@@ -115,6 +116,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   }
 
   const pressure = createPressure(Date.now)
+  const metrics = createMetrics(Date.now)
   const connections = createConnections({
     store,
     secrets: orca.secrets,
@@ -146,7 +148,10 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       wiki.onOrgs(orgs)
     },
     connectFailed: failure => orca.panels.post('orgs.connectFailed', failure),
-    observe: pressure.observe,
+    observe: (req, status, headers) => {
+      pressure.observe(req, status, headers)
+      metrics.observe(req, status, headers)
+    },
     now: Date.now,
     log
   })
@@ -286,7 +291,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   registerShareHandlers(host, share)
   registerVisibilityHandler(host, { boards, prs, pipelines, runViews })
-  orca.commands.register('status', async () => statusText(await connections.list(), bar.counts(), network.notes()))
+  orca.commands.register('status', async () =>
+    statusText(await connections.list(), bar.counts(), network.notes(), org => metricsLines(metrics.report(org), pressure.state(org), Date.now())))
   const orgs = await connections.list()
   boards.onOrgs(orgs)
   prs.onOrgs(orgs)

@@ -120,6 +120,10 @@ function adoErrorWith(code: AdoError['code'], status: number, message: string): 
   }
 }
 
+function withoutMetrics(status: unknown): string {
+  return String(status).split('\n').filter(line => !line.startsWith('  ')).join('\n')
+}
+
 function orgsChanged(posts: readonly { event: string; payload?: unknown }[]): OrgStatus[][] {
   return posts.filter(post => post.event === 'orgs.changed').map(post => (post.payload as { orgs: OrgStatus[] }).orgs)
 }
@@ -220,7 +224,9 @@ test('orgs handlers connect, sign out and remove an org', async () => {
         tone: 'success',
         tooltip: 'Azure DevOps: contoso (ada@contoso.com)'
       })
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com')
+      const [first, requests] = String(await w.command('status')).split('\n')
+      assert.equal(first, 'contoso — connected as ada@contoso.com')
+      assert.match(requests, /^ {2}Requests, last 5 min: \d+ \(.*\bconnect \d+/)
       assert.equal((await w.request('orgs.list', {}))[0].state, 'connected')
       assert.equal(Object.keys(w.host.data().secrets).includes('pat:contoso'), true)
 
@@ -844,7 +850,7 @@ test('the status command reports review counts', async () => {
     await withWorker(worker, { host }, async w => {
       const shown = () => (host.callsOf('statusBar.update').at(-1) as { text?: string } | undefined)?.text
       assert.ok(await until(() => shown() === 'ADO · 1 to review'), 'the background run counted the pull requests to review')
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 pull request to review: contoso 1')
+      assert.equal(withoutMetrics(await w.command('status')), 'contoso — connected as ada@contoso.com\n1 pull request to review: contoso 1')
       assert.deepEqual(prsChanged(w.posts), [], 'a background run posts no snapshot')
       assert.equal(ado.count(isMineActive), 0)
 
@@ -1363,7 +1369,7 @@ test('the status command reports failed runs and approvals', async () => {
     const host = pipelinesHost()
     await withWorker(worker, { host }, async w => {
       assert.ok(await until(() => statusShown(host) === 'ADO · 1 failed · 2 approvals'), 'the background run counted failed runs and approvals')
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 failed pipeline run: contoso 1\n2 approvals waiting: contoso 2')
+      assert.equal(withoutMetrics(await w.command('status')), 'contoso — connected as ada@contoso.com\n1 failed pipeline run: contoso 1\n2 approvals waiting: contoso 2')
       assert.deepEqual(runsChanged(w.posts), [], 'a background run posts no snapshot')
       assert.equal(ado.count(isRunningRuns), 0)
 
