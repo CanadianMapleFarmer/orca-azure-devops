@@ -10,6 +10,7 @@ import type { StorePort } from '../connections'
 import { fly, inLane, join, type Flight } from '../data/context'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
+import { createBoardFilters } from './board-filters'
 import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
@@ -52,7 +53,7 @@ export interface BoardsService {
   move(input: { org: string; id: number; rev: number; to: MoveTarget; board?: BoardRef }): Promise<WorkItemSummary>
   comment(org: string, id: number, text: string): Promise<WorkComment>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
-  board(input: BoardArgs & { everyone: boolean }): Promise<BoardResult>
+  board(input: BoardArgs & { everyone?: boolean; remember?: boolean }): Promise<BoardResult & { everyone: boolean }>
   defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
   dismissNudge(input: { org: string; itemId: number; prId: number }): Promise<{ ok: true }>
   nudgeRules(input: { org: string; teamId: string; rules?: NudgeRule[] }): Promise<{ rules: NudgeRule[] }>
@@ -76,6 +77,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const { http, scheduler, now } = deps
   const configs = createBoardConfigCache(now)
   const nudges = createNudgeStore(deps.store)
+  const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
   const sources = new Map<string, ItemSource>()
   const work = new Map<string, OrgWork>()
@@ -391,11 +393,13 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       return change(status, cfg, id, raw.rev, () => addPullRequestLink(http, org, cfg.projectId, raw, artifactUrl))
     },
 
-    async board({ everyone, ...args }) {
+    async board({ everyone, remember, ...args }) {
       await statusOf(args.org)
-      const board = await config(args)
+      const { boardId } = await config(args)
       homes.set(`${args.org}/${args.teamId}`, args.projectId)
-      return boardViews.open(args.org, args, board.boardId, everyone)
+      const filter = everyone ?? (await filters.everyone(args.org, args.teamId, boardId))
+      if (remember === true && everyone !== undefined) await filters.remember(args.org, args.teamId, boardId, everyone)
+      return { ...(await boardViews.open(args.org, args, boardId, filter)), everyone: filter }
     },
 
     async defaultBoard(org) {

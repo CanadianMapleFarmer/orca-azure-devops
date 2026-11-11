@@ -14,7 +14,7 @@ interface State {
   base: WorkItemSummary[]
   pending: Map<number, WorkItemSummary>
   message: string | undefined
-  everyone: boolean
+  everyone: boolean | null
   parent: number | null
   toggled: Set<string>
   banner: string | null
@@ -30,7 +30,7 @@ const toolbar = createToolbar({
   everyone(value) {
     if (!state || state.everyone === value) return
     state.everyone = value
-    void load()
+    void load({ remember: true })
   },
   parent(id) {
     if (!state) return
@@ -111,16 +111,18 @@ function toggleLane(id: string): void {
   paint()
 }
 
-async function load(): Promise<void> {
+async function load(options: { remember?: true } = {}): Promise<void> {
   const current = state
   if (!current) return
   const mine = ++seq
   current.loading = true
   paint()
   const { org, projectId, teamId, boardId } = current.ref
+  const filter = current.everyone === null ? {} : { everyone: current.everyone }
   try {
-    const result = await orca.plugin.request('work.board', { org, projectId, teamId, boardId, everyone: current.everyone })
+    const result = await orca.plugin.request('work.board', { org, projectId, teamId, boardId, ...filter, ...options })
     if (mine !== seq || state !== current) return
+    current.everyone = result.everyone
     current.board = result.board
     current.base = result.items
     current.message = result.message
@@ -171,7 +173,7 @@ function sameBoard(a: BoardRef, b: BoardRef | null): boolean {
 }
 
 function openRef(ref: BoardRef): void {
-  state = { ref, board: null, base: [], pending: new Map(), message: undefined, everyone: true, parent: null, toggled: new Set(), banner: null, failure: null, loading: false }
+  state = { ref, board: null, base: [], pending: new Map(), message: undefined, everyone: null, parent: null, toggled: new Set(), banner: null, failure: null, loading: false }
   root.replaceChildren(toolbar.node, banner, note, scroller)
   reportVisibility()
   void load()

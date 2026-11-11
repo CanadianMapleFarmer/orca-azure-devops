@@ -123,11 +123,11 @@ export function createToolbar(handlers: { everyone(value: boolean): void; parent
   bar.append(title, status, scope, parent)
   return {
     node: bar,
-    update(view: { title: string; loading: boolean; everyone: boolean; parents: ParentOption[]; parent: number | null }): void {
+    update(view: { title: string; loading: boolean; everyone: boolean | null; parents: ParentOption[]; parent: number | null }): void {
       title.textContent = view.title
       status.textContent = view.loading ? 'Loading…' : ''
-      me.setAttribute('aria-pressed', String(!view.everyone))
-      everyone.setAttribute('aria-pressed', String(view.everyone))
+      me.setAttribute('aria-pressed', String(view.everyone === false))
+      everyone.setAttribute('aria-pressed', String(view.everyone === true))
       const options = JSON.stringify(view.parents)
       if (options !== shownOptions) {
         shownOptions = options

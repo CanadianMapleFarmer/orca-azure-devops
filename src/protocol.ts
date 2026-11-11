@@ -30,8 +30,8 @@ declare module 'orca' {
       output: WorkItemSummary
     }
     'work.board': {
-      input: { org: string; projectId: string; teamId: string; boardId?: string; everyone: boolean }
-      output: { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean }
+      input: { org: string; projectId: string; teamId: string; boardId?: string; everyone?: boolean; remember?: boolean }
+      output: { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean; everyone: boolean }
     }
     'work.boards': { input: { org: string; projectId: string; teamId: string }; output: { id: string; name: string }[] }
     'work.openBoard': { input: { org: string }; output: { opened: boolean; message?: string } }

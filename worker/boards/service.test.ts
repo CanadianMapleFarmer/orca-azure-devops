@@ -31,6 +31,7 @@ import {
   WEF,
   type AdoCall
 } from './fake-ado'
+import { createBoardFilters } from './board-filters'
 import { createBoardsService, type BoardChange, type BoardResult } from './service'
 import { createItemSource, loadMine } from './snapshot'
 
@@ -90,6 +91,7 @@ function harness(first: OrgStatus = status()) {
   return {
     ado,
     clock,
+    store,
     storage,
     posts,
     boardPosts,
@@ -1338,6 +1340,46 @@ test('at most 4 board views are held per org, and the oldest hidden one goes fir
   assert.equal(h.ado.calls.length, calls, 'four views are still held')
   await open(third)
   assert.ok(h.ado.calls.length > calls, 'the least recently opened hidden view was dropped, so it loads again')
+})
+
+test('opening a board without a filter uses the remembered one and says which', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  await createBoardFilters(h.store).remember(ORG, TEAM, STORIES, false)
+
+  const view = await h.service.board(STORIES_BOARD)
+  assert.equal(view.everyone, false)
+  assert.ok(h.ado.calls.find(isStoriesWiql)?.body.query.includes('[System.AssignedTo] = @Me'))
+  const other = await h.service.board(FEATURES_BOARD)
+  assert.equal(other.everyone, true, 'a board never chosen for uses Everyone')
+  assert.ok(!h.ado.calls.find(isFeaturesWiql)?.body.query.includes('@Me'))
+})
+
+test('choosing a filter remembers it for that board only', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  const filters = createBoardFilters(h.store)
+
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: false, remember: true })
+  assert.equal(view.everyone, false)
+  assert.equal(await filters.everyone(ORG, TEAM, STORIES), false)
+  assert.equal(await filters.everyone(ORG, TEAM, FEATURES), true)
+  assert.equal((await h.service.board(FEATURES_BOARD)).everyone, true)
+})
+
+test('a load that re-sends the current filter does not overwrite a remembered choice', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  boardIds(h, [1204, 1205])
+  const filters = createBoardFilters(h.store)
+  await filters.remember(ORG, TEAM, STORIES, false)
+
+  assert.equal((await h.service.board({ ...STORIES_BOARD, everyone: true })).everyone, true)
+  assert.equal(await filters.everyone(ORG, TEAM, STORIES), false, 'only remember: true stores a choice')
+  await h.service.board({ ...STORIES_BOARD, remember: true })
+  assert.equal(await filters.everyone(ORG, TEAM, STORIES), false, 'remember without a filter stores nothing')
 })
 
 test('without a board, a move prefers a board holding the item that maps its type', async () => {
