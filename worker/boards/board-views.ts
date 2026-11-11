@@ -11,13 +11,12 @@ export interface Synced { sync: SyncState | null; known: number[] }
 export interface BoardLoad extends Synced { result: BoardResult }
 export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult; restored: boolean }
 export interface BoardRef { teamId: string; boardId: string }
-export interface SavedBoard { result: BoardResult; savedAt: number }
 
 export interface BoardViewsDeps {
   scheduler: Scheduler
   now: () => number
   load: (request: BoardRequest & Synced, signal?: AbortSignal) => Promise<BoardLoad>
-  restore: (request: BoardRequest, boardId: string) => Promise<SavedBoard | null>
+  restore: (request: BoardRequest, boardId: string) => Promise<BoardResult | null>
   connected: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
@@ -155,9 +154,9 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       const generation = generationOf(org, key)
       const saved = held ? null : await deps.restore(request, boardId)
       if (saved && deps.connected(org) && generationOf(org, key) === generation && !views.has(key)) {
-        hold({ ...request, result: saved.result, sync: null, known: [], at: Math.min(saved.savedAt, deps.now() - BOARD_MS.visibleMs), restored: true })
+        hold({ ...request, result: saved, sync: null, known: [], at: Math.min(saved.updatedAt, deps.now() - BOARD_MS.visibleMs), restored: true })
         void deps.scheduler.runNow(key)
-        return saved.result
+        return saved
       }
       const loaded = await deps.load({ ...request, sync: null, known: [] })
       if (generationOf(org, key) !== generation) return loaded.result

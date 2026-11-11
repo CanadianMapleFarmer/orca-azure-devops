@@ -390,9 +390,9 @@ Each tick:
 **Restore**
 - The first `work.snapshot`, `work.board`, `prs.snapshot` or `runs.snapshot` for an org with nothing in memory loads the saved view.
 - It is used only when the org is connected and `account` equals the pinned account's `adoId`.
-- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The Work, PRs and Pipelines toolbars already show "Updated ‹relative time›". A restored board carries no message: its `updatedAt` is `savedAt`, and the editor shows *"Updated ‹relative time› · refreshing…"* (5.11).
+- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The Work, PRs and Pipelines toolbars already show "Updated ‹relative time›". A restored board carries no message and keeps its own `updatedAt`, when it was last loaded, never `savedAt`, which a held timestamp-only write can push to shutdown time. The editor shows *"Updated ‹relative time› · refreshing…"* (5.11).
 - At the same time, the view's job runs now. When it finishes, the live view replaces the saved one through the usual `*.changed` post.
-- A restored board view's `at` is `min(savedAt, now − 30 s)`, so the 30-second freshness check in `reload` never skips the revalidation.
+- A restored board view's `at` is `min(updatedAt, now − 30 s)`, so the 30-second freshness check in `reload` never skips the revalidation.
 - Restored Work and board views stay flagged until a live load replaces them, and are dropped while their org isn't connected. Every restore path re-checks the org after its awaits.
 - Delta sync state (5.5) is not saved, so the first tick after a restart audits.
 - **Restored PR and Pipelines data is marked.** `cachedRun`, `approval()`, `watch()` and `prs.cached()` treat it as a miss and read ADO before acting, so a share or an approval never acts on a saved copy.
@@ -472,7 +472,7 @@ Each board remembers its last **Me / Everyone** choice. A board on *Me* reads on
 
 Today `BoardResult` has no `updatedAt`, and the board editor ignores `stale` (`board-views.ts:7`, `src/board/board.ts:122–127`).
 
-- `BoardResult` gains `updatedAt`, set when the result was loaded, or to `savedAt` for a restored view.
+- `BoardResult` gains `updatedAt`, set when the result was loaded. A restored view keeps the saved result's own `updatedAt`.
 - While a result is `stale`, the editor's existing note shows *"Updated ‹relative time› · refreshing…"*, matching the panel's wording.
   - A stale result that also carries a failure message shows *"Updated ‹relative time› · ‹message›"* instead.
   - The relative time comes from `Intl.RelativeTimeFormat` in the frame's locale, recomputed on each paint and every 60 s while the note shows.

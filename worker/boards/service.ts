@@ -15,7 +15,7 @@ import type { SavedTables } from '../data/saved-tables'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
-import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type SavedBoard, type Synced } from './board-views'
+import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type Synced } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
 import {
@@ -191,12 +191,12 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     else void load(org).catch(() => {})
   }
 
-  async function savedBoard(request: BoardRequest, boardId: string): Promise<SavedBoard | null> {
+  async function savedBoard(request: BoardRequest, boardId: string): Promise<BoardResult | null> {
     const account = accountOf(await statusOf(request.org))
     if (!account || !connected.has(request.org)) return null
     const saved = await deps.persisted.load(request.org, savedBoardName(request.args.teamId, boardId), account)
     if (!saved || !connected.has(request.org) || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
-    return { result: { ...saved.value.result, stale: true, updatedAt: saved.savedAt }, savedAt: saved.savedAt }
+    return { ...saved.value.result, stale: true }
   }
 
   function sourceOf(status: OrgStatus): ItemSource {
@@ -592,7 +592,8 @@ function isSavedBoard(value: unknown, boardId: string): value is { result: Board
     isRecord(value.result) &&
     isRecord(value.result.board) &&
     value.result.board.boardId === boardId &&
-    Array.isArray(value.result.items)
+    Array.isArray(value.result.items) &&
+    Number.isFinite(value.result.updatedAt)
   )
 }
 

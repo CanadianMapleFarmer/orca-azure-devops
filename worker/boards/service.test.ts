@@ -2275,11 +2275,10 @@ test('a saved board view is served only for the filter it was saved with', async
   assert.ok(h.ado.calls.some(isStoriesWiql))
 })
 
-test('a board result carries when it was loaded, and a restored one carries when it was saved', async () => {
+test('a board result carries when it was loaded, and a restored one keeps that time, not when it was saved', async () => {
   const { view, cache } = await savedBoard()
   assert.equal(view.updatedAt, T0)
-  const savedAt = T0 + 5 * MINUTE
-  ;(cache[cacheKey(ORG, `board:${TEAM}:${STORIES}`)] as { savedAt: number }).savedAt = savedAt
+  ;(cache[cacheKey(ORG, `board:${TEAM}:${STORIES}`)] as { savedAt: number }).savedAt = T0 + 5 * MINUTE
 
   const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
   h.setOrgs([status({ account: ALEX })])
@@ -2287,7 +2286,7 @@ test('a board result carries when it was loaded, and a restored one carries when
   const gate = h.ado.hold(() => true)
   const painted = await h.service.board(STORIES_BOARD)
   assert.equal(painted.stale, true)
-  assert.equal(painted.updatedAt, savedAt)
+  assert.equal(painted.updatedAt, T0, 'when it was loaded, though it was written 5 minutes later')
   assert.equal(painted.message, undefined, "the editor's own note says it is refreshing")
 
   gate.release()
@@ -2295,6 +2294,39 @@ test('a board result carries when it was loaded, and a restored one carries when
   const live = await h.service.board(STORIES_BOARD)
   assert.equal(live.stale, undefined)
   assert.equal(live.updatedAt, T0 + 30 * MINUTE)
+})
+
+test('a saved board without its load time is not restored', async () => {
+  const { cache } = await savedBoard()
+  delete (cache[cacheKey(ORG, `board:${TEAM}:${STORIES}`)] as { value: { result: { updatedAt?: number } } }).value.result.updatedAt
+
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  const board = await h.service.board(STORIES_BOARD)
+  assert.deepEqual([board.stale, board.updatedAt], [undefined, T0 + 30 * MINUTE], 'loaded live instead')
+})
+
+test('a board last refreshed 50 minutes before shutdown restores as 50 minutes old', async () => {
+  const shown = { surface: 'board' as const, org: ORG, board: { teamId: TEAM, boardId: STORIES } }
+  const before = harness(status({ account: ALEX }))
+  before.setOrgs([status({ account: ALEX })])
+  boardIds(before, [1204, 1205])
+  await before.service.board(STORIES_BOARD)
+  await before.clock.tick(5 * MINUTE)
+  const refreshedAt = (await before.service.board(STORIES_BOARD)).updatedAt
+  assert.ok(refreshedAt > T0, 'the visible board refreshed meanwhile')
+  before.service.visibility({ ...shown, visible: false })
+  await before.clock.tick(refreshedAt + 50 * MINUTE - before.clock.now())
+  const cache = await savedFrom(before)
+
+  const after = harness(status({ account: ALEX }), { cache, at: before.clock.now() })
+  after.setOrgs([status({ account: ALEX })])
+  boardIds(after, [1204, 1205])
+  after.ado.hold(() => true)
+  const restored = await after.service.board(STORIES_BOARD)
+  assert.equal(restored.stale, true)
+  assert.equal(after.clock.now() - restored.updatedAt, 50 * MINUTE, 'the editor shows "Updated 50 minutes ago · refreshing…"')
 })
 
 test('a quiet Work tab and board keep polling without rewriting their saved copies, refreshing each at most once per 15 minutes', async () => {
