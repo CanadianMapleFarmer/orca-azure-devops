@@ -31,10 +31,11 @@ import {
   type RawWorkItem
 } from '../ado/workitems'
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import type { OrgEntities } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
 import { joinMessages, MALFORMED, showingNewest, TASKS_NOT_LOADED } from '../messages'
 import type { BoardResult } from './board-views'
 
-const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
 const MAX_ITEMS = 1000
 export const MAX_CHILD_READS = 1000
@@ -56,11 +57,10 @@ export interface ItemSource {
 
 export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean; chips: PrChip[] }
 
-export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number): ItemSource {
+export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number, tables: OrgEntities): ItemSource {
   const chipCache: PrChipCache = new Map()
-  const stateCache = new Map<string, { at: number; states: TypeState[] }>()
   let chipsOffUntil = -Infinity
-  const bound = (scoped: AdoHttp): ItemSource => ({
+  const bound = (scoped: AdoHttp, signal?: AbortSignal): ItemSource => ({
     http: scoped,
     org,
     orgUrl,
@@ -74,15 +74,11 @@ export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now
         return null
       }
     },
-    async states(projectId, type) {
-      const key = `${projectId}/${type}`
-      const cached = stateCache.get(key)
-      if (cached && now() - cached.at < TYPE_STATES_TTL_MS) return cached.states
-      const states = await loadTypeStates(scoped, { org, projectId }, type)
-      stateCache.set(key, { at: now(), states })
-      return states
+    states(projectId, type) {
+      const load = (own: AbortSignal) => loadTypeStates(withSignal(http, own), { org, projectId }, type)
+      return tables.typeStates.read(`${projectId}/${type}`, FRESHNESS.typeStates, load, signal)
     },
-    withSignal: signal => bound(withSignal(http, signal))
+    withSignal: signal => bound(withSignal(http, signal), signal)
   })
   return bound(http)
 }

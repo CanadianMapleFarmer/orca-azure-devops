@@ -252,6 +252,7 @@ function harness(
     settings?: Record<string, unknown>
     bindError?: Error
     observe?: ResponseObserver
+    forgotten?: (org: string) => void
   } = {}
 ) {
   const clock = { now: T0 }
@@ -309,7 +310,8 @@ function harness(
     },
     now: () => clock.now,
     log,
-    observe: seed.observe
+    observe: seed.observe,
+    forgotten: seed.forgotten
   })
 
   const h = {
@@ -1150,6 +1152,26 @@ test('a remove whose credentials cannot be deleted says they will be retried whe
   await h.connections.resetInterrupted()
   assert.equal(h.az.profiles.has('contoso'), false)
   assert.deepEqual(h.storage.get('signing-in'), [])
+})
+
+test('forgotten is called on sign-out and removal, and not on an interrupted sign-in', async () => {
+  const forgotten: string[] = []
+  const h = harness({
+    orgs: [config(), config({ org: 'fabrikam', method: 'pat', pinned: ADA })],
+    signingIn: ['contoso'],
+    secrets: { 'pat:fabrikam': PAT_ADA },
+    forgotten: org => forgotten.push(org)
+  })
+  await h.connections.resetInterrupted()
+  assert.equal(h.last('contoso')?.message, INTERRUPTED)
+  assert.deepEqual(forgotten, [])
+
+  await h.connections.signOut('fabrikam')
+  assert.deepEqual(forgotten, ['fabrikam'])
+  await h.connections.remove('contoso')
+  assert.deepEqual(forgotten, ['fabrikam', 'contoso'])
+  await h.connections.remove('contoso')
+  assert.deepEqual(forgotten, ['fabrikam', 'contoso'], 'removing an unknown org forgets nothing')
 })
 
 test('update saves boards and code projects and posts', async () => {

@@ -6,6 +6,7 @@ import { createAdoHttp } from '../ado/http'
 import type { RawThread } from '../ado/pr-review'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { drain, fakeClock, paced, withWorker } from '../test-support'
 import { fakePrs, isMineActive, isReviewList, isThreads, ME, projectOf, threadsPrIdOf } from './fake-prs'
 import { createPrNotifier, MAX_WATCHED_PRS } from './notify'
@@ -112,6 +113,7 @@ async function withPrNotifications(body: (h: Harness) => Promise<void>): Promise
         post: () => {},
         counts: () => {},
         now: clock.now,
+        entities: createEntities(clock.now),
         notifier: {
           ...notifier,
           forget: org => {

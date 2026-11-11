@@ -5,6 +5,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
+import { createEntities } from '../data/entities'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import {
@@ -72,6 +73,7 @@ function harness() {
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: (org, count) => counts.push([org, count]),
     now: clock.now,
+    entities: createEntities(clock.now),
     ...NO_PR_NOTIFICATIONS
   })
   return {

@@ -11,6 +11,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { SecretsPort } from '../auth/pat'
 import type { StorePort } from '../connections'
 import { fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { createScheduler } from '../poll/scheduler'
 import { fakePrs, isOnePr, isPrWorkItems, ME, NO_PR_NOTIFICATIONS } from '../prs/fake-prs'
 import { approvalShareSource } from '../pipelines/share-source'
@@ -139,6 +140,7 @@ function harness(pick: (real: RealDestinations) => WorkerDestination[] = real =>
     post: () => {},
     counts: () => {},
     now: clock.now,
+    entities: createEntities(clock.now),
     ...NO_PR_NOTIFICATIONS
   })
   const template = { value: PR_TEMPLATE }

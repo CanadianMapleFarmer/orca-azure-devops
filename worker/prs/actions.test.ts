@@ -4,6 +4,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawPullRequest } from '../ado/pullrequests'
 import { fixture, isPatch, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import { createPrActions } from './actions'
@@ -91,6 +92,7 @@ function harness(saved: AutoCompleteOptions = SAVED) {
     post: snapshot => posts.push(structuredClone(snapshot)),
     counts: () => {},
     now: clock.now,
+    entities: createEntities(clock.now),
     ...NO_PR_NOTIFICATIONS
   })
   const actions = createPrActions({ http, prs, settings: { autoComplete: () => saved } })

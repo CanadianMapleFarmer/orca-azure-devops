@@ -7,6 +7,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawTimeline } from '../ado/timeline'
 import { json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
+import { createEntities } from '../data/entities'
 import { isRepositories, PLATFORM } from '../prs/fake-prs'
 import { drain, fakeClock, memoryStore, paced } from '../test-support'
 import {
@@ -82,7 +83,8 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     watchList: createWatchList(memory.store),
     signals: options.signals?.(clock.now) ?? { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
     post: snapshot => posts.push(structuredClone(snapshot)),
-    now: clock.now
+    now: clock.now,
+    entities: createEntities(clock.now)
   })
   return {
     ado,

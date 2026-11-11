@@ -39,6 +39,7 @@ export interface ConnectionsDeps {
   now: () => number
   log: (message: string) => void
   observe?: ResponseObserver
+  forgotten?: (org: string) => void
 }
 
 const ORGS_KEY = 'orgs'
@@ -739,6 +740,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       cfg.pinned = null
       setTransient(org, cancelled ? { state: 'disconnected', message: MESSAGES.cancelled } : null)
       await wipeCredentials(org, [cfg.method])
+      deps.forgotten?.(org)
       return statusFor(cfg)
     },
 
@@ -751,6 +753,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       orgs = orgs.filter(item => item !== cfg)
       transient.delete(org)
       if (!(await wipeCredentials(org, [cfg.method]))) throw new Error(MESSAGES.removeWipeFailed)
+      deps.forgotten?.(org)
     },
 
     async update(org, patch) {

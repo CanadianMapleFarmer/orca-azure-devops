@@ -1,13 +1,15 @@
 import { NO_BOARDS } from '../../src/shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
 import { NO_FAMILIES, type BoardConfig, type MoveTarget, type WorkComment, type WorkFamilies, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
-import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
+import { boardConfigKey, loadBoardConfig, type BoardArgs } from '../ado/board-config'
 import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
 import { readFields, textOr, workItemUrl, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { fly, inLane, join, type Flight } from '../data/context'
+import type { Entities } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
@@ -41,6 +43,7 @@ export interface BoardsServiceDeps {
   post: (snapshot: WorkSnapshot) => void
   postBoard: (change: BoardChange) => void
   now: () => number
+  entities: Entities
 }
 
 export interface BoardsService {
@@ -74,8 +77,7 @@ const MINE_MS = { visibleMs: 60_000, backgroundMs: null, quietMax: 2 }
 const INFO_FIELDS = ['System.WorkItemType', 'System.Title', 'System.TeamProject']
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
-  const { http, scheduler, now } = deps
-  const configs = createBoardConfigCache(now)
+  const { http, scheduler, now, entities } = deps
   const nudges = createNudgeStore(deps.store)
   const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
@@ -101,7 +103,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function sourceOf(status: OrgStatus): ItemSource {
-    const source = sources.get(status.org) ?? createItemSource(http, status.org, status.url, now)
+    const source = sources.get(status.org) ?? createItemSource(http, status.org, status.url, now, entities.of(status.org))
     sources.set(status.org, source)
     return source
   }
@@ -112,13 +114,8 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return entry
   }
 
-  async function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
-    const key = boardConfigKey(args)
-    const cached = configs.get(key)
-    if (cached) return cached
-    const cfg = await loadBoardConfig(withSignal(http, signal), args)
-    configs.set(key, cfg)
-    return cfg
+  function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
+    return entities.of(args.org).boardConfigs.read(boardConfigKey(args), FRESHNESS.boardConfig, scoped => loadBoardConfig(withSignal(http, scoped), args), signal)
   }
 
   async function defaultConfig(status: OrgStatus, signal?: AbortSignal): Promise<BoardConfig> {

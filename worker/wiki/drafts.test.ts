@@ -6,6 +6,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import { draftKey, type WikiPageRef } from '../../src/shared/wiki'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { ME } from '../prs/fake-prs'
 import { memoryStore } from '../test-support'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
@@ -67,7 +68,7 @@ function harness(workspaces: WorkspaceEntry[], memory = memoryStore(), files: Dr
     sleep: async () => {}
   })
   let now = T0
-  const wiki = createWikiService({ http, orgs: async () => [status()], now: () => now })
+  const wiki = createWikiService({ http, orgs: async () => [status()], entities: createEntities(() => now) })
   wiki.onOrgs([status()])
   const host: { workspaces: WorkspaceEntry[]; focused: string | null } = { workspaces, focused: workspaces[0]?.id ?? null }
   const opened: { workspaceId: string; path: string }[] = []

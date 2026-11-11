@@ -6,6 +6,7 @@ import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { fly, join, type Flight } from '../data/context'
+import type { Entities } from '../data/entities'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -33,6 +34,7 @@ export interface PipelinesServiceDeps {
   signals: RunSignals
   post: (snapshot: RunsSnapshot) => void
   now: () => number
+  entities: Entities
 }
 
 export interface PipelinesService {
@@ -89,7 +91,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const entry: OrgRuns = {
       controller: new AbortController(),
       source: createRunSource(deps.http, org, now),
-      projects: cachedCodeProjects(deps.http, org, now),
+      projects: cachedCodeProjects(deps.http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,
       fullAt: null,

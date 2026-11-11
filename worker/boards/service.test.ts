@@ -6,6 +6,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { currentContext, type Priority } from '../data/context'
+import { createEntities } from '../data/entities'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock } from '../test-support'
 import {
@@ -79,6 +80,7 @@ function harness(first: OrgStatus = status()) {
   let orgs = [first]
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const scheduler = createScheduler(clock)
+  const entities = createEntities(clock.now)
   const service = createBoardsService({
     http,
     orgs: async () => structuredClone(orgs),
@@ -86,7 +88,8 @@ function harness(first: OrgStatus = status()) {
     scheduler,
     post: snapshot => posts.push(structuredClone(snapshot)),
     postBoard: change => boardPosts.push(change),
-    now: clock.now
+    now: clock.now,
+    entities
   })
   return {
     ado,
@@ -97,6 +100,7 @@ function harness(first: OrgStatus = status()) {
     boardPosts,
     service,
     scheduler,
+    entities,
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
@@ -979,6 +983,14 @@ test('without a board, a move uses the first open board that maps the item type,
   ])
 })
 
+test('two boards opened at once load their shared board config once', async () => {
+  const h = harness()
+  const args = { org: ORG, projectId: PROJECT, teamId: TEAM }
+  const [everyone, mine] = await Promise.all([h.service.board({ ...args, everyone: true }), h.service.board({ ...args, everyone: false })])
+  assert.deepEqual([everyone.board.boardId, mine.board.boardId], [STORIES, STORIES])
+  assert.equal(h.ado.count(isBacklogConfig), 1)
+})
+
 test('a move naming a board that is not loaded loads its configuration first', async () => {
   const h = harness()
   await h.service.move({ org: ORG, id: 1100, rev: 1, to: { column: 'Closed' }, board: { teamId: TEAM, boardId: FEATURES } })
@@ -1638,7 +1650,7 @@ test('a failed children read still posts the items, with no task lists and a mes
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const cfg = await loadBoardConfig(http, { org: ORG, projectId: PROJECT, teamId: TEAM })
   const controller = new AbortController()
-  const loading = loadMine(createItemSource(http, ORG, ORG_URL, () => T0).withSignal(controller.signal), cfg, { id: ALEX.adoId, uniqueName: ALEX.uniqueName })
+  const loading = loadMine(createItemSource(http, ORG, ORG_URL, () => T0, createEntities(() => T0).of(ORG)).withSignal(controller.signal), cfg, { id: ALEX.adoId, uniqueName: ALEX.uniqueName })
   const settled = loading.then(() => 'resolved', (error: unknown) => error)
   for (let turn = 0; turn < 10 && hung.length === 0; turn += 1) await drain()
   assert.equal(hung.length, 1)

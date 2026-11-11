@@ -12,6 +12,7 @@ import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { withUserContext } from './data/context'
+import { createEntities } from './data/entities'
 import { createGovernor } from './data/governor'
 import { createMetrics, metricsLines } from './data/metrics'
 import { createPressure, paceOf } from './data/rate-limit'
@@ -116,6 +117,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 
   const pressure = createPressure(Date.now)
   const metrics = createMetrics(Date.now)
+  const entities = createEntities(Date.now)
   const connections = createConnections({
     store,
     secrets: orca.secrets,
@@ -151,6 +153,11 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       pressure.observe(req, status, headers)
       metrics.observe(req, status, headers)
     },
+    forgotten: org => {
+      entities.forget(org)
+      pressure.forget(org)
+      metrics.forget(org)
+    },
     now: Date.now,
     log
   })
@@ -163,7 +170,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     scheduler,
     post: snapshot => orca.panels.post('work.changed', snapshot),
     postBoard: change => orca.panels.post('work.boardChanged', change),
-    now: Date.now
+    now: Date.now,
+    entities
   })
   const showNotification = (n: Shown) => orca.host.call('notifications.show', n)
   const prs = createPrsService({
@@ -175,7 +183,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     counts: (org, count) => bar.setCount(org, 'toReview', count),
     now: Date.now,
     notifier: createPrNotifier({ show: showNotification, prefs: () => prSettings.notify(), log }),
-    log
+    log,
+    entities
   })
   const notifier = createNotifier({
     show: showNotification,
@@ -190,7 +199,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     watchList: createWatchList(store),
     signals: createRunSignals({ bar, notifier, now: Date.now }),
     post: snapshot => orca.panels.post('runs.changed', snapshot),
-    now: Date.now
+    now: Date.now,
+    entities
   })
   const runViews = createRunViews({
     http,
@@ -198,7 +208,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     scheduler,
     watched: (org, buildId) => pipelines.isWatched(org, buildId),
     changed: change => orca.panels.post('runs.viewChanged', change),
-    now: Date.now
+    now: Date.now,
+    entities
   })
   const reviews = createReviews({ http, orgs: () => connections.list(), now: Date.now })
   const reviewActions = createReviewActions({
@@ -207,7 +218,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     me: org => prs.me(org),
     after: org => void prs.reloadFresh(org).catch(() => {})
   })
-  const wiki = createWikiService({ http, orgs: () => connections.list(), now: Date.now })
+  const wiki = createWikiService({ http, orgs: () => connections.list(), entities })
   const prActions = createPrActions({ http, prs, settings: prSettings })
   const runActions = createRunActions({
     http,

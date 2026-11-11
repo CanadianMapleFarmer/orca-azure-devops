@@ -6,6 +6,7 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawRecord, RawTimeline } from '../ado/timeline'
 import { fixture, json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
+import { createEntities } from '../data/entities'
 import { PLATFORM } from '../prs/fake-prs'
 import { fakeClock, paced } from '../test-support'
 import {
@@ -65,7 +66,8 @@ function harness() {
     scheduler,
     watched: (org, buildId) => org === ORG && watched.has(buildId),
     changed: change => changes.push(change),
-    now: clock.now
+    now: clock.now,
+    entities: createEntities(clock.now)
   })
   views.onOrgs(structuredClone(orgs))
   return {

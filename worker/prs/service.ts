@@ -5,6 +5,7 @@ import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import { fly, join, type Flight } from '../data/context'
+import type { Entities } from '../data/entities'
 import {
   failureMessage,
   joinMessages,
@@ -31,6 +32,7 @@ export interface PrsServiceDeps {
   now: () => number
   notifier: PrNotifier
   log: (message: string) => void
+  entities: Entities
 }
 
 export interface PrsService {
@@ -85,7 +87,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     const entry = entries.get(org) ?? {
       controller: new AbortController(),
       source: createPrSource(http, org, now),
-      projects: cachedCodeProjects(http, org, now),
+      projects: cachedCodeProjects(http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,
       fullAt: null,

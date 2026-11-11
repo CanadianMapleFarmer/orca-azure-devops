@@ -21,6 +21,7 @@ import { isMalformed } from '../ado/shape'
 import { failuresOf, getTimeline, mergeTimeline, runStages, type RawTimeline } from '../ado/timeline'
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes } from '../budget'
 import { fly, join, type Flight } from '../data/context'
+import type { Entities } from '../data/entities'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -45,6 +46,7 @@ export interface RunViewsDeps {
   watched: (org: string, buildId: number) => boolean
   changed: (change: { org: string; buildId: number }) => void
   now: () => number
+  entities: Entities
 }
 
 export interface RunViews {
