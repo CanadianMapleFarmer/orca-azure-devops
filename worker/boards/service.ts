@@ -10,10 +10,12 @@ import type { StorePort } from '../connections'
 import { fly, inLane, join, type Flight } from '../data/context'
 import type { Entities, OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
-import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
+import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
-import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type Synced } from './board-views'
+import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type SavedBoard, type Synced } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
 import {
@@ -48,6 +50,7 @@ export interface BoardsServiceDeps {
   postBoard: (change: BoardChange) => void
   now: () => number
   entities: Entities
+  persisted: Persisted
 }
 
 export interface BoardsService {
@@ -71,9 +74,11 @@ interface OrgWork extends Synced {
   snapshot: WorkSnapshot | null
   failure: unknown
   loading: Flight<WorkSnapshot> | null
+  restored: WorkSnapshot | null
+  restoring?: Promise<void>
 }
 
-interface Built extends Synced { snapshot: WorkSnapshot }
+interface Built extends Synced { snapshot: WorkSnapshot; projected: WorkSnapshot }
 
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
@@ -88,6 +93,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const nudges = createNudgeStore(deps.store)
   const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
+  const savedTables = createSavedTables(entities, deps.persisted)
   const sources = new Map<string, ItemSource>()
   const work = new Map<string, OrgWork>()
   const homes = new Map<string, string>()
@@ -98,6 +104,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     scheduler,
     now,
     load: loadBoard,
+    restore: savedBoard,
     polls: org => connected.has(org),
     changed: deps.postBoard,
     dropped: key => recent.drop(key)
@@ -144,7 +151,48 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   async function statusOf(org: string): Promise<OrgStatus> {
     const status = (await deps.orgs()).find(item => item.org === org)
     if (!status) throw new AdoError('unauthorized', 401, NOT_CONNECTED)
+    const account = accountOf(status)
+    if (account) await savedTables.seed(org, account)
     return status
+  }
+
+  function persist(status: OrgStatus, name: string, value: () => unknown): void {
+    const account = accountOf(status)
+    if (!account) return
+    deps.persisted.save(status.org, name, account, value())
+    savedTables.save(status.org, account)
+  }
+
+  function restore(status: OrgStatus): Promise<void> {
+    const account = accountOf(status)
+    if (!account || !status.boards) return Promise.resolve()
+    const entry = workOf(status.org)
+    entry.restoring ??= restoreWork(entry, status, account)
+    return entry.restoring
+  }
+
+  async function restoreWork(entry: OrgWork, status: OrgStatus, account: string): Promise<void> {
+    const saved = await deps.persisted.load(status.org, 'work', account)
+    if (work.get(status.org) !== entry || entry.snapshot || !isSavedWork(saved?.value, status)) return
+    entry.snapshot = entry.restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
+  }
+
+  function unrestore(org: string): void {
+    const entry = work.get(org)
+    if (entry?.restored && entry.snapshot === entry.restored) Object.assign(entry, { snapshot: null, restored: null, restoring: undefined })
+  }
+
+  function revalidate(org: string): void {
+    if (polled.has(org)) void scheduler.runNow(mineKey(org))
+    else void load(org).catch(() => {})
+  }
+
+  async function savedBoard(request: BoardRequest, boardId: string): Promise<SavedBoard | null> {
+    const account = accountOf(await statusOf(request.org))
+    if (!account) return null
+    const saved = await deps.persisted.load(request.org, savedBoardName(request.args.teamId, boardId), account)
+    if (!saved || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
+    return { result: { ...saved.value.result, stale: true, message: SHOWING_SAVED }, savedAt: saved.savedAt }
   }
 
   function sourceOf(status: OrgStatus): ItemSource {
@@ -154,7 +202,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function workOf(org: string): OrgWork {
-    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [] }
+    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: null }
     work.set(org, entry)
     return entry
   }
@@ -193,7 +241,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const families = await restatedRows(source, cfg, loaded.families, items.filter((item, index) => item !== loaded.items[index]))
     const mine = items.filter(item => !movesByState(item, cfg))
     const message = joinMessages(loaded.chipsOff ? CHIPS_NEED_CODE_READ : undefined, loaded.message)
-    const snapshot = capSnapshot({
+    const projected: WorkSnapshot = {
       org: status.org,
       board: cfg,
       mine,
@@ -203,8 +251,8 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       updatedAt: now(),
       stale: false,
       ...(message ? { message } : {})
-    })
-    return { snapshot, sync, known: loaded.known }
+    }
+    return { snapshot: capSnapshot(projected), projected, sync, known: loaded.known }
   }
 
   function load(org: string, signal?: AbortSignal): Promise<WorkSnapshot> {
@@ -213,10 +261,11 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       try {
         const status = await statusOf(org)
         if (!status.boards) return noBoards(org)
-        const { snapshot, sync, known } = await build(status, entry, signal)
+        const { snapshot, projected, sync, known } = await build(status, entry, signal)
         if (work.get(org) !== entry) return snapshot
-        Object.assign(entry, { snapshot, sync, known, failure: null })
+        Object.assign(entry, { snapshot, sync, known, failure: null, restored: null })
         deps.post(snapshot)
+        persist(status, 'work', () => capSnapshot(projected, VALUE_BUDGET_BYTES))
         return snapshot
       } catch (error) {
         if (signal?.aborted) throw error
@@ -246,8 +295,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const { ids, sync } = board.requirementTypes.length === 0 ? { ids: NO_MEMBERS, sync: null } : await synced(source, board, boardClause(board, request.everyone), request)
     const loaded = await loadBoardItems(source, board, ids)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
-    const result = capBoard({ board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }, loaded.truncated)
-    return { result, sync, known: loaded.known }
+    const projected: BoardResult = { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }
+    persist(status, savedBoardName(board.teamId, board.boardId), () => ({ result: capBoard(projected, loaded.truncated, VALUE_BUDGET_BYTES), everyone: request.everyone }))
+    return { result: capBoard(projected, loaded.truncated), sync, known: loaded.known }
   }
 
   async function readItemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null> {
@@ -262,6 +312,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   function forget(org: string): void {
     work.delete(org)
     sources.delete(org)
+    savedTables.forget(org)
     recent.drop(mineKey(org))
     boardViews.forget(org)
   }
@@ -363,6 +414,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const org of new Set([...work.keys(), ...sources.keys()])) {
         const state = states.get(org)
         if (state === undefined || state === 'disconnected') forget(org)
+        else if (state !== 'connected') unrestore(org)
       }
       connected.clear()
       const wanted = new Map<string, BoardsTarget>()
@@ -383,16 +435,19 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
         scheduler.upsert({ key: mineKey(org), org, ...MINE_MS, run: signal => poll(org, signal) })
         scheduler.setVisible(mineKey(org), workVisible.has(org))
       }
+      for (const status of orgs) void restore(status)
       boardViews.syncAll()
     },
 
     async snapshot(org) {
       const status = await statusOf(org)
       if (!status.boards) return noBoards(org)
-      const current = work.get(org)?.snapshot
-      const board = current?.board
-      if (current && board?.projectId === status.boards.projectId && board.teamId === status.boards.teamId) return current
-      return load(org)
+      await restore(status)
+      const entry = work.get(org)
+      const current = entry?.snapshot
+      if (!entry || !current || !sameTarget(current.board, status.boards)) return load(org)
+      if (current === entry.restored) revalidate(org)
+      return current
     },
 
     async refresh(org) {
@@ -502,6 +557,42 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   return service
 }
 
+function accountOf(status: OrgStatus): string | null {
+  return status.state === 'connected' ? (status.account?.adoId ?? null) : null
+}
+
+function savedBoardName(teamId: string, boardId: string): string {
+  return `board:${teamId}:${boardId}`
+}
+
+function isSavedWork(value: unknown, status: OrgStatus): value is WorkSnapshot {
+  return (
+    isRecord(value) &&
+    value.org === status.org &&
+    isRecord(value.board) &&
+    value.board.projectId === status.boards?.projectId &&
+    value.board.teamId === status.boards?.teamId &&
+    [value.mine, value.other, value.nudges].every(Array.isArray) &&
+    isRecord(value.families) &&
+    Number.isFinite(value.updatedAt)
+  )
+}
+
+function isSavedBoard(value: unknown, boardId: string): value is { result: BoardResult; everyone: boolean } {
+  return (
+    isRecord(value) &&
+    typeof value.everyone === 'boolean' &&
+    isRecord(value.result) &&
+    isRecord(value.result.board) &&
+    value.result.board.boardId === boardId &&
+    Array.isArray(value.result.items)
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 function meOf(status: OrgStatus): Me | null {
   return status.account ? { id: status.account.adoId, uniqueName: status.account.uniqueName } : null
 }
@@ -514,8 +605,8 @@ async function restatedRows(source: ItemSource, cfg: BoardConfig, families: Work
   return patched
 }
 
-function sameTarget(board: BoardConfig | null | undefined, cfg: BoardConfig): boolean {
-  return board?.projectId === cfg.projectId && board.teamId === cfg.teamId
+function sameTarget(board: BoardConfig | null | undefined, target: Pick<BoardConfig, 'projectId' | 'teamId'>): boolean {
+  return board?.projectId === target.projectId && board.teamId === target.teamId
 }
 
 function sameApartFromTime(a: WorkSnapshot, b: WorkSnapshot): boolean {

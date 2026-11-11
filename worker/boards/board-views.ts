@@ -11,11 +11,13 @@ export interface Synced { sync: SyncState | null; known: number[] }
 export interface BoardLoad extends Synced { result: BoardResult }
 export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult }
 export interface BoardRef { teamId: string; boardId: string }
+export interface SavedBoard { result: BoardResult; savedAt: number }
 
 export interface BoardViewsDeps {
   scheduler: Scheduler
   now: () => number
   load: (request: BoardRequest & Synced, signal?: AbortSignal) => Promise<BoardLoad>
+  restore: (request: BoardRequest, boardId: string) => Promise<SavedBoard | null>
   polls: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
@@ -125,6 +127,13 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     for (const view of [...views.values()]) if (view.org === org) drop(view.key)
   }
 
+  function hold(view: BoardView): void {
+    views.set(view.key, view)
+    touch(view.key)
+    trim(view.org, view.key)
+    sync(view.org)
+  }
+
   return {
     async open(org, args, boardId, everyone) {
       const key = boardKey(org, args.teamId, boardId)
@@ -136,12 +145,15 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
       }
       const request = { key, org, args, everyone }
       const generation = generationOf(org, key)
+      const saved = held ? null : await deps.restore(request, boardId)
+      if (saved && generationOf(org, key) === generation && !views.has(key)) {
+        hold({ ...request, result: saved.result, sync: null, known: [], at: Math.min(saved.savedAt, deps.now() - BOARD_MS.visibleMs) })
+        void deps.scheduler.runNow(key)
+        return saved.result
+      }
       const loaded = await deps.load({ ...request, sync: null, known: [] })
       if (generationOf(org, key) !== generation) return loaded.result
-      views.set(key, { ...request, ...loaded, at: deps.now() })
-      touch(key)
-      trim(org, key)
-      sync(org)
+      hold({ ...request, ...loaded, at: deps.now() })
       return loaded.result
     },
 

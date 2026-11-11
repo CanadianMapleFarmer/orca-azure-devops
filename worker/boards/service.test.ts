@@ -7,8 +7,9 @@ import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { currentContext, type Priority } from '../data/context'
 import { createEntities } from '../data/entities'
+import { cacheKey, createPersisted } from '../data/persist'
 import { createScheduler } from '../poll/scheduler'
-import { drain, fakeClock } from '../test-support'
+import { drain, fakeClock, memoryCache } from '../test-support'
 import {
   addChildren,
   BOARDS,
@@ -46,6 +47,9 @@ const MINUTE = 60_000
 const CONFLICT = "Someone else changed this item. It's been refreshed; try again."
 const NO_BOARDS = "Pick a boards project and team in this org's settings."
 const NEEDS_CODE_READ = 'Linked PR status needs Code (Read) access.'
+const NOT_CONNECTED = 'Connect this organization first.'
+const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
+const INTERRUPTED = 'Sign-in was interrupted. Try again.'
 const COLUMNS = ['New', 'Active', 'In Review', 'Resolved', 'Closed']
 const MINE_QUERY =
   "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Removed') ORDER BY [System.ChangedDate] DESC"
@@ -64,8 +68,8 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness(first: OrgStatus = status()) {
-  const clock = fakeClock(T0)
+function harness(first: OrgStatus = status(), restart: { cache?: Record<string, unknown>; at?: number } = {}) {
+  const clock = fakeClock(restart.at ?? T0)
   const ado = fakeAdo({ now: clock.now })
   const storage: Record<string, unknown> = {}
   const heldReads = new Map<string, Promise<void>>()
@@ -83,9 +87,16 @@ function harness(first: OrgStatus = status()) {
   const posts: WorkSnapshot[] = []
   const boardPosts: BoardChange[] = []
   let orgs = [first]
-  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const authHeader = async (org: string) => {
+    if (orgs.find(entry => entry.org === org)?.state !== 'connected') throw new AdoError('unauthorized', 401, NOT_CONNECTED)
+    return 'Bearer test-credential'
+  }
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader, sleep: async () => {} })
   const scheduler = createScheduler(clock)
   const entities = createEntities(clock.now)
+  const cache = memoryCache(restart.cache)
+  const logs: string[] = []
+  const persisted = createPersisted({ port: cache.port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: message => logs.push(message) })
   const service = createBoardsService({
     http,
     orgs: async () => structuredClone(orgs),
@@ -94,7 +105,8 @@ function harness(first: OrgStatus = status()) {
     post: snapshot => posts.push(structuredClone(snapshot)),
     postBoard: change => boardPosts.push(change),
     now: clock.now,
-    entities
+    entities,
+    persisted
   })
   return {
     ado,
@@ -106,6 +118,9 @@ function harness(first: OrgStatus = status()) {
     service,
     scheduler,
     entities,
+    cache,
+    persisted,
+    logs,
     setOrgs(next: OrgStatus[]) {
       orgs = next
       service.onOrgs(structuredClone(next))
@@ -1942,4 +1957,196 @@ test('a parent assigned to me joins a board filtered to me on the next delta', a
   const recheck = h.ado.calls.slice(calls).filter(isStillIn)
   assert.deepEqual(recheck.map(call => call.body.query.endsWith('[System.Id] IN (1205)')), [true])
   assert.deepEqual((await h.service.board({ ...STORIES_BOARD, everyone: false })).items.map(entry => entry.id), [1206, 1205])
+})
+
+const HOUR = 60 * MINUTE
+const OTHER_ACCOUNT: PinnedAccount = { ...ALEX, adoId: 'c4d5e6f7-8888-4a9b-8c0d-1e2f3a4b5c6d' }
+const OTHER_TEAM = 'b7c8d9e0-7777-4f8a-9b0c-1d2e3f4a5b6c'
+const isBoardSetting = (call: AdoCall) => call.path.includes('/_apis/work/')
+
+async function savedFrom(h: ReturnType<typeof harness>): Promise<Record<string, unknown>> {
+  await h.persisted.flush()
+  return structuredClone(h.cache.data)
+}
+
+async function savedWork(): Promise<{ live: WorkSnapshot; cache: Record<string, unknown> }> {
+  const before = harness(status({ account: ALEX }))
+  const live = await before.service.refresh(ORG)
+  return { live, cache: await savedFrom(before) }
+}
+
+async function savedBoard(): Promise<{ view: BoardResult & { everyone: boolean }; cache: Record<string, unknown> }> {
+  const before = harness(status({ account: ALEX }))
+  before.setOrgs([status({ account: ALEX })])
+  boardIds(before, [1204, 1205])
+  const view = await before.service.board(STORIES_BOARD)
+  return { view, cache: await savedFrom(before) }
+}
+
+test('the Work tab paints a saved snapshot at once, marked stale with its age, then replaces it with a live one', async () => {
+  const { live, cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 3 * HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  const gate = h.ado.hold(() => true)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(painted, { ...live, stale: true, message: SHOWING_SAVED })
+  assert.equal(painted.updatedAt, T0)
+  assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
+  assert.equal(h.posts.length, 0)
+
+  gate.release()
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.equal(latest?.stale, false)
+  assert.equal(latest?.message, undefined)
+  assert.equal(latest?.updatedAt, T0 + 3 * HOUR)
+  assert.deepEqual(await h.service.snapshot(ORG), latest)
+})
+
+test('a saved Work snapshot is held from start-up, so cachedItem answers without a request', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX })])
+  await drain()
+
+  assert.equal(h.service.cachedItem(ORG, 1204)?.title, 'Add vehicle search filters')
+  assert.equal(h.ado.calls.length, 0, 'the hidden Work tab does not load until it is asked for')
+})
+
+test('a saved Work snapshot from another account or another boards target is ignored', async () => {
+  const { cache } = await savedWork()
+  const elsewhere = structuredClone(cache)
+  ;(elsewhere[cacheKey(ORG, 'work')] as { value: WorkSnapshot }).value.board!.teamId = OTHER_TEAM
+
+  for (const [account, saved] of [[OTHER_ACCOUNT, cache], [ALEX, elsewhere]] as const) {
+    const h = harness(status({ account }), { cache: saved, at: T0 + HOUR })
+    const snapshot = await h.service.snapshot(ORG)
+    assert.equal(snapshot.stale, false, account.adoId)
+    assert.equal(snapshot.updatedAt, T0 + HOUR)
+    assert.equal(snapshot.message, undefined)
+  }
+})
+
+test('a saved snapshot is not served while the org is expired', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX, state: 'expired' }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  assert.equal((await rejection(h.service.snapshot(ORG))).message, NOT_CONNECTED)
+
+  h.setOrgs([status({ account: ALEX })])
+  await drain()
+  assert.ok(h.service.cachedItem(ORG, 1204), 'held once connected')
+  h.setOrgs([status({ account: ALEX, state: 'expired' })])
+  assert.equal((await rejection(h.service.snapshot(ORG))).message, NOT_CONNECTED)
+  assert.equal(h.service.cachedItem(ORG, 1204), null)
+  assert.deepEqual(h.posts, [])
+
+  h.setOrgs([status({ account: ALEX })])
+  assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED, 'served once it reconnects')
+})
+
+test('a sign-in interrupted by a restart keeps the saved data', async () => {
+  const { cache } = await savedWork()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + HOUR })
+  h.setOrgs([status({ account: ALEX, state: 'disconnected', message: INTERRUPTED })])
+  await h.clock.tick(5 * MINUTE)
+  assert.deepEqual(Object.keys(h.cache.data).sort(), Object.keys(cache).sort())
+
+  h.setOrgs([status({ account: ALEX })])
+  assert.equal((await h.service.snapshot(ORG)).message, SHOWING_SAVED)
+})
+
+test('the board paints a saved view at once when no view is held, and revalidates it', async () => {
+  const { view, cache } = await savedBoard()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  h.ado.change(1205)
+  const gate = h.ado.hold(() => true)
+
+  const painted = await h.service.board(STORIES_BOARD)
+  assert.deepEqual(painted, { ...view, stale: true, message: SHOWING_SAVED })
+  assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
+  assert.deepEqual(h.boardPosts, [])
+
+  gate.release()
+  await drain()
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  const live = await h.service.board(STORIES_BOARD)
+  assert.equal(live.stale, undefined)
+  assert.equal(live.message, undefined)
+  assert.equal(live.items.find(entry => entry.id === 1205)?.rev, view.items.find(entry => entry.id === 1205)!.rev + 1)
+})
+
+test('a saved board view is served only for the filter it was saved with', async () => {
+  const { cache } = await savedBoard()
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+
+  const mine = await h.service.board({ ...STORIES_BOARD, everyone: false })
+  assert.equal(mine.everyone, false)
+  assert.equal(mine.stale, undefined)
+  assert.ok(h.ado.calls.some(isStoriesWiql))
+})
+
+test('saved board configs, type states and PR records seed the store with their original age', async () => {
+  const prs = { 402: { status: 'active', target: 'dev' }, 403: { status: 'completed', target: 'staging' } }
+  const before = harness(status({ account: ALEX }))
+  linkPullRequests(before, 1204, prs)
+  await before.service.refresh(ORG)
+  const cache = await savedFrom(before)
+
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 10 * MINUTE })
+  linkPullRequests(h, 1204, prs)
+  const snapshot = await h.service.refresh(ORG)
+
+  assert.deepEqual(item(snapshot, 1204)?.prs.map(chip => [chip.prId, chip.state]), [[321, 'merged'], [402, 'open'], [403, 'merged']])
+  assert.equal(h.ado.count(isBoardSetting), 0, 'no board configuration request')
+  assert.equal(h.ado.count(isTypeStates('Task')), 0, 'no type-state request')
+  const read = h.ado.calls.filter(isPullRequest).map(call => Number(call.path.split('/').at(-1)))
+  assert.ok(!read.includes(321) && !read.includes(403), `no merged PR is read again: ${read}`)
+  const tables = h.entities.of(ORG)
+  assert.deepEqual(tables.boardConfigs.entries().map(([, entry]) => entry.at), [T0])
+  assert.equal(tables.prs.get(`${PROJECT}/${REPO}/321`)?.at, T0)
+})
+
+function manyLinkedPrs(h: ReturnType<typeof harness>): void {
+  const stories = Array.from({ length: 40 }, (_, index) => 9000 + index)
+  const prIds = Array.from({ length: 400 }, (_, index) => 5000 + index)
+  const open = new Set(prIds.slice(0, 30))
+  const raw = (prId: number) => ({ ...fixture<object>('pull-request-active'), pullRequestId: prId, codeReviewId: prId, status: open.has(prId) ? 'active' : 'completed' })
+  stories.forEach((id, index) => {
+    const linked = story(id, T0 - index * MINUTE)
+    linked.relations = prIds.slice(index * 10, index * 10 + 10).map(prId => ({ rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${PROJECT}%2F${REPO}%2F${prId}`, attributes: { name: 'Pull Request' } }))
+    h.ado.items.set(id, linked)
+  })
+  boardIds(h, stories)
+  h.ado.on(isActiveList, () => json(200, { value: [...open].map(raw) }))
+  h.ado.on(isPullRequest, call => json(200, raw(Number(call.path.split('/').at(-1)))))
+}
+
+test('a cold start of a board with 400 linked PRs costs under 15 requests when PR records were saved', async () => {
+  const before = harness(status({ account: ALEX }))
+  before.setOrgs([status({ account: ALEX })])
+  manyLinkedPrs(before)
+  await before.service.board(STORIES_BOARD)
+  await before.clock.tick(5 * MINUTE)
+  assert.ok(before.ado.count(isPullRequest) >= 370, 'the first start reads every merged PR')
+  const cache = await savedFrom(before)
+
+  const h = harness(status({ account: ALEX }), { cache, at: before.clock.now() + 10 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  manyLinkedPrs(h)
+  const painted = await h.service.board(STORIES_BOARD)
+  assert.equal(painted.stale, true)
+  await drain()
+
+  assert.deepEqual(h.boardPosts, [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  const live = await h.service.board(STORIES_BOARD)
+  assert.equal(live.stale, undefined)
+  assert.deepEqual(new Set(live.items.flatMap(entry => entry.prs.map(chip => chip.state))), new Set(['merged', 'open']))
+  assert.equal(h.ado.count(isPullRequest), 0)
+  assert.ok(h.ado.calls.length < 15, `${h.ado.calls.length} requests: ${h.ado.calls.map(call => call.path).join(', ')}`)
 })

@@ -190,17 +190,17 @@ export function movesByState(item: { type: string; column: string | null }, cfg:
   return !isOnBoard(item, cfg) || item.column === null
 }
 
-export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
+export function capSnapshot(snapshot: WorkSnapshot, budget = POST_BUDGET_BYTES): WorkSnapshot {
   const bare = { ...snapshot, families: NO_FAMILIES }
-  const items = capItems(bare)
-  const families = fitFamilies(namedFamilies(snapshot.families, items), Math.min(FAMILY_BUDGET_BYTES, POST_BUDGET_BYTES - byteLength(items)))
+  const items = capItems(bare, budget)
+  const families = fitFamilies(namedFamilies(snapshot.families, items), Math.min(FAMILY_BUDGET_BYTES, budget - byteLength(items)))
   if (items === bare && families === snapshot.families) return snapshot
   return { ...items, families }
 }
 
-function capItems(snapshot: WorkSnapshot): WorkSnapshot {
+function capItems(snapshot: WorkSnapshot, budget: number): WorkSnapshot {
   const all = [...snapshot.mine, ...snapshot.other]
-  const kept = newestThatFit(all, POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] }), item => item.changedAt, MAX_ITEMS)
+  const kept = newestThatFit(all, budget - byteLength({ ...snapshot, mine: [], other: [] }), item => item.changedAt, MAX_ITEMS)
   if (kept.size === all.length) return snapshot
   const ids = new Set([...kept].map(item => item.id))
   return {
@@ -251,9 +251,9 @@ function fitFamilies(families: WorkFamilies, budget: number): WorkFamilies {
   return whole ? families : { lists, parents }
 }
 
-export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
+export function capBoard(result: BoardResult, truncated: boolean, budget = ANSWER_BUDGET_BYTES): BoardResult {
   const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
-  const kept = newestThatFit(result.items, ANSWER_BUDGET_BYTES - header, item => item.changedAt)
+  const kept = newestThatFit(result.items, budget - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result
   return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
 }

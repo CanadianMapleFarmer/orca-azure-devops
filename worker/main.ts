@@ -15,6 +15,7 @@ import { withUserContext } from './data/context'
 import { createEntities } from './data/entities'
 import { createGovernor } from './data/governor'
 import { createMetrics, metricsLines } from './data/metrics'
+import { createPersisted } from './data/persist'
 import { createPressure, paceOf } from './data/rate-limit'
 import { NETWORK } from './messages'
 import { createNetwork, watchNetwork, type NetworkPorts } from './net/network'
@@ -64,11 +65,13 @@ const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
 
 let stopPolling = () => {}
 let stopSignIns = () => {}
+let flushSaved = () => Promise.resolve()
 
-export function deactivate(): Promise<void> {
+export async function deactivate(): Promise<void> {
   stopPolling()
   stopSignIns()
   closeAllListeners()
+  await flushSaved()
   return stopAllCommands(SHUTDOWN)
 }
 
@@ -118,6 +121,20 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const pressure = createPressure(Date.now)
   const metrics = createMetrics(Date.now)
   const entities = createEntities(Date.now)
+  const persisted = createPersisted({
+    port: {
+      get: key => orca.storage.get(key),
+      set: (key, value) => orca.storage.set(key, value as JsonValue),
+      delete: key => orca.storage.delete(key),
+      keys: () => orca.storage.keys()
+    },
+    orgs: () => connections.list(),
+    now: Date.now,
+    clock: realClock,
+    log
+  })
+  void persisted.sweep()
+  flushSaved = () => persisted.flush()
   const connections = createConnections({
     store,
     secrets: orca.secrets,
@@ -157,6 +174,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       entities.forget(org)
       pressure.forget(org)
       metrics.forget(org)
+      void persisted.forget(org)
     },
     now: Date.now,
     log
@@ -171,7 +189,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     post: snapshot => orca.panels.post('work.changed', snapshot),
     postBoard: change => orca.panels.post('work.boardChanged', change),
     now: Date.now,
-    entities
+    entities,
+    persisted
   })
   const showNotification = (n: Shown) => orca.host.call('notifications.show', n)
   const prs = createPrsService({

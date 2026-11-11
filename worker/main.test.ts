@@ -689,6 +689,31 @@ test('deactivate disposes the polling scheduler, aborting the "my work" load in 
   })
 })
 
+test('the Work view is saved on deactivate, painted from storage at the next start, and deleted on sign-out', async () => {
+  const savedKeys = (storage: Record<string, unknown>) => Object.keys(storage).filter(key => key.startsWith('adoCache:v1:contoso:'))
+  const ado = fakeAdo()
+  const host = boardsHost(BOARDS)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host }, async w => {
+      assert.equal((await w.request('work.snapshot', { org: 'contoso' })).stale, false)
+    })
+    assert.ok(savedKeys(host.data().storage).includes('adoCache:v1:contoso:work'))
+
+    const next = mockHost({
+      capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+      storage: host.data().storage as Record<string, JsonValue>,
+      secrets: { 'pat:contoso': PAT }
+    })
+    await withWorker(worker, { host: next }, async w => {
+      const painted = await w.request('work.snapshot', { org: 'contoso' })
+      assert.deepEqual([painted.stale, painted.message], [true, 'Showing what was saved last time. Refreshing…'])
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.ok(await until(() => savedKeys(w.host.data().storage).length === 0), 'signing out deletes the saved views')
+    })
+    assert.deepEqual(savedKeys(next.data().storage), [], 'nothing of the signed-out org is written back on deactivate')
+  })
+})
+
 test('work.nudgeRules reads and saves the rules of the boards team', async () => {
   const ado = fakeAdo()
   await withFetch(signedIn(ado), async () => {

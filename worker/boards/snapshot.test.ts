@@ -179,6 +179,19 @@ test('capBoard returns a board that fits unchanged', () => {
   assert.equal(capBoard(result, false), result)
 })
 
+test('capSnapshot and capBoard keep the newest items that fit a budget they are given', () => {
+  const budget = 160 * 1024
+  const items = Array.from({ length: 400 }, (_, index) => wide(index, index))
+  const snapshot = capSnapshot(snapshotOf(items), budget)
+  const board = capBoard({ board: BOARD, items }, false, budget)
+  for (const capped of [snapshot.mine, board.items]) {
+    assert.ok(capped.length > 10 && capped.length < 100, String(capped.length))
+    assert.equal(capped.at(-1)?.id, 399)
+  }
+  assert.ok(byteLength(snapshot) <= budget, String(byteLength(snapshot)))
+  assert.ok(byteLength(board) <= budget, String(byteLength(board)))
+})
+
 function chip(prId: number, target: string, state: PrChip['state'], build: PrChip['build'] = 'none'): PrChip {
   return { prId, repoId: 'repo-web', projectId: 'proj-web', target, state, build, url: `https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/${prId}` }
 }
