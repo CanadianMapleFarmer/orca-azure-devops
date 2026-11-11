@@ -39,7 +39,7 @@ function evaluatedPr(call: AdoCall): number {
 test('a signal reaches every request of a full load', async () => {
   const { ado, source } = setup()
   const controller = new AbortController()
-  const { mine, review } = await source.full(ME, PROJECTS, controller.signal)
+  const { mine, review } = await source.full(ME, PROJECTS, true, controller.signal)
 
   assert.deepEqual(mine.map(pr => pr.prId), [4101, 4102, 4103, 4104, 4105, 4090, 4091])
   assert.deepEqual(review.map(pr => pr.prId), [4110, 4111])
@@ -53,7 +53,7 @@ test('a signal reaches every request of a full load', async () => {
 
 test('a full load enriches my PRs: work items for all, checks for active ones only', async () => {
   const { source } = setup()
-  const { mine, review } = await source.full(ME, PROJECTS)
+  const { mine, review } = await source.full(ME, PROJECTS, true)
   const byId = new Map(mine.map(pr => [pr.prId, pr]))
 
   assert.deepEqual(byId.get(4101)?.workItemIds, [1204, 1207])
@@ -68,28 +68,28 @@ test('caches expire on the polling budget', async () => {
   ado.on(call => isEvaluations(call) && evaluatedPr(call) === 4102, () => json(200, RUNNING))
   const tally = () => [isMineActive, isMineCompleted, isReviewList, isPrWorkItems, isEvaluations].map(match => ado.count(match))
   const evaluated = () => ado.calls.filter(isEvaluations).map(evaluatedPr)
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [2, 2, 2, 7, 5])
 
   clock.now += 2 * MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [4, 2, 4, 7, 6], 'at 2 minutes only the PR whose build runs is re-read')
   assert.deepEqual(evaluated().slice(5), [4102])
 
   clock.now += 3 * MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [6, 4, 6, 7, 7], 'completed lists last 5 minutes')
 
   clock.now += 5 * MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [8, 6, 8, 12, 8], 'work items of active PRs last 10 minutes')
 
   clock.now += 20 * MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [10, 8, 10, 17, 13], 'at 30 minutes every active PR is re-read')
 
   clock.now += 30 * MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(tally(), [12, 10, 12, 24, 18], 'work items of completed PRs last an hour')
 
   const changed = listed('pull-requests-mine').map(raw =>
@@ -101,13 +101,29 @@ test('caches expire on the polling budget', async () => {
   )
   ado.on(isMineActive, call => json(200, { value: changed.filter(raw => raw.repository.project.id === projectOf(call)) }))
   clock.now += MINUTE
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   assert.deepEqual(evaluated().slice(18).sort(), [4101, 4103], 'a vote change or a push re-reads that PR at once')
+})
+
+test('the completed list of a project is read at most every 5 minutes', async () => {
+  const { ado, clock, source } = setup()
+  const web = PROJECTS.slice(0, 1)
+  const first = await source.full(ME, web, false)
+  for (const all of [false, true, false, true]) {
+    clock.now += MINUTE
+    const { mine } = await source.full(ME, web, all)
+    assert.deepEqual(mine.map(pr => pr.prId), first.mine.map(pr => pr.prId), 'its last results are kept in between')
+  }
+  assert.deepEqual([ado.count(isMineActive), ado.count(isMineCompleted)], [5, 1], 'not even Refresh re-reads it sooner')
+
+  clock.now += MINUTE
+  await source.full(ME, web, false)
+  assert.deepEqual([ado.count(isMineActive), ado.count(isMineCompleted)], [6, 2])
 })
 
 test('listed PRs and their checks land in the shared store', async () => {
   const { tables, source } = setup()
-  await source.full(ME, PROJECTS)
+  await source.full(ME, PROJECTS, true)
   const mine = listed('pull-requests-mine')
   const everyListed = [...mine, ...listed('pull-requests-completed'), ...listed('pull-requests-review')]
   assert.deepEqual(tables.prs.entries().map(([key]) => key).sort(), everyListed.map(keyOf).sort())
@@ -130,14 +146,14 @@ test('checks read for a chip are reused by the PRs tab while fresh', async () =>
   assert.equal(ado.count(isEvaluations), 5)
 
   clock.now += MINUTE
-  const { mine } = await source.full(ME, PROJECTS)
+  const { mine } = await source.full(ME, PROJECTS, true)
   assert.equal(ado.count(isEvaluations), 5)
   assert.deepEqual(mine.find(pr => pr.prId === 4101)?.checks, { build: 'succeeded', policies: 'approved' })
 })
 
 test('reviews asks only for the to-review list of each project', async () => {
   const { ado, source } = setup()
-  const review = await source.reviews(ME, PROJECTS)
+  const review = await source.reviews(ME, PROJECTS, true)
   assert.deepEqual(review.map(pr => pr.prId), [4110, 4111])
   assert.equal(ado.calls.length, 2)
   assert.ok(ado.calls.every(isReviewList))

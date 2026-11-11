@@ -8,6 +8,7 @@ import { mapLimit } from '../ado/limit'
 import { isMalformed, malformed } from '../ado/shape'
 import { approvalPlaceOf, getTimeline, stageChips, type RawTimeline } from '../ado/timeline'
 import type { OrgEntities } from '../data/entities'
+import { createHeat } from '../data/heat'
 import { MALFORMED } from '../messages'
 
 const MINUTE = 60_000
@@ -25,8 +26,8 @@ export interface RunsLoad {
 }
 
 export interface RunSource {
-  full(me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad>
-  background(me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad>
+  full(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
+  background(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
   watched(me: string, keys: RunKey[], signal?: AbortSignal): Promise<RunSummary[]>
   approval(me: string, key: { projectId: string; approvalId: string }, signal?: AbortSignal): Promise<{ run: RunSummary; approval: ApprovalSummary } | null>
   seed(runs: RunSummary[]): void
@@ -51,17 +52,32 @@ interface Lists {
   skipped: boolean
 }
 
+interface Approvals {
+  pending: Pending[]
+  skipped: boolean
+}
+
+type List = 'mine' | 'running' | 'approvals'
+
+interface Kept {
+  mine?: RawBuild[]
+  running?: RawBuild[]
+  approvals?: Approvals
+}
+
 type Kind = 'full' | 'background'
 
 export function createRunSource(http: AdoHttp, org: string, now: () => number, tables: Pick<OrgEntities, 'runChips'>): RunSource {
   const { runChips } = tables
+  const heat = createHeat(now)
+  const kept = new Map<string, Kept>()
   let places = new Map<string, ApprovalPlace>()
   let lastFull = new Map<number, RunSummary>()
   let approvalsOffUntil = -Infinity
 
   const approvalsOff = () => now() < approvalsOffUntil
 
-  async function pendingIn(scoped: AdoHttp, me: string, projectId: string): Promise<Lists> {
+  async function pendingIn(scoped: AdoHttp, me: string, projectId: string): Promise<Approvals> {
     if (approvalsOff()) return withPending([])
     try {
       const listed = await listPendingApprovals(scoped, org, projectId)
@@ -75,17 +91,33 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
     }
   }
 
-  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind): Promise<Lists> {
-    const reads: (() => Promise<Lists>)[] = projects.flatMap(project => [
-      async () => withBuilds(await listBuilds(scoped, org, project.id, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP })),
-      ...(kind === 'full' ? [async () => withBuilds(await listBuilds(scoped, org, project.id, { statusFilter: 'inProgress', top: RUNNING_TOP }))] : []),
-      () => pendingIn(scoped, me, project.id)
-    ])
-    const loaded = await mapLimit(reads, IN_FLIGHT, read => read())
+  function keptOf(me: string, projectId: string): Kept {
+    const key = `${me}/${projectId}`
+    const entry = kept.get(key) ?? {}
+    kept.set(key, entry)
+    return entry
+  }
+
+  async function readInto(scoped: AdoHttp, me: string, entry: Kept, projectId: string, list: List): Promise<void> {
+    if (list === 'mine') entry.mine = await listBuilds(scoped, org, projectId, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP })
+    else if (list === 'running') entry.running = await listBuilds(scoped, org, projectId, { statusFilter: 'inProgress', top: RUNNING_TOP })
+    else entry.approvals = await pendingIn(scoped, me, projectId)
+  }
+
+  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind, all: boolean): Promise<Lists> {
+    const wanted: List[] = kind === 'full' ? ['mine', 'running', 'approvals'] : ['mine', 'approvals']
+    const current = new Set(projects.map(project => `${me}/${project.id}`))
+    for (const key of kept.keys()) if (!current.has(key)) kept.delete(key)
+    const due = new Set(heat.pick(projects, all).map(project => project.id))
+    const read = projects.filter(project => due.has(project.id) || wanted.some(list => !keptOf(me, project.id)[list]))
+    const reads = read.flatMap(project => wanted.map(list => ({ entry: keptOf(me, project.id), projectId: project.id, list })))
+    await mapLimit(reads, IN_FLIGHT, ({ entry, projectId, list }) => readInto(scoped, me, entry, projectId, list))
+    for (const project of read) heat.saw(project.id, found(keptOf(me, project.id)))
+    const held = projects.map(project => keptOf(me, project.id))
     return {
-      builds: loaded.flatMap(entry => entry.builds),
-      pending: loaded.flatMap(entry => entry.pending),
-      skipped: loaded.some(entry => entry.skipped)
+      builds: held.flatMap(entry => [...(entry.mine ?? []), ...(kind === 'full' ? (entry.running ?? []) : [])]),
+      pending: held.flatMap(entry => entry.approvals?.pending ?? []),
+      skipped: held.some(entry => entry.approvals?.skipped === true)
     }
   }
 
@@ -159,9 +191,9 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
     )
   }
 
-  async function load(kind: Kind, me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad> {
+  async function load(kind: Kind, me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad> {
     const scoped = withSignal(http, signal)
-    const { builds, pending, skipped } = await lists(scoped, me, projects, kind)
+    const { builds, pending, skipped } = await lists(scoped, me, projects, kind, all)
     const wanted = [...pending.map(({ projectId, raw }) => ({ projectId, buildId: runIdOf(raw) })), ...watched]
     const runs = await withUnlisted(scoped, me, builds, wanted)
     const targets = kind === 'full' ? chipTargets([...runs.values()]) : { active: [], finished: [] }
@@ -181,8 +213,8 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
   }
 
   return {
-    full: (me, projects, watched, signal) => load('full', me, projects, watched, signal),
-    background: (me, projects, watched, signal) => load('background', me, projects, watched, signal),
+    full: (me, projects, watched, all, signal) => load('full', me, projects, watched, all, signal),
+    background: (me, projects, watched, all, signal) => load('background', me, projects, watched, all, signal),
 
     async watched(me, keys, signal) {
       const scoped = withSignal(http, signal)
@@ -250,12 +282,12 @@ export function waitingIf(state: RunState, approvals: readonly ApprovalSummary[]
   return approvals.length > 0 && (state === 'queued' || state === 'running') ? 'waiting' : state
 }
 
-function withBuilds(builds: RawBuild[]): Lists {
-  return { builds, pending: [], skipped: false }
+function withPending(pending: Pending[], skipped = false): Approvals {
+  return { pending, skipped }
 }
 
-function withPending(pending: Pending[], skipped = false): Lists {
-  return { builds: [], pending, skipped }
+function found(entry: Kept): boolean {
+  return [entry.mine, entry.running, entry.approvals?.pending].some(list => (list?.length ?? 0) > 0)
 }
 
 function readable(raw: RawApproval, projectId: string, me: string): boolean {

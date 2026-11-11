@@ -182,7 +182,7 @@ test('a visible load fans out once per code project and caches the rest', async 
   assert.deepEqual(Object.fromEntries(review.query), { 'searchCriteria.reviewerId': ME, 'searchCriteria.status': 'active', $top: '100', 'api-version': '7.1' })
 
   await h.clock.tick(MINUTE)
-  assert.deepEqual(tally(h.ado), { repositories: 1, active: 4, completed: 2, review: 4, workItems: 7, evaluations: 5, all: 23 })
+  assert.deepEqual(tally(h.ado), { repositories: 1, active: 3, completed: 2, review: 3, workItems: 7, evaluations: 5, all: 21 })
   assert.equal(h.posts.length, 2)
 })
 
@@ -237,6 +237,112 @@ test('a code-project list limits the fan-out', async () => {
   assert.ok(h.ado.calls.filter(isPrList).every(call => projectOf(call) === PROJECT))
 })
 
+const INFRA_REPO = '9f0a1b2c-3333-4e7f-8a8b-5c6d7e8f9a01'
+
+function inPlatform(pr: RawPullRequest): RawPullRequest {
+  return { ...pr, repository: { ...pr.repository, id: INFRA_REPO, name: 'infra', project: { id: PLATFORM, name: 'Fabrikam Platform' } } }
+}
+
+function reviewsAlso(ado: ReturnType<typeof fakePrs>, extra: RawPullRequest[]): void {
+  const listed = [...fixture<{ value: RawPullRequest[] }>('pull-requests-review').value, ...extra]
+  ado.on(isReviewList, call => json(200, { value: listed.filter(pr => pr.repository.project.id === projectOf(call)) }))
+}
+
+function listedProjects(calls: readonly AdoCall[]) {
+  return {
+    active: calls.filter(isMineActive).map(projectOf).sort(),
+    completed: calls.filter(isMineCompleted).map(projectOf).sort(),
+    review: calls.filter(isReviewList).map(projectOf).sort()
+  }
+}
+
+test("a visible PR tick lists only hot projects and keeps the cold projects' last results", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const first = h.posts.at(-1)
+  reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, T0, 'Asked in a quiet project'))])
+
+  for (let minute = 1; minute < 5; minute += 1) {
+    const before = h.ado.calls.length
+    await h.clock.tick(MINUTE)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, `minute ${minute}`)
+    assert.deepEqual(h.posts.at(-1), { ...first, updatedAt: T0 + minute * MINUTE }, 'the cold project and the completed lists keep their last results')
+  }
+})
+
+test('a hidden PR tick reads every project', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await h.clock.tick(MINUTE)
+  h.show(false)
+
+  for (let tick = 1; tick <= 3; tick += 1) {
+    const before = h.ado.calls.length
+    await h.clock.tick(5 * MINUTE)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [], completed: [], review: [PLATFORM, PROJECT] }, `hidden tick ${tick}`)
+  }
+})
+
+test('Refresh lists every project', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await h.clock.tick(MINUTE)
+  const every = { active: [PLATFORM, PROJECT], completed: [], review: [PLATFORM, PROJECT] }
+
+  let before = h.ado.calls.length
+  await h.service.refresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'Refresh')
+  before = h.ado.calls.length
+  await h.service.reloadFresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'a reload after an action')
+
+  before = h.ado.calls.length
+  await h.clock.tick(MINUTE)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, 'the next tick lists hot projects only')
+})
+
+test('Refresh during a visible tick in flight still lists every project', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const before = h.ado.calls.length
+  const held = h.ado.hold(isMineActive)
+  await h.clock.tick(MINUTE)
+
+  const refreshed = h.service.refresh(ORG)
+  await drain()
+  held.release()
+  await refreshed
+  const listed = listedProjects(h.ado.calls.slice(before))
+  assert.deepEqual(listed, { active: [PLATFORM, PROJECT, PROJECT], completed: [], review: [PLATFORM, PROJECT, PROJECT] }, 'the tick lists the hot project, then Refresh every project')
+})
+
+test('a review request in a cold project appears within 5 minutes, visible or hidden', async () => {
+  for (const visible of [true, false]) {
+    const shown: Shown[] = []
+    const notifier = createPrNotifier({ show: async note => shown.push(note), prefs: () => ({ reviews: true, comments: false }), log: () => {} })
+    const h = harness({ notifier })
+    h.setOrgs([status()])
+    h.show(visible)
+    await h.clock.tick(0)
+    await h.clock.tick(30_000)
+    reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, T0 + 30_000, 'Asked in a quiet project'))])
+
+    await h.clock.tick(4 * MINUTE)
+    assert.deepEqual([h.counts.at(-1), shown.length], [[ORG, 1], 0], `${visible ? 'visible' : 'hidden'}: not listed yet`)
+    await h.clock.tick(30_000)
+    assert.deepEqual(h.counts.at(-1), [ORG, 2], visible ? 'visible' : 'hidden')
+    assert.deepEqual(shown.map(note => note.title), ['Review requested: Pull Request 4300'])
+  }
+})
+
 test('the snapshot holds release sets, to-review PRs and the saved auto-complete options', async () => {
   const h = harness()
   const snapshot = await h.service.snapshot(ORG)
@@ -272,7 +378,7 @@ test('the snapshot holds release sets, to-review PRs and the saved auto-complete
   assert.equal(h.ado.calls.length, calls, 'a snapshot younger than a minute is answered from memory')
   await h.clock.tick(MINUTE)
   await h.service.snapshot(ORG)
-  assert.equal(h.ado.count(isMineActive), 4, 'an older one is loaded again')
+  assert.equal(h.ado.count(isMineActive), 3, 'an older one is loaded again')
 
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4101 }), search.prs[0])
   assert.deepEqual(h.service.cached(ORG, { projectId: PROJECT, repoId: REPO, prId: 4110 }), snapshot.toReview[0])
@@ -360,7 +466,7 @@ test('a forbidden enrichment turns off only that enrichment for 10 minutes', asy
 
     const tried = h.ado.count(refused)
     await h.clock.tick(9 * MINUTE)
-    assert.equal(h.ado.count(isMineActive), 20, 'the lists keep loading every minute')
+    assert.equal(h.ado.count(isMineActive), 12, 'the lists keep loading every minute')
     assert.equal(h.ado.count(refused), tried, 'the refused enrichment is not asked for 10 minutes')
     assert.equal(h.posts.at(-1)?.message, message)
 
@@ -556,7 +662,7 @@ test('becoming visible runs a full load when the last one is stale', async () =>
   await drain()
   assert.equal(h.ado.count(isMineActive), 2, 'the full snapshot is 30 s old')
   await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isMineActive), 4, 'and the visible cadence picks up from the last run')
+  assert.equal(h.ado.count(isMineActive), 3, 'and the visible cadence picks up from the last run')
 })
 
 test('becoming visible during a background run still loads in full', async () => {
@@ -633,7 +739,7 @@ test('a quiet PRs tab keeps loading in full without rewriting its saved copy unt
   const loads = h.ado.count(isMineActive)
 
   await h.clock.tick(14 * MINUTE)
-  assert.ok(h.ado.count(isMineActive) >= loads + 2 * 10, 'every project kept loading')
+  assert.ok(h.ado.count(isMineActive) >= loads + 14, 'the hot project kept loading every minute')
   assert.equal(writes(), 1, 'written once, after the first load')
   await h.clock.tick(2 * MINUTE)
   assert.equal(writes(), 2)

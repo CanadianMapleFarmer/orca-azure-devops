@@ -64,7 +64,8 @@ interface OrgPrs {
   mine: PrSummary[]
   review: PrSummary[]
   failure: AdoError | null
-  loading: { kind: Kind; flight: Flight<PrSnapshot> } | null
+  loading: { kind: Kind; all: boolean; flight: Flight<PrSnapshot> } | null
+  readAll: boolean
   pausedUntil: number
   threadsPausedUntil: number
   restored: boolean
@@ -105,6 +106,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       review: [],
       failure: null,
       loading: null,
+      readAll: false,
       pausedUntil: -Infinity,
       threadsPausedUntil: -Infinity,
       restored: false
@@ -185,32 +187,34 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
   function load(org: string, kind: Kind): Promise<PrSnapshot> {
     const entry = entryOf(org)
+    const all = kind === 'full' && entry.readAll
     const current = entry.loading
-    if (current && (current.kind === 'full' || kind === 'reviews')) return join(current.flight)
-    const loading = { kind, flight: fly(run) }
+    if (current && (current.kind === 'full' || kind === 'reviews') && (current.all || !all)) return join(current.flight)
+    if (all) entry.readAll = false
+    const loading = { kind, all, flight: fly(run) }
     entry.loading = loading
     return join(loading.flight)
 
     async function run(): Promise<PrSnapshot> {
       if (current) await join(current.flight).catch(() => {})
       try {
-        return await attempt(org, entry, kind)
+        return await attempt(org, entry, kind, all)
       } finally {
         if (entry.loading === loading) entry.loading = null
       }
     }
   }
 
-  async function attempt(org: string, entry: OrgPrs, kind: Kind): Promise<PrSnapshot> {
+  async function attempt(org: string, entry: OrgPrs, kind: Kind, all: boolean): Promise<PrSnapshot> {
     const link = linkedAbort(entry.controller.signal)
     try {
-      return await attemptWith(org, entry, kind, link.signal)
+      return await attemptWith(org, entry, kind, all, link.signal)
     } finally {
       link.release()
     }
   }
 
-  async function attemptWith(org: string, entry: OrgPrs, kind: Kind, signal: AbortSignal): Promise<PrSnapshot> {
+  async function attemptWith(org: string, entry: OrgPrs, kind: Kind, all: boolean, signal: AbortSignal): Promise<PrSnapshot> {
     if (signal.aborted) throw notConnected()
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
@@ -222,7 +226,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       const me = status.account.adoId
       const projects = await entry.projects(status.codeProjects, signal)
       if (kind === 'full') {
-        const loaded = await entry.source.full(me, projects, signal)
+        const loaded = await entry.source.full(me, projects, all, signal)
         signal.throwIfAborted()
         const base = compose(org, me, releaseSets(loaded.mine, now()), loaded.review, offMessage(loaded))
         Object.assign(entry, { mine: loaded.mine, review: loaded.review, fullAt: now(), restored: false, failure: null })
@@ -232,7 +236,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
         deps.savedTables.save(org, me)
         return publish(entry, base)
       }
-      const review = await entry.source.reviews(me, projects, signal)
+      const review = await entry.source.reviews(me, projects, false, signal)
       signal.throwIfAborted()
       const toReview = toReviewOf(review, me)
       const reviewed = reviewedOf(review, me)
@@ -258,7 +262,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     const loads = entry.fullLoads
     void scheduler.runNow(jobKey(org))
     if (entry.loading) await join(entry.loading.flight).catch(() => {})
-    if (entry.fullLoads === loads && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
+    if ((entry.fullLoads === loads || entry.readAll) && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
   async function poll(org: string, signal: AbortSignal): Promise<void> {
@@ -285,7 +289,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     if (!deps.notifier.readsThreads() || now() < entry.threadsPausedUntil) return null
     try {
       const me = status.account.adoId
-      const mine = fresh(entry) ? entry.mine : await entry.source.active(me, await entry.projects(status.codeProjects, signal), signal)
+      const mine = fresh(entry) ? entry.mine : await entry.source.active(me, await entry.projects(status.codeProjects, signal), false, signal)
       const watched = watchedPrs(mine)
       return settleThreads(entry, watched, await entry.source.threads(watched, signal))
     } catch (error) {
@@ -348,6 +352,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
     async refresh(org) {
       await statusOf(org)
+      entryOf(org).readAll = true
       await loadInFull(org)
       const last = lastFull(org)
       if (last) return last
@@ -357,8 +362,9 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
 
     async reloadFresh(org) {
       await statusOf(org)
-      const loading = entryOf(org).loading
-      if (loading) await join(loading.flight).catch(() => {})
+      const entry = entryOf(org)
+      entry.readAll = true
+      if (entry.loading) await join(entry.loading.flight).catch(() => {})
       return load(org, 'full')
     },
 

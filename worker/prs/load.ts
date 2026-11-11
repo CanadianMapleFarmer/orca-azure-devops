@@ -7,6 +7,7 @@ import { listThreads, type RawThread } from '../ado/pr-review'
 import { listPullRequests, pullRequestWorkItems, toPrRecord, toPrSummary, type PrCriteria } from '../ado/pullrequests'
 import type { OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
+import { createHeat } from '../data/heat'
 import { prKey, type PrRecord } from '../data/records'
 import { COMPLETED_WINDOW_MS } from './release-sets'
 
@@ -15,7 +16,7 @@ const IN_FLIGHT = 4
 const MINE_TOP = 100
 const COMPLETED_TOP = 50
 const REVIEW_TOP = 100
-const COMPLETED_TTL_MS = 5 * MINUTE
+const COMPLETED_EVERY_MS = 5 * MINUTE
 const ENRICHMENT_OFF_MS = 10 * MINUTE
 
 export type Enrichment = 'workItems' | 'checks'
@@ -29,26 +30,54 @@ export interface FullLoad {
 }
 
 export interface PrSource {
-  full(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<FullLoad>
-  reviews(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
-  active(me: string, projects: NamedItem[], signal?: AbortSignal): Promise<PrSummary[]>
+  full(me: string, projects: NamedItem[], all: boolean, signal?: AbortSignal): Promise<FullLoad>
+  reviews(me: string, projects: NamedItem[], all: boolean, signal?: AbortSignal): Promise<PrSummary[]>
+  active(me: string, projects: NamedItem[], all: boolean, signal?: AbortSignal): Promise<PrSummary[]>
   threads(prs: PrKey[], signal?: AbortSignal): Promise<ThreadRead[]>
 }
 
-type Cache<T> = Map<string, { at: number; ttl: number; value: T }>
 type PrTables = Pick<OrgEntities, 'prs' | 'prChecks' | 'prWorkItems'>
 type Listed = PrSummary & { record: PrRecord }
+type List = 'mine' | 'completed' | 'review'
+type Kept = Partial<Record<List, Listed[]>> & { completedAt?: number }
 
 export function createPrSource(http: AdoHttp, org: string, now: () => number, tables: PrTables): PrSource {
-  const completed: Cache<Listed[]> = new Map()
+  const heat = createHeat(now)
+  const kept = new Map<string, Kept>()
   const offUntil: Record<Enrichment, number> = { workItems: -Infinity, checks: -Infinity }
 
-  async function remember<T>(cache: Cache<T>, key: string, ttl: number, load: () => Promise<T>): Promise<T> {
-    const hit = cache.get(key)
-    if (hit && now() - hit.at < hit.ttl) return hit.value
-    const value = await load()
-    cache.set(key, { at: now(), ttl, value })
-    return value
+  function keptOf(me: string, projectId: string): Kept {
+    const key = `${me}/${projectId}`
+    const entry = kept.get(key) ?? {}
+    kept.set(key, entry)
+    return entry
+  }
+
+  async function listsOf(scoped: AdoHttp, me: string, projects: NamedItem[], all: boolean, lists: readonly List[]): Promise<Kept[]> {
+    const current = new Set(projects.map(project => `${me}/${project.id}`))
+    for (const key of kept.keys()) if (!current.has(key)) kept.delete(key)
+    const due = new Set(heat.pick(projects, all).map(project => project.id))
+    const read = projects.filter(project => due.has(project.id) || lists.some(list => !keptOf(me, project.id)[list]))
+    const reads = read.flatMap(project => {
+      const entry = keptOf(me, project.id)
+      return lists.flatMap(list => {
+        const criteria = criteriaOf(me, entry, list)
+        return criteria ? [{ entry, projectId: project.id, list, criteria }] : []
+      })
+    })
+    await mapLimit(reads, IN_FLIGHT, async ({ entry, projectId, list, criteria }) => {
+      entry[list] = await listed(scoped, projectId, criteria)
+      if (list === 'completed') entry.completedAt = now()
+    })
+    for (const project of read) heat.saw(project.id, found(keptOf(me, project.id)))
+    return projects.map(project => keptOf(me, project.id))
+  }
+
+  function criteriaOf(me: string, entry: Kept, list: List): PrCriteria | null {
+    if (list === 'mine') return activeOf(me)
+    if (list === 'review') return reviewerOf(me)
+    if (entry.completedAt !== undefined && now() - entry.completedAt < COMPLETED_EVERY_MS) return null
+    return { creatorId: me, status: 'completed', closedSince: now() - COMPLETED_WINDOW_MS, top: COMPLETED_TOP }
   }
 
   async function listed(scoped: AdoHttp, projectId: string, criteria: PrCriteria): Promise<Listed[]> {
@@ -57,15 +86,6 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number, ta
       tables.prs.put(prKey(record), record)
       return { ...toPrSummary(raw, org), record }
     })
-  }
-
-  async function list(scoped: AdoHttp, projectId: string, criteria: PrCriteria): Promise<PrSummary[]> {
-    return (await listed(scoped, projectId, criteria)).map(summaryOf)
-  }
-
-  function myCompleted(scoped: AdoHttp, me: string, projectId: string): Promise<Listed[]> {
-    const criteria: PrCriteria = { creatorId: me, status: 'completed', closedSince: now() - COMPLETED_WINDOW_MS, top: COMPLETED_TOP }
-    return remember(completed, `${me}/${projectId}`, COMPLETED_TTL_MS, () => listed(scoped, projectId, criteria))
   }
 
   async function unlessRefused<T>(enrichment: Enrichment, read: () => Promise<T>): Promise<T | null> {
@@ -100,27 +120,22 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number, ta
   }
 
   return {
-    async full(me, projects, signal) {
+    async full(me, projects, all, signal) {
       const scoped = withSignal(http, signal)
-      const lists = projects.flatMap(project => [
-        { kind: 'mine', load: () => listed(scoped, project.id, activeOf(me)) },
-        { kind: 'mine', load: () => myCompleted(scoped, me, project.id) },
-        { kind: 'review', load: () => listed(scoped, project.id, reviewerOf(me)) }
-      ])
-      const loaded = await mapLimit(lists, IN_FLIGHT, entry => entry.load())
-      const of = (kind: string) => lists.flatMap((entry, index) => (entry.kind === kind ? loaded[index] : []))
-      const mine = await mapLimit(of('mine'), IN_FLIGHT, pr => enrich(scoped, pr))
-      return { mine, review: of('review').map(summaryOf), off: { workItems: now() < offUntil.workItems, checks: now() < offUntil.checks } }
+      const held = await listsOf(scoped, me, projects, all, ['mine', 'completed', 'review'])
+      const mine = await mapLimit(held.flatMap(entry => [...(entry.mine ?? []), ...(entry.completed ?? [])]), IN_FLIGHT, pr => enrich(scoped, pr))
+      const review = held.flatMap(entry => entry.review ?? []).map(summaryOf)
+      return { mine, review, off: { workItems: now() < offUntil.workItems, checks: now() < offUntil.checks } }
     },
 
-    async reviews(me, projects, signal) {
-      const scoped = withSignal(http, signal)
-      return (await mapLimit(projects, IN_FLIGHT, project => list(scoped, project.id, reviewerOf(me)))).flat()
+    async reviews(me, projects, all, signal) {
+      const held = await listsOf(withSignal(http, signal), me, projects, all, ['review'])
+      return held.flatMap(entry => entry.review ?? []).map(summaryOf)
     },
 
-    async active(me, projects, signal) {
-      const scoped = withSignal(http, signal)
-      return (await mapLimit(projects, IN_FLIGHT, project => list(scoped, project.id, activeOf(me)))).flat()
+    async active(me, projects, all, signal) {
+      const held = await listsOf(withSignal(http, signal), me, projects, all, ['mine'])
+      return held.flatMap(entry => entry.mine ?? []).map(summaryOf)
     },
 
     threads(prs, signal) {
@@ -148,6 +163,10 @@ function activeOf(me: string): PrCriteria {
 
 function reviewerOf(me: string): PrCriteria {
   return { reviewerId: me, status: 'active', top: REVIEW_TOP }
+}
+
+function found(entry: Kept): boolean {
+  return [entry.mine, entry.completed, entry.review].some(list => (list?.length ?? 0) > 0)
 }
 
 function summaryOf({ record: _, ...pr }: Listed): PrSummary {

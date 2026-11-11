@@ -67,7 +67,8 @@ interface OrgRuns {
   fullAt: number | null
   fullLoads: number
   failure: AdoError | null
-  loading: { kind: Kind; flight: Flight<RunsSnapshot> } | null
+  loading: { kind: Kind; all: boolean; flight: Flight<RunsSnapshot> } | null
+  readAll: boolean
   watching: Flight<void> | null
   pausedUntil: number
   watched: RunKey[]
@@ -107,6 +108,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       fullLoads: 0,
       failure: null,
       loading: null,
+      readAll: false,
       watching: null,
       pausedUntil: -Infinity,
       watched: [],
@@ -217,32 +219,34 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
   function load(org: string, kind: Kind): Promise<RunsSnapshot> {
     const entry = entryOf(org)
+    const all = kind === 'full' && entry.readAll
     const current = entry.loading
-    if (current && (current.kind === 'full' || kind === 'background')) return join(current.flight)
-    const loading = { kind, flight: fly(run) }
+    if (current && (current.kind === 'full' || kind === 'background') && (current.all || !all)) return join(current.flight)
+    if (all) entry.readAll = false
+    const loading = { kind, all, flight: fly(run) }
     entry.loading = loading
     return join(loading.flight)
 
     async function run(): Promise<RunsSnapshot> {
       if (current) await join(current.flight).catch(() => {})
       try {
-        return await attempt(org, entry, kind)
+        return await attempt(org, entry, kind, all)
       } finally {
         if (entry.loading === loading) entry.loading = null
       }
     }
   }
 
-  async function attempt(org: string, entry: OrgRuns, kind: Kind): Promise<RunsSnapshot> {
+  async function attempt(org: string, entry: OrgRuns, kind: Kind, all: boolean): Promise<RunsSnapshot> {
     const link = linkedAbort(entry.controller.signal)
     try {
-      return await attemptWith(org, entry, kind, link.signal)
+      return await attemptWith(org, entry, kind, all, link.signal)
     } finally {
       link.release()
     }
   }
 
-  async function attemptWith(org: string, entry: OrgRuns, kind: Kind, signal: AbortSignal): Promise<RunsSnapshot> {
+  async function attemptWith(org: string, entry: OrgRuns, kind: Kind, all: boolean, signal: AbortSignal): Promise<RunsSnapshot> {
     if (signal.aborted) throw notConnected()
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
@@ -255,7 +259,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const projects = await entry.projects(status.codeProjects, signal)
       const watched = await deps.watchList.list(org)
       entry.watched = watched
-      const loaded = kind === 'full' ? await entry.source.full(me, projects, watched, signal) : await entry.source.background(me, projects, watched, signal)
+      const loaded = kind === 'full' ? await entry.source.full(me, projects, watched, all, signal) : await entry.source.background(me, projects, watched, false, signal)
       signal.throwIfAborted()
       if (kind === 'full') Object.assign(entry, { fullAt: now(), restored: false })
       entry.failure = null
@@ -314,7 +318,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const entry = entryOf(org)
     const loads = entry.fullLoads
     await scheduler.runNow(runsKey(org))
-    if (entry.fullLoads === loads && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
+    if ((entry.fullLoads === loads || entry.readAll) && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
   async function poll(org: string, signal: AbortSignal): Promise<void> {
@@ -397,6 +401,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
     async refresh(org) {
       await statusOf(org)
+      entryOf(org).readAll = true
       await loadInFull(org)
       const last = lastFull(org)
       if (last) return last
@@ -406,8 +411,9 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
     async reloadFresh(org) {
       await statusOf(org)
-      const loading = entryOf(org).loading
-      if (loading) await join(loading.flight).catch(() => {})
+      const entry = entryOf(org)
+      entry.readAll = true
+      if (entry.loading) await join(entry.loading.flight).catch(() => {})
       return load(org, 'full')
     },
 

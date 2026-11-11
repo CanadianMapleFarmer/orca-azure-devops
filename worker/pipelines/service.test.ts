@@ -182,7 +182,7 @@ test("a visible load reads each project's lists once and caps timelines", async 
   const before = h.ado.calls.length
   await h.clock.tick(30_000)
   const later = h.ado.calls.slice(before)
-  assert.deepEqual(tally(later), { repositories: 0, mine: 2, running: 2, approvals: 2, batches: 0, timelines: 2, checkSuites: 0, all: 8 })
+  assert.deepEqual(tally(later), { repositories: 0, mine: 1, running: 1, approvals: 1, batches: 0, timelines: 2, checkSuites: 0, all: 5 })
   assert.deepEqual(timelines(later), ACTIVE, 'only active runs are read again')
   assert.equal(h.posts.length, 2)
 
@@ -203,6 +203,61 @@ test("a visible load reads each project's lists once and caps timelines", async 
   await busy.clock.tick(30_000)
   const next = timelines(busy.ado.calls.slice(settled))
   assert.deepEqual([next.filter(active).length, next.filter(id => !active(id)).length], [8, 6], 'then the rest of the finished runs')
+})
+
+function listedProjects(calls: readonly AdoCall[]) {
+  return {
+    mine: calls.filter(isMineRuns).map(runsProjectOf).sort(),
+    running: calls.filter(isRunningRuns).map(runsProjectOf).sort(),
+    approvals: calls.filter(isApprovals).map(runsProjectOf).sort()
+  }
+}
+
+test("a visible runs tick lists only hot projects and keeps the cold projects' last runs", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const first = h.posts.at(-1)
+  addBuild(h.ado, 4800, {
+    status: 'inProgress',
+    result: undefined,
+    queueTime: iso(T0 + 10_000),
+    finishTime: undefined,
+    requestedFor: { id: GRACE, displayName: 'Grace Hopper' },
+    project: { id: PLATFORM, name: 'Fabrikam Platform' }
+  })
+
+  for (let tick = 1; tick < 10; tick += 1) {
+    const before = h.ado.calls.length
+    await h.clock.tick(30_000)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PROJECT], running: [PROJECT], approvals: [PROJECT] }, `tick ${tick}`)
+    assert.deepEqual(ids(h.posts.at(-1)?.runs), ids(first?.runs), 'the cold project keeps its last runs')
+  }
+  const before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] })
+  assert.ok(ids(h.posts.at(-1)?.runs).includes(4800), 'a run in a cold project appears within 5 minutes')
+})
+
+test('Refresh lists every project', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await h.clock.tick(30_000)
+  const every = { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] }
+
+  let before = h.ado.calls.length
+  await h.service.refresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'Refresh')
+  before = h.ado.calls.length
+  await h.service.reloadFresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'a reload after an action')
+
+  before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PROJECT], running: [PROJECT], approvals: [PROJECT] }, 'the next tick lists hot projects only')
 })
 
 test('a background load reads my runs and approvals only and keeps the chips', async () => {
@@ -541,7 +596,7 @@ test('a forbidden builds list pauses the org; a forbidden approvals list only tu
   assert.equal(runOf(snapshot, 4520).state, 'running')
   const tried = approvals.ado.count(isApprovals)
   await approvals.clock.tick(9 * MINUTE)
-  assert.equal(approvals.ado.count(isMineRuns), 38, 'runs keep loading every 30 s')
+  assert.equal(approvals.ado.count(isMineRuns), 21, 'runs keep loading every 30 s')
   assert.equal(approvals.ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
   assert.equal(approvals.posts.at(-1)?.message, APPROVALS_NEED_ACCESS)
 })
@@ -717,7 +772,7 @@ test('snapshot answers from memory for 30 s; refresh and becoming visible load i
   assert.equal(h.ado.count(isMineRuns), 2)
   await h.clock.tick(1)
   await h.service.snapshot(ORG)
-  assert.equal(h.ado.count(isMineRuns), 4)
+  assert.equal(h.ado.count(isMineRuns), 3)
 
   h.setOrgs([status()])
   await h.clock.tick(0)

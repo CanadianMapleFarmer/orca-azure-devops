@@ -100,7 +100,7 @@ async function failure(promise: Promise<unknown>): Promise<AdoError> {
 
 test('a full load unions my runs, running runs and approval runs, ordered, with the watched flag', async () => {
   const { ado, source } = setup()
-  const { runs, off } = await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4531 }])
+  const { runs, off } = await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4531 }], true)
 
   assert.deepEqual(ids(runs), [4531, 4520, 4512, 4505, 4498, 4490])
   assert.deepEqual(off, NOTHING_OFF)
@@ -130,7 +130,7 @@ test('runs that approvals wait on or that are watched, but are not listed, come 
   finished(ado, 4701, T0 - 90 * MINUTE, { requestedFor: { id: GRACE, displayName: 'Grace Hopper' }, project: { id: PLATFORM, name: 'Fabrikam Platform' } })
 
   const watched = [{ projectId: PROJECT, buildId: 4401 }, { projectId: PLATFORM, buildId: 4701 }, { projectId: PROJECT, buildId: 4520 }]
-  const { runs } = await source.full(ME, PROJECTS, watched)
+  const { runs } = await source.full(ME, PROJECTS, watched, true)
   const batches = ado.calls.filter(isBuildsByIds).map(call => [runsProjectOf(call), call.query.get('buildIds')?.split(',').map(Number).sort()])
   assert.deepEqual(batches.sort(), [[PLATFORM, [4701]], [PROJECT, [4401, 4532]]].sort())
 
@@ -144,7 +144,7 @@ test('runs that approvals wait on or that are watched, but are not listed, come 
   assert.deepEqual(ids(runs).slice(0, 3), [4532, 4531, 4520], 'running runs first, newest first')
 
   const quiet = setup()
-  await quiet.source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4520 }])
+  await quiet.source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4520 }], true)
   assert.equal(quiet.ado.count(isBuildsByIds), 0, 'nothing to batch when every run is listed')
 })
 
@@ -153,7 +153,7 @@ test('chips: at most 8 active runs every load, and at most 8 newly finished runs
   for (let index = 0; index < 10; index += 1) running(ado, 4600 + index, T0 - 90 * MINUTE + index * MINUTE)
   for (let index = 0; index < 6; index += 1) finished(ado, 4700 + index, T0 - (100 + index) * MINUTE, { requestedFor: { id: ME, displayName: 'Alex Contoso' } })
 
-  const first = await source.full(ME, PROJECTS, [])
+  const first = await source.full(ME, PROJECTS, [], true)
   const activeFirst = [4531, 4520, 4609, 4608, 4607, 4606, 4605, 4604]
   const finishedFirst = [4512, 4700, 4701, 4702, 4703, 4704, 4705, 4505]
   assert.deepEqual(timelineIds(ado.calls).sort(), [...activeFirst, ...finishedFirst].sort())
@@ -169,31 +169,31 @@ test('chips: at most 8 active runs every load, and at most 8 newly finished runs
 
   const before = ado.calls.length
   clock.now += 30_000
-  await source.full(ME, PROJECTS, [])
+  await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(ado.calls.slice(before)).sort(), [...activeFirst, 4498, 4490].sort(), 'the rest of the finished runs')
 
   const again = ado.calls.length
   const retried = ado.runs.builds.get(4512) ?? assert.fail('no build 4512')
   retried.finishTime = iso(T0 + 20_000)
   clock.now += 30_000
-  await source.full(ME, PROJECTS, [])
+  await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(ado.calls.slice(again)).sort(), [...activeFirst, 4512].sort(), 'a run that finished again is read again')
 })
 
 test('seeded finished runs keep their chips without a timeline read; runs still going or never read are not seeded', async () => {
-  const saved = (await setup().source.full(ME, PROJECTS, [])).runs
+  const saved = (await setup().source.full(ME, PROJECTS, [], true)).runs
   const { ado, source, tables } = setup()
   source.seed(saved.map(run => (run.buildId === 4498 ? { ...run, stages: null } : run)))
   assert.deepEqual(tables.runChips.entries().map(([key]) => Number(key.split(':')[0])).sort(), [4490, 4505, 4512])
 
-  const loaded = await source.full(ME, PROJECTS, [])
+  const loaded = await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(ado.calls).sort(), [4498, 4520, 4531])
   assert.deepEqual(loaded.runs.map(run => [run.buildId, run.stages]), saved.map(run => [run.buildId, run.stages]))
 })
 
 test('an approval is placed on its run timeline and named by its check suite, once', async () => {
   const { ado, clock, source } = setup()
-  const { runs } = await source.full(ME, PROJECTS, [])
+  const { runs } = await source.full(ME, PROJECTS, [], true)
   const byId = new Map(runs.map(run => [run.buildId, run]))
   const [waiting] = byId.get(4520)?.approvals ?? []
   assert.deepEqual(waiting, {
@@ -214,15 +214,15 @@ test('an approval is placed on its run timeline and named by its check suite, on
   assert.deepEqual(timelineIds(ado.calls).filter(id => id === 4520 || id === 4531).sort(), [4520, 4531], 'placement reuses the chip reads')
 
   clock.now += 30_000
-  await source.full(ME, PROJECTS, [])
+  await source.full(ME, PROJECTS, [], true)
   assert.equal(ado.count(isCheckSuite), 1, 'the place is cached by approval id')
 
   const background = setup()
-  await background.source.background(ME, PROJECTS, [])
+  await background.source.background(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(background.ado.calls).sort(), [4520, 4531], 'a new approval reads its run timeline once')
   assert.equal(background.ado.count(isCheckSuite), 1)
   background.clock.now += 5 * MINUTE
-  const { runs: later } = await background.source.background(ME, PROJECTS, [])
+  const { runs: later } = await background.source.background(ME, PROJECTS, [], true)
   assert.deepEqual(timelineIds(background.ado.calls).sort(), [4520, 4531])
   assert.equal(background.ado.count(isCheckSuite), 1)
   assert.equal(later.find(run => run.buildId === 4520)?.approvals[0].environment, 'production')
@@ -233,7 +233,7 @@ test('a forbidden approvals list turns approvals off for 10 minutes while runs k
   let refused = true
   ado.on(call => refused && isApprovals(call), () => json(403, { message: 'TF400813: not authorized.' }))
 
-  const first = await source.full(ME, PROJECTS, [])
+  const first = await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(ids(first.runs), [4531, 4520, 4512, 4505, 4498, 4490])
   assert.ok(first.runs.every(run => run.approvals.length === 0))
   assert.equal(first.runs.find(run => run.buildId === 4520)?.state, 'running')
@@ -241,27 +241,27 @@ test('a forbidden approvals list turns approvals off for 10 minutes while runs k
   const tried = ado.count(isApprovals)
 
   clock.now += 10 * MINUTE - 1
-  assert.deepEqual((await source.full(ME, PROJECTS, [])).off, { ...NOTHING_OFF, approvals: true })
-  assert.deepEqual((await source.background(ME, PROJECTS, [])).off, { ...NOTHING_OFF, approvals: true })
+  assert.deepEqual((await source.full(ME, PROJECTS, [], true)).off, { ...NOTHING_OFF, approvals: true })
+  assert.deepEqual((await source.background(ME, PROJECTS, [], true)).off, { ...NOTHING_OFF, approvals: true })
   assert.equal(ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
 
   refused = false
   clock.now += 1
-  const back = await source.full(ME, PROJECTS, [])
+  const back = await source.full(ME, PROJECTS, [], true)
   assert.deepEqual(back.off, NOTHING_OFF)
   assert.equal(back.runs.find(run => run.buildId === 4520)?.state, 'waiting')
 })
 
 test('a background load reads my runs, approvals and the batch, and carries chips while state and finish are unchanged', async () => {
   const { ado, clock, source } = setup()
-  const full = await source.full(ME, PROJECTS, [])
+  const full = await source.full(ME, PROJECTS, [], true)
   const chips = new Map(full.runs.map(run => [run.buildId, run.stages]))
   const before = ado.calls.length
 
   const done = ado.runs.builds.get(4520) ?? assert.fail('no build 4520')
   Object.assign(done, { status: 'completed', result: 'failed', finishTime: iso(T0 + MINUTE) })
   clock.now += 5 * MINUTE
-  const { runs } = await source.background(ME, PROJECTS, [])
+  const { runs } = await source.background(ME, PROJECTS, [], true)
   const calls = ado.calls.slice(before)
 
   assert.deepEqual([isMineRuns, isRunningRuns, isApprovals, isBuildsByIds, isTimeline, isCheckSuite].map(match => calls.filter(match).length), [2, 0, 2, 1, 0, 0])
@@ -274,7 +274,7 @@ test('a background load reads my runs, approvals and the batch, and carries chip
   assert.equal(byId.get(4520)?.stages, null, 'a run that changed has no chips until the next full load')
 
   const cold = setup()
-  const { runs: first } = await cold.source.background(ME, PROJECTS, [])
+  const { runs: first } = await cold.source.background(ME, PROJECTS, [], true)
   assert.ok(first.every(run => run.stages === null), 'no chips without a full load')
 })
 
@@ -318,13 +318,13 @@ test('one malformed build fails the load with the fixed message', async () => {
   const { ado, source } = setup()
   const broken = ado.runs.builds.get(4505) ?? assert.fail('no build 4505')
   delete (broken as Partial<RawBuild>).buildNumber
-  assert.equal((await failure(source.full(ME, PROJECTS, []))).message, MALFORMED_BUILD)
+  assert.equal((await failure(source.full(ME, PROJECTS, [], true))).message, MALFORMED_BUILD)
 })
 
 test('a malformed pending approval is skipped and flagged while the runs and the other approvals load', async () => {
   const pipeline = setup()
   Reflect.deleteProperty(pipeline.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531'), 'pipeline')
-  const skipped = await pipeline.source.full(ME, PROJECTS, [])
+  const skipped = await pipeline.source.full(ME, PROJECTS, [], true)
   assert.deepEqual(ids(skipped.runs), ALL_RUNS)
   assert.deepEqual(skipped.off, { ...NOTHING_OFF, skippedApprovals: true })
   assert.deepEqual(skipped.runs.map(run => [run.buildId, run.approvals.length]), [[4531, 0], [4520, 1], [4512, 0], [4505, 0], [4498, 0], [4490, 0]])
@@ -334,19 +334,19 @@ test('a malformed pending approval is skipped and flagged while the runs and the
   const steps = setup()
   const odd = steps.ado.runs.approvals.get(APPROVAL_4531) ?? assert.fail('no approval on 4531')
   odd.steps = [{ assignedApprover: {} } as NonNullable<RawApproval['steps']>[number]]
-  const background = await steps.source.background(ME, PROJECTS, [])
+  const background = await steps.source.background(ME, PROJECTS, [], true)
   assert.deepEqual(background.off, { ...NOTHING_OFF, skippedApprovals: true })
   assert.deepEqual(background.runs.flatMap(run => run.approvals.map(approval => approval.approvalId)), [APPROVAL_4520])
 
   const list = setup()
   list.ado.on(isApprovals, () => json(200, { value: 'nope' }))
-  const unreadable = await list.source.full(ME, PROJECTS, [])
+  const unreadable = await list.source.full(ME, PROJECTS, [], true)
   assert.deepEqual(ids(unreadable.runs), ALL_RUNS)
   assert.deepEqual(unreadable.off, { ...NOTHING_OFF, skippedApprovals: true })
   assert.ok(unreadable.runs.every(run => run.approvals.length === 0))
 
   const healthy = setup()
-  assert.deepEqual((await healthy.source.full(ME, PROJECTS, [])).off, NOTHING_OFF)
+  assert.deepEqual((await healthy.source.full(ME, PROJECTS, [], true)).off, NOTHING_OFF)
 })
 
 test('an approval that cannot be read for a decision still fails with the fixed message', async () => {
@@ -365,20 +365,20 @@ test('an environment that cannot be named leaves its approval unnamed while the 
   for (const [name, answer, cached] of answers) {
     const { ado, clock, source } = setup()
     ado.on(isCheckSuite, answer)
-    const first = await source.full(ME, PROJECTS, [])
+    const first = await source.full(ME, PROJECTS, [], true)
     assert.deepEqual(ids(first.runs), ALL_RUNS, name)
     assert.deepEqual(first.off, { ...NOTHING_OFF, environments: true }, name)
     const waiting = first.runs.find(run => run.buildId === 4520)
     assert.deepEqual([waiting?.state, waiting?.approvals[0].stage, waiting?.approvals[0].environment], ['waiting', 'Deploy production', null], name)
 
     clock.now += MINUTE
-    const second = await source.background(ME, PROJECTS, [])
+    const second = await source.background(ME, PROJECTS, [], true)
     assert.deepEqual(second.off, { ...NOTHING_OFF, environments: true }, name)
     assert.equal(ado.count(isCheckSuite), cached ? 1 : 2, `${name}: ${cached ? 'asked once' : 'asked again'}`)
 
     ado.on(isCheckSuite, () => json(200, fixture('check-suite-4520')))
     clock.now += MINUTE
-    const third = await source.background(ME, PROJECTS, [])
+    const third = await source.background(ME, PROJECTS, [], true)
     assert.deepEqual(third.off, cached ? { ...NOTHING_OFF, environments: true } : NOTHING_OFF, name)
     assert.equal(third.runs.find(run => run.buildId === 4520)?.approvals[0].environment, cached ? null : 'production', name)
   }
@@ -386,7 +386,7 @@ test('an environment that cannot be named leaves its approval unnamed while the 
   const { ado, source } = setup()
   const controller = new AbortController()
   const hung = ado.hang(isCheckSuite)
-  const load = source.full(ME, PROJECTS, [], controller.signal)
+  const load = source.full(ME, PROJECTS, [], true, controller.signal)
   await drain()
   assert.equal(hung.length, 1)
   controller.abort(new Error('stop'))
@@ -396,8 +396,8 @@ test('an environment that cannot be named leaves its approval unnamed while the 
 test('a signal reaches every request of a load', async () => {
   const { ado, source } = setup()
   const controller = new AbortController()
-  await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4401 }], controller.signal)
-  await source.background(ME, PROJECTS, [], controller.signal)
+  await source.full(ME, PROJECTS, [{ projectId: PROJECT, buildId: 4401 }], true, controller.signal)
+  await source.background(ME, PROJECTS, [], true, controller.signal)
   await source.watched(ME, [{ projectId: PROJECT, buildId: 4531 }], controller.signal)
   await source.approval(ME, { projectId: PROJECT, approvalId: APPROVAL_4531 }, controller.signal)
   controller.abort()
