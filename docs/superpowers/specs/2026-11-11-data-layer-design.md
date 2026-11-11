@@ -1,6 +1,6 @@
 # A cached, rate-limit-aware data layer — design
 
-Date: 2026-11-11 · Status: decisions settled by the user on 2026-11-11 (section 10) · Research: [`docs/research/2026-11-11-request-inventory.md`](../../research/2026-11-11-request-inventory.md) · Plan: [`docs/superpowers/plans/2026-11-11-data-layer.md`](../plans/2026-11-11-data-layer.md)
+Date: 2026-11-11 · Revised 2026-11-11 after an independent builder check · Status: the user's four decisions are settled; three lead's calls await the user's confirmation (section 10) · Research: [`docs/research/2026-11-11-request-inventory.md`](../../research/2026-11-11-request-inventory.md) · Plan: [`docs/superpowers/plans/2026-11-11-data-layer.md`](../plans/2026-11-11-data-layer.md)
 
 ## 1. Intent
 
@@ -20,7 +20,7 @@ A typical session sends **480–760 requests per 5 minutes**, plus about 560 at 
 
 This design puts one data layer between the features and ADO:
 
-- a **request governor** per org that every request goes through, so the plugin backs off on its own when ADO signals pressure
+- a **request governor** per org that every request goes through, so the plugin backs off on its own when ADO signals pressure, while the user's own clicks always go first
 - one **entity store**, so data is fetched once and shared across features
 - **delta sync**, so a poll asks what changed rather than downloading everything
 - **persistence** of the last-known views, so start-up paints at once from saved data, marked with its age
@@ -32,18 +32,20 @@ This design puts one data layer between the features and ADO:
 - **Instant start-up.** The Work tab, the board, the PRs tab and the Pipelines tab paint at once from persisted data, show its age, and revalidate in the background.
 - **No refetch on tab switch.** Switching tabs never refetches data that is still fresh.
 - **Self-throttling.** The plugin backs off on its own when ADO reports pressure, and the effect can be measured from the `Azure DevOps: Connection status` command.
+- **Notifications stay prompt.** A new review request, a failed run or an approval waiting on you notifies within about 5 minutes, even with the panel hidden (section 10, item 5).
 
 ### Non-goals
 - No server, proxy or webhook receiver. The plugin has no public endpoint.
 - No new runtime dependencies. `AsyncLocalStorage` is part of Node.
-- No visual redesign. Age and staleness use the existing "Updated ‹time›" line and the existing message slot.
+- No visual redesign. Age and staleness use the existing "Updated ‹time›" line, the existing message slot, and the board editor's existing note.
 
 ### Anti-goals (failure even if it "works")
-- **Stale data shown as fresh.** A persisted view is always marked stale until a live load replaces it.
+- **Stale data shown as fresh.** A persisted view is always marked stale until a live load replaces it, on every surface including the board editor.
 - **Losing the user's own writes.** A move, comment, vote or approval must never disappear or be overwritten by an older poll. `recent.ts` stays, and the store adds a `rev` guard on top.
 - **Auth errors masked as cached data.** Saved data is only served to a connected org whose pinned account matches the account that saved it.
+- **A click that fails because the plugin throttled itself.** The governor holds back background work only. User requests are always sent.
 - **Panel messages over the byte budgets** in `worker/budget.ts`.
-- **A persisted cache that grows without bound.**
+- **A persisted cache, or an in-memory table, that grows without bound.**
 
 ## 3. Facts this design relies on
 
@@ -65,8 +67,10 @@ Source: [Rate and usage limits](https://learn.microsoft.com/en-us/azure/devops/i
 - `X-RateLimit-Cost`: TSTUs consumed by this request.
 
 **Microsoft's guidance**
-- From the same page: "Honor the Retry-After header", and "track `X-RateLimit-Remaining` and `X-RateLimit-Limit`… to smooth out request bursts".
+- From the same page: "Honor the Retry-After header: If you receive it in a response, wait the specified time before sending another request." And "track `X-RateLimit-Remaining` and `X-RateLimit-Limit`… to smooth out request bursts".
 - From [integration best practices](https://learn.microsoft.com/en-us/azure/devops/integrate/concepts/integration-bestpractices?view=azure-devops): batch requests. "Using queries and individual *get work item* calls is the top way to get rate limits enforced". "Place a date or range-limiting clause near the top of a query whenever possible."
+
+How this design reads `Retry-After` on a 200 is the lead's call (section 4): it slows background work ×8 rather than stopping it. That is looser than the literal guidance; section 9 says how to tighten it in one place.
 
 ### 3.2 WIQL
 - [Query By Wiql](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/wiql/query-by-wiql?view=azure-devops-rest-7.1) takes `timePrecision` ("Whether or not to use time precision") and returns `asOf`, "the date the query was run in the context of", plus ids only.
@@ -76,12 +80,12 @@ Source: [Rate and usage limits](https://learn.microsoft.com/en-us/azure/devops/i
   - `IN` works for Integer fields such as `[System.Id]`.
   - "WIQL queries made against Azure Boards must not exceed 32-K characters."
 - **Without `timePrecision=true`, ADO rejects a date literal with a time part.** It answers HTTP 400 "You cannot supply a time with the date when running a query using date precision" ([mite-sync#49](https://github.com/itects-one/mite-sync/issues/49), [MSDN thread](https://social.msdn.microsoft.com/Forums/en-US/705a07f2-01b0-4c3d-b0b0-50ba01ae81f4/rest-api-query-on-work-item-giving-error-you-cannot-supply-a-time-with-the-date-when-running-a?forum=TFService)). With it, timestamps compare in UTC.
-- Microsoft's reference page doesn't describe this behaviour. The design therefore keeps a fallback (section 5.5).
+- Microsoft's reference page doesn't describe this behaviour. The design therefore keeps a fallback (section 5.5), triggered only by that specific 400.
 
 ### 3.3 `workitemsbatch`
 [Get Work Items Batch](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-items-batch?view=azure-devops-rest-7.1):
 - "Maximum 200" ids per call.
-- The body takes `fields`, `$expand` and `errorPolicy`.
+- The body takes `fields`, `$expand` and `errorPolicy`. With `errorPolicy: 'omit'`, an id that no longer exists or can't be read comes back as `null`.
 - The sample request asks for a few `fields` and every item still comes back with `rev`. So `fields: ['System.Id']` is a cheap way to read revisions.
 - The plugin already sends `fields` and `$expand` in separate calls (`readFields` and `hydrate`). This design keeps it that way, because the docs don't say the two combine.
 
@@ -107,7 +111,7 @@ The delta WIQL in 5.5 asks ADO that membership question directly, in one call pe
 ### 3.7 PR lists
 - `GET {project}/_apis/git/pullrequests` is project-scoped (spec 2026-11-03 §4.2). `searchCriteria.status=active` with no creator or reviewer returns every active PR in the project.
 - So one call per project answers "is this linked PR still open?" for every chip in that project.
-- PR objects carry `lastMergeSourceCommit`, which changes on push. It is used to decide when policy evaluations need re-reading.
+- PR objects carry `lastMergeSourceCommit`, which changes on push, and `reviewers[].vote`. The repo's list fixtures (`worker/ado/fixtures/pull-requests-mine.json`, `pull-requests-review.json`) carry `reviewers[].vote` but not `lastMergeSourceCommit`; the plan adds it to the fixtures. Both decide when policy evaluations need re-reading (5.6).
 
 ### 3.8 Orca storage
 - Orca 1.4.256's `plugin-host-api-storage-schemas.js` sets `PLUGIN_STORAGE_VALUE_MAX_BYTES = 256 * 1024`, `PLUGIN_STORAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024` and `PLUGIN_STORAGE_KEY_LIMIT = 1024`. Values are plain JSON.
@@ -119,7 +123,7 @@ The delta WIQL in 5.5 asks ADO that membership question directly, in one call pe
 
 | Question | Assumption | Fallback built in | Live check added to `docs/development.md` |
 | --- | --- | --- | --- |
-| WIQL with `timePrecision=true` and an ISO `Z` literal filters to the second | Yes (3.2) | On a 400, switch that view to day precision (`ChangedDate >= @Today - 1`) plus a revision check | The delta query on the client org |
+| WIQL with `timePrecision=true` and an ISO `Z` literal filters to the second | Yes (3.2) | On that specific 400, switch the view to day precision (`ChangedDate >= @Today - 1`) plus a revision check | The delta query on the client org |
 | Adding or removing a link bumps both items' `rev` and `ChangedDate` | Yes | An hourly deep audit re-reads members with relations | Add a child task and link a PR, then watch the parent in the next delta |
 | WIQL reflects a commit immediately | Within 10 s | Watermark overlap of 10 s plus a 15-min revision audit | — |
 | Any endpoint honours `If-None-Match` | No | Not used; metrics record `ETag` presence | `ETag` per endpoint, from the metrics |
@@ -128,13 +132,20 @@ The delta WIQL in 5.5 asks ADO that membership question directly, in one call pe
 
 ## 4. The team lead's calls
 
-All seven calls stand. Three adjustments come from the code and the docs:
+All seven of the lead's original calls stand. The builder check added four more, which this revision adopts:
+
+- **A click always works.** The governor never fails a user request because of a block. User requests go first and are sent; only background work is held back. ADO's own 429 surfaces the existing "throttling" message.
+- **Retry-After on a 200 means *delayed*,** pacing background work ×8. Only a 429 sets a hard `resumeAt`.
+- **Three priority tiers:** user requests, then *visible* background jobs (the visible board, an open run tab, the visible sidebar tab), then *hidden* background jobs. The scheduler passes visibility through the request context.
+- **Notification latency** (section 10, item 5): cold projects are checked every 5 minutes even while hidden, and quiet back-off never stretches a notification-driving check past 5 minutes.
+
+Three adjustments from the first draft still hold:
 
 1. **Governor.** It is built in two parts:
    - an *observer* of every raw response, inside `http.ts`, so it sees the 429s that `http.ts` retries internally
    - a *queue* in front of `AdoHttp`
    
-   Background requests are never parked indefinitely. Under pressure, jobs simply don't start (the scheduler asks the governor). Parking requests mid-tick could stall a user request that joined that tick's in-flight load.
+   Under pressure, jobs don't start (the scheduler asks the pressure tracker). Requests already in flight are held without taking a slot, and a user joining them releases them.
 2. **Store.** Views are *projections* of the store. A poll updates entities; a projection turns entities into the `WorkSnapshot` or `BoardResult` the panel paints. A store change, such as new PR checks, re-projects without any network call.
 3. **Persistence.** It stores the last *views* (what panels paint) and small metadata, not raw work items. Raw items with relations are too big for 256 KiB values. After a restart the first revalidation re-reads items (about 4–6 calls a view). The expensive part — 400 PR chips, configs, type states and projects — comes back from storage.
 
@@ -142,18 +153,18 @@ All seven calls stand. Three adjustments come from the code and the docs:
 
 ```
  panel / editor request ─┐            scheduler job ─┐
-  (user priority)        │            (background)   │
+  (user lane)            │      (visible or hidden lane)
                          ▼                           ▼
              ┌────────────────── services ──────────────────┐
              │ boards · prs · pipelines · run views · wiki  │
-             │   read/write ▼            ▲ subscribe        │
+             │   read/write ▼            ▲ watch            │
              │        ┌──── entity store (per org) ────┐    │
              │        │ workItems prs prChecks builds  │◄──►│ persisted views + meta
              │        │ timelines configs states ...   │    │ (orca.storage, ≤1.5 MiB)
              │        └────────────────────────────────┘    │
              └───────────────────────┬──────────────────────┘
                                      ▼
-                 governor (per org: concurrency, merge, priority)
+                 governor (per org: tiers, slots, merge, hold, raise)
                                      ▼
                 connections.http → AdoHttp ──observe──► pressure ──► scheduler pace
                                      │                         └──► metrics
@@ -161,9 +172,11 @@ All seven calls stand. Three adjustments come from the code and the docs:
                                     ADO
 ```
 
-### 5.1 Request context
-- `worker/data/context.ts` keeps a `RequestContext { feature, priority }` in an `AsyncLocalStorage`. It follows the async chain into the governor without changing any function signature.
-- **Panel requests.** Every panel handler is wrapped once in `main.ts` with `{ priority: 'user' }`. Its feature comes from the request name:
+### 5.1 Request context and lanes
+`worker/data/context.ts` keeps a `RequestContext { feature, lane }` in an `AsyncLocalStorage`. It follows the async chain into the governor without changing any function signature.
+
+- **Lanes.** A lane is a small mutable object holding a priority: `user`, `visible` or `hidden`. Every request made inside one piece of work shares that work's lane. *Raising* a lane to `user` (when a user call joins the work) re-sorts its queued requests and releases its held ones (5.2).
+- **Panel requests.** Every panel handler is wrapped once in `main.ts` in a fresh `user` lane. Its feature comes from the request name:
 
   | Request name | Feature |
   | --- | --- |
@@ -176,8 +189,13 @@ All seven calls stand. Three adjustments come from the code and the docs:
   | `wiki.*` | `wiki` |
   | `share.*` | `share` |
   | `orgs.*`, `ado.*` | `connect` |
+  | `ui.visibility` | by its `surface`: `work`, `board`, `prs`, `pipelines`, `run` |
 
-- **Scheduler jobs** run with `{ priority: 'background' }`. Their feature comes from the job key prefix: `mine:` → `work`, `board:` → `board`, `prs:` → `prs`, `runs:` and `watch:` → `pipelines`, `runview:` → `run`.
+- **Scheduler jobs** run in a fresh lane per run: `visible` while the job's surface is visible, otherwise `hidden`. Their feature comes from the job key prefix: `mine:` → `work`, `board:` → `board`, `prs:` → `prs`, `runs:` and `watch:` → `pipelines`, `runview:` → `run`.
+- **Shared work.** Every single-flight a user call can join uses one helper pair, `fly` (start work in its own lane) and `join` (wait for it, raising its lane when the caller is a user):
+  - a scheduler run joined by `runNow`
+  - a `Table.read` load joined by a second caller (5.4)
+  - the services' own single-flights: the Work tab's `load`, the PRs and Pipelines `load` and `watchLoad`, and a run view's `load`
 - Code outside any context counts as `{ feature: 'other', priority: 'user' }`.
 
 ### 5.2 Pressure and the governor
@@ -186,63 +204,66 @@ All seven calls stand. Three adjustments come from the code and the docs:
 
 | Signal | Effect |
 | --- | --- |
-| `Retry-After` on any status | `resumeAt = max(resumeAt, now + value)` |
-| 429 without `Retry-After` | `resumeAt = now + 60 s` |
+| A 429 | `resumeAt = max(resumeAt, now + Retry-After)`, or `now + 60 s` without `Retry-After`; also *delayed* for 5 min |
+| `Retry-After` on any other status | *delayed* for 5 min |
 | `X-RateLimit-Delay` | *delayed* for 5 min from the last one seen |
 | `X-RateLimit-Limit` or `-Remaining` | *near* for 5 min; *tight* when remaining ≤ 25% of limit or 0 |
 
-Levels and the factor that multiplies every polling interval:
+Levels, the factor that multiplies every polling interval, and the background slots the governor allows:
 
-| Level | Factor | Effect |
+| Level | Factor | Background slots (of 6) |
 | --- | --- | --- |
-| normal | 1 | — |
-| near | 2 | — |
-| tight | 4 | — |
-| delayed | 8 | — |
-| blocked (`now < resumeAt`) | 8 | no background job starts |
+| normal | 1 | 4 |
+| near | 2 | 3 |
+| tight | 4 | 2 |
+| delayed | 8 | 1 |
+| blocked (`now < resumeAt`) | 8 | 0: background requests are held |
 
-Levels decay to normal 5 minutes after the last signal. That matches Microsoft's "delays stop within five minutes".
+Levels decay to normal 5 minutes after the last signal, matching Microsoft's "delays stop within five minutes".
 
 **Governor** (`worker/data/governor.ts`) wraps `connections.http` and implements `AdoHttp`. Every service gets it instead of the raw client.
 
-- **Concurrency.** At most 6 requests in flight per org. Background requests may hold at most 4 of those slots, or 1 while pressure is *delayed* or *blocked*. User requests always go to the front of the queue.
-- **Merging.** Identical in-flight GETs, and POSTs to `/_apis/wit/wiql` or `/_apis/wit/workitemsbatch`, share one HTTP exchange. The key is org, host, project, path, sorted query, api-version and body JSON.
-  - Each caller keeps its own abort.
-  - The shared exchange is aborted only when every caller has aborted.
+- **Queue.** One queue per org, at most 6 requests in flight. A request's lane is captured at enqueue, and it is dispatched **in its own captured context**, not that of the request that just finished. Order: `user`, then `visible`, then `hidden`, first-in-first-out within a tier.
+- **Background slots.** `visible` and `hidden` requests together may hold at most the slots in the table above. User requests are never limited by that number.
 - **Blocked.** While `resumeAt` is in the future:
-  - a background request fails at once with `rate_limited` and `retryAfterMs`
-  - a user request waits when the wait is ≤ 10 s, and otherwise fails the same way
-
-  This matches the current `http.ts` limits.
+  - background requests are *held*: they leave the queue, hold no slot, and wait until `resumeAt`, their abort, or a raise of their lane
+  - user requests are sent at once, ahead of everything else
+- **Merging.** Identical in-flight GETs, and POSTs to `/_apis/wit/wiql` or `/_apis/wit/workitemsbatch`, share one HTTP exchange. The key is org, host, project, path, sorted query, api-version and body JSON.
+  - Every mergeable request runs on an internal `AbortController`, even with one caller.
+  - Each caller keeps its own abort; the exchange is aborted only when every caller has aborted.
+  - A user caller joining raises the exchange's lane.
+- **Leaks.** An aborted queued or held request leaves the queue at once and rejects with its signal's reason.
 - **Errors pass through unchanged.** `unauthorized` in particular still reaches `connections`, which marks the org expired.
 
 ### 5.3 Scheduler pacing (replaces `pipelines/pressure.ts` and the per-job 429 pause)
 - **New `Job` fields.**
   - `org` lets the scheduler ask the pace for that org.
   - `backgroundMs: number | null`: null means the job idles while hidden.
-  - `quietMax` sets the quiet back-off ceiling.
+  - `quietMax` sets the quiet back-off ceiling, and `quietCapMs` caps how far quiet back-off may stretch the interval.
   - `run` may resolve to `'unchanged'`.
-- **Interval** = base interval (visible or background) × `pace.factor(org)` × quiet factor.
+- **Interval** = min(base × quiet factor, max(base, `quietCapMs`)) × `pace.factor(org)`. The base is `visibleMs` or `backgroundMs`.
 - **Due time** = the later of `lastRunAt + interval` and `pace.resumeAt(org)`.
-- **Quiet back-off.** Each consecutive `'unchanged'` run doubles the quiet factor, up to `quietMax`. A changed run, becoming visible, or `runNow` resets it to 1.
-- **Context.** Timer runs execute in a background context. `runNow` keeps the caller's context, so a Refresh press stays a user request.
+- **Quiet back-off.** Each consecutive `'unchanged'` run doubles the quiet factor, up to `quietMax`. A changed run, becoming visible, or `runNow` resets it to 1. `upsert` keeps it: the runs and run-view jobs re-upsert themselves after every run.
+- **Notification jobs.** The `prs:` and `runs:` jobs drive notifications and status-bar counts, so they set `quietCapMs: 300_000`. Quiet back-off never pushes them past 5 minutes; only ADO's own pressure can.
+- **Lanes.** Timer runs execute in a fresh `visible` or `hidden` lane (5.1). `runNow` from a user call raises the lane of a run already in flight.
 - **Removed.** The per-job `rate_limited` pause, `pipelines/pressure.ts`, `RUNS_SLOWED_MS`, `WATCH_SLOWED_MS` and the run view's `SLOWED_MS`. The pace covers every org-scoped job.
 
 ### 5.4 Entity store
 `worker/data/entities.ts`. One `OrgEntities` per org, made of typed tables. Each table supports:
 - `get` and `fresh(key, maxAgeMs)`
-- `put`, with an optional guard so an older value never replaces a newer one
-- `read(key, maxAgeMs, load)`: cache-through, single-flight per key
+- `put`, with an optional guard so an older value never replaces a newer one; `put` returns the value the table holds afterwards
+- `read(key, maxAgeMs, load, signal)`: cache-through and single-flight per key. The load runs on an internal `AbortController` that aborts only when every joined caller has aborted. A user caller joining raises the load's lane.
 - `drop`
-- `subscribe`, batched per microtask
 
 Every entry carries `at`, the local time it was fetched.
 
+**Watching.** `Entities.watch(table, listener)` hears `(org, keys)` for every org, batched per microtask. It is registered once and survives `forget(org)`, so a service never has to resubscribe.
+
 | Table | Key | Guard | Fresh for | Max entries | Replaces |
 | --- | --- | --- | --- | ---: | --- |
-| `workItems` | id | higher `rev` wins | delta sync decides | 5,000 | per-tick hydrate |
+| `workItems` | id | the `rev` rule below | delta sync decides | 5,000 | per-tick hydrate |
 | `prs` | `project/repo/pr` | — | 2 min while active; forever once completed or abandoned | 2,000 | `chipCache` (state part) |
-| `prChecks` | `project/repo/pr` | — | 2 min if running or queued; 30 min otherwise; at once when the source commit changes | 2,000 | `chipCache` (build part), PRs `checks` |
+| `prChecks` | `project/repo/pr` | — | the checks rule in 5.6 | 2,000 | `chipCache` (build part), PRs `checks` |
 | `prWorkItems` | `project/repo/pr` | — | 10 min active; 60 min closed | 2,000 | PRs `workItems` |
 | `builds` | buildId | — | by caller | 500 | — |
 | `timelines` | buildId | higher `changeId` wins | by caller; forever once finished | 100 | separate list and run-view reads |
@@ -252,45 +273,59 @@ Every entry carries `at`, the local time it was fetched.
 | `projects` | JSON of the setting | — | 60 min | 4 | both `cachedCodeProjects` closures |
 | `wikis` | `all` | — | 10 min | 1 | wiki `listings` |
 
+**The `rev` rule.** An incoming work-item record replaces the stored one when:
+
+```
+incoming.rev > stored.rev || (incoming.rev === stored.rev && (incoming.withRelations || !stored.withRelations))
+```
+
+So an older revision never wins, and a `TASK_FIELDS` read never downgrades a record that has relations.
+
 - Tables are LRU-bounded.
-- Signing out or removing an org drops its entities.
+- `forget(org)` drops every table of that org. It runs only on explicit sign-out or removal of the org (5.7).
 - `fresh` and `read` use one freshness table, `worker/data/freshness.ts`, so every TTL lives in one place.
 
 ### 5.5 Work-item delta sync
 `worker/boards/sync.ts`. Each view keeps a `SyncState`:
+- `clause`: the membership clause text the state was built for
 - `members`: the ids WIQL put in the view
 - `watermark`: the server's `asOf` from the last query
-- `auditedAt`
+- `auditedAt`, `audits`
 - `precision`: `'time'` or `'day'`
 
-A view is the Work tab's "mine" list or an open board. Each tick:
+A view is the Work tab's "mine" list or an open board. **A changed `clause` resets the state.** That covers a new board config, new done states and a Me/Everyone switch. **A board with no requirement types never syncs:** it has no members, as `queryBoardIds` does today, so no query ever builds `IN ()`.
 
-1. **Audit** when there is no state yet, or `auditedAt` is older than 15 minutes, or the known set exceeds 1,500 ids:
-   - Run the full membership WIQL, which gives ids and `asOf`.
-   - Read revisions for `members ∪ known` with `fields: ['System.Id']`. Skip this when the store holds none of them.
-   - Everything whose `rev` differs from the store, or is missing from it, becomes stale.
+Each tick:
+
+1. **Audit** when there is no state, the clause changed, `auditedAt` is older than 15 minutes, or the known set exceeds 1,500 ids:
+   - Run the full membership WIQL. Its `asOf` must parse as a date, or the answer is malformed.
+   - Read revisions for `ids ∪ known` with `fields: ['System.Id']` and `errorPolicy: 'omit'`. Skip this when the store holds none of them.
+     - A known id missing from the answer was deleted or can no longer be read. It leaves the view and is dropped from the store.
+     - Every id in `ids ∪ known` whose `rev` differs from the store, or that the store lacks, becomes stale.
    - Every 4th audit is *deep*: all members are stale. This covers link changes that might not bump `rev`.
+   - The audit is also what removes **board items that age out** of `ChangedDate >= @Today - 14` on the board query: that produces no change event, so only an audit notices.
 2. **Otherwise, run a delta query.** One WIQL with `timePrecision=true` and the change-date clause first:
    ```
    SELECT [System.Id] FROM WorkItems
-   WHERE [System.TeamProject] = @project
-     AND [System.ChangedDate] >= '<watermark − 10 s, ISO Z>'
-     AND ((<view clause>) OR [System.Id] IN (<known ids>))
+   WHERE [System.ChangedDate] >= '<watermark − 10 s, ISO Z>'
+     AND (([System.TeamProject] = @project AND (<view clause>)) OR [System.Id] IN (<known ids>))
    ```
-   `<view clause>` is the existing membership clause minus the project condition. `<known ids>` is the view's members, its parents and, for the Work tab, its child tasks.
+   - `<view clause>` is the membership clause without the project condition. `<known ids>` is the view's members, its parents and, for the Work tab, its child tasks.
+   - The known-ids branch has no project condition, so **an item moved to another project** still shows up as changed. Its re-check below then drops it.
    - **Empty answer:** the view is unchanged and the watermark advances to the new `asOf`. One request.
    - **Otherwise:**
      - Every returned id becomes stale.
-     - Returned ids not yet known are new members: they matched the view clause.
-     - Returned ids that were members are re-checked with one more WIQL, `(<view clause>) AND [System.Id] IN (<them>)`. Those missing from the answer leave the view.
-   - **A 400 from the time-precision query** switches the view to `precision: 'day'`. The query then uses `[System.ChangedDate] >= @Today - 1`, and every non-empty answer gets a revision check, so only items whose `rev` really changed are re-read.
+     - Returned ids not yet known are new members: they matched the project and view clause.
+     - Returned ids that were members are re-checked with one more WIQL, `[System.TeamProject] = @project AND (<view clause>) AND [System.Id] IN (<them>)`. Those missing from the answer leave the view.
+   - **The time-precision 400 only** — a `bad_request` whose message contains "date precision" — switches the view to `precision: 'day'`. The query then uses `[System.ChangedDate] >= @Today - 1`, and every non-empty answer gets a revision check, so only items whose `rev` really changed are re-read. Any other 400 fails the tick as an error.
    - **An answer at `$top`** forces an audit on the next tick.
 3. **Project.** `loadMine` and `loadBoardItems` no longer query. They take `{ members, stale }` and read records through the store:
-   - `ItemSource.items(projectId, ids, stale)` hydrates, with relations, only ids that are stale, missing, or held without relations.
+   - `ItemSource.items(projectId, ids, stale)` hydrates, with relations, only ids that are stale, missing, or held without relations. It returns **the records the store holds after the guard**, never the fetched raw. A replica that answers with an older `rev` therefore can't reach the projection after `recent.overlay` has dropped the write it was protecting.
+   - **Parents are read through `items()` too**, so a quiet tick stays one request.
    - `ItemSource.fields(…)` does the same for child tasks with `TASK_FIELDS`.
    
-   Parents, chips, families, overlay and caps are unchanged.
-4. **Report back.** The tick resolves `'unchanged'` when the projected view's JSON equals the previous one, which feeds the quiet back-off.
+   Chips, families, the overlay and the caps are unchanged.
+4. **Report back.** The tick resolves `'unchanged'` when the projected view's JSON equals the previous one, apart from `updatedAt`. That feeds the quiet back-off.
 
 **Records**
 - The store keeps a stripped copy of each work item:
@@ -308,16 +343,19 @@ A view is the Work tab's "mine" list or an open board. Each tick:
 `loadPrChips` reads `prs` and `prChecks` before touching the network:
 
 1. **Terminal PRs.** A completed or abandoned record is final and is never fetched again. Records are persisted (5.7), so this also holds after a restart.
-2. **Sweep.** Active or unknown refs whose record is older than 2 minutes are grouped by project. For each project, one `GET {project}/_apis/git/pullrequests?searchCriteria.status=active&$top=500` puts every active PR it returns. A ref missing from a list shorter than 500 has closed; it is read once by id, and that record is terminal.
-3. **Checks.** Policy evaluations are re-read for an active PR when:
+2. **Sweep.** Active or unknown refs whose record is older than 2 minutes are grouped by project. For each project, one `GET {project}/_apis/git/pullrequests?searchCriteria.status=active&$top=500`.
+   - **Only the PRs the chips asked for are put.** The other active PRs in the list are ignored, so the sweep can't evict terminal records or fill the saved PR records.
+   - A ref missing from a list shorter than 500 has closed. It is read once by id, and that record is terminal.
+3. **Checks.** Policy evaluations are re-read for an active PR when (section 10, item 6):
    - it has no checks yet
    - its `lastMergeSourceCommit` differs from the commit the checks were read at
+   - its reviewer set or any reviewer's vote differs from those the checks were read with
    - its build is running or queued and the checks are 2 minutes old
    - otherwise, the checks are 30 minutes old
 
-   At most 8 evaluation reads per tick, oldest first, so a cold start spreads out.
-4. **Sharing with the PRs service.** It writes every PR it lists into `prs`, and its enrichment reads and writes `prChecks` and `prWorkItems` with the same policy. Chips and the PRs tab share one copy.
-5. **Live chips.** The boards service subscribes to `prs` and `prChecks`. When they change, it re-projects only the chips of the views that reference those PRs, with no network call, and posts if the JSON changed.
+   A comment-resolution policy that changes without a vote or a push can still lag by up to 30 minutes. At most 8 evaluation reads per tick, oldest first, so a cold start spreads out.
+4. **Sharing with the PRs service.** It writes every PR it lists into `prs`, and its enrichment reads and writes `prChecks` and `prWorkItems` with the same rule. Chips and the PRs tab share one copy.
+5. **Live chips.** The boards service watches `prs` and `prChecks`. When they change, it re-projects the chips of the views that reference those PRs, with no network call. On the Work tab it also recomputes the **nudges**, because `findNudges` reads `item.prs`. It posts only if the JSON changed.
 
 ### 5.7 Persistence (`worker/data/persist.ts`)
 
@@ -340,7 +378,8 @@ A view is the Work tab's "mine" list or an open board. Each tick:
 - All cache keys together stay under **1.5 MiB**. Saving past that evicts the least recently used entries, so the store file stays far below Orca's 5 MiB cliff.
 
 **Writes**
-- At most one write per key per **60 s**, and only when the JSON changed.
+- At most one write per key per **60 s**, and only when the JSON changed. The index key is debounced the same way.
+- A write is dropped at flush time when its org is no longer connected, or its account no longer matches the pinned one.
 - Pending writes flush on `deactivate`.
 
 **Versioning**
@@ -350,11 +389,13 @@ A view is the Work tab's "mine" list or an open board. Each tick:
 **Restore**
 - The first `work.snapshot`, `work.board`, `prs.snapshot` or `runs.snapshot` for an org with nothing in memory loads the saved view.
 - It is used only when the org is connected and `account` equals the pinned account's `adoId`.
-- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The toolbar already shows "Updated ‹relative time›".
+- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The Work, PRs and Pipelines toolbars already show "Updated ‹relative time›". A restored board carries the same message until task 16, which replaces it with the editor's own line, *"Updated ‹relative time› · refreshing…"* (5.11).
 - At the same time, the view's job runs now. When it finishes, the live view replaces the saved one through the usual `*.changed` post.
+- A restored board view's `at` is its `savedAt`, so the 30-second freshness check in `reload` doesn't skip the revalidation.
+- **Restored PR and Pipelines data is marked.** `cachedRun`, `approval()`, `watch()` and `prs.cached()` treat it as a miss and read ADO before acting, so a share or an approval never acts on a saved copy.
 - `meta` and `pr-records` seed the store with their original `at`, so freshness rules still apply. Persisted `runs` seed `runChips` for finished runs.
 
-**Forget.** Removing an org or signing it out deletes its keys. An *expired* org keeps them but is not served until it reconnects.
+**Forget.** Only an explicit sign-out or removal of the org deletes its keys and its entities, through a `forgotten(org)` hook that `connections.signOut` and `connections.remove` call. The state `disconnected` alone is not enough, because it also covers a sign-in interrupted by a restart and a credential check that throws (`connections.ts:107`, `:134`). `forget` also cancels that org's pending writes. An *expired* org keeps its data but is not served until it reconnects.
 
 ### 5.8 Visibility and cadence
 
@@ -362,14 +403,14 @@ Hidden is not gone:
 - A hidden board stops polling, but its view stays in memory. Up to 4 views per org are kept, evicting the oldest hidden one.
 - The Work tab's job idles while hidden (`backgroundMs: null`).
 - Coming back returns the held view at once. It revalidates only if it is past its freshness window: 30 s for the board, the job's due time for the Work tab.
-- PRs and Pipelines keep their slow background polls, because notifications and status-bar counts depend on them.
+- PRs and Pipelines keep their background polls, because notifications and status-bar counts depend on them.
 
-| Job | Visible | Hidden | Quiet back-off ceiling | Before |
+| Job | Visible | Hidden | Quiet back-off | Before |
 | --- | --- | --- | --- | --- |
 | `mine` (Work tab) | 60 s | idle | ×2 | 60 s / 300 s |
 | `board:` | 30 s | idle, view kept | ×2 | 30 s / dropped |
-| `prs:` | 60 s, hot projects every tick, cold every 5 min | 300 s, reviews and notifications | ×2 | 60 s / 300 s, every project |
-| `runs:` | 30 s, hot projects every tick, cold every 5 min | 300 s | ×4 | 30 s / 300 s, every project |
+| `prs:` | 60 s; hot projects every tick, cold every 5 min | 300 s; every project | ×2, capped at 5 min | 60 s / 300 s, every project |
+| `runs:` | 30 s; hot projects every tick, cold every 5 min | 300 s; every project | ×4, capped at 5 min | 30 s / 300 s, every project |
 | `watch:` | 30 s; skips builds read in the last 30 s | 60 s | — | 30 s / 30 s |
 | `runview:` step running | 5 s; build read every 4th tick, logs every 2nd | idle | ×4 | 5 s, 3 calls each tick |
 | `runview:` queued or waiting on approval | 30 s | idle | ×2 | 5 s, 3–4 calls each tick |
@@ -379,33 +420,34 @@ Every interval above is multiplied by the pressure factor (5.2).
 
 **Hot and cold projects** (`worker/data/heat.ts`)
 - A project is *hot* when it returned anything for the user in the last 24 hours. For PRs that is mine or to-review; for pipelines it is my runs, running runs or pending approvals.
-- Cold projects are read at most every 5 minutes while visible and every 15 minutes in the background. Their last results are reused in between, so lists stay complete.
+- A cold project is read at most every **5 minutes, visible or hidden** (section 10, item 5). The hidden ticks come every 5 minutes anyway, so hidden polls read every project; the saving is in the visible tabs. Last results are reused in between, so lists stay complete.
 - Refresh reads every project.
 
-**PR threads** (comment notifications)
+**PR threads** (comment notifications, decision 3)
 - Each PR has its own interval: 2 minutes, doubling while its thread list is unchanged, up to 10 minutes.
 - New activity on the PR resets it to 2 minutes.
+- The cadence map is pruned to the PRs still watched.
 - Hidden observes reuse the last known active list for hot projects instead of re-listing every project.
 
 **Runs list timelines**
-- They come from `timelines`. They are read with the stored `changeId`, and skipped when a run view refreshed that build in the last 5 seconds.
+- They come from `timelines`. They are read with the stored `changeId`, and skipped when a run view refreshed that build in the last 5 seconds. That skip only helps once run views write to the table (task 13 before task 12).
 - Finished timelines are never re-read.
 
 ### 5.9 Metrics (`worker/data/metrics.ts`)
 
-The same `observe` hook feeds a per-org ring of five 1-minute buckets. Each bucket counts:
-- requests by feature (from the context) and by endpoint (path with ids and GUIDs replaced by `{id}`)
+The same `observe` hook feeds a per-org ring of five 1-minute buckets. Because the governor dispatches each request in its own captured context, every response is counted under the right feature. Each bucket counts:
+- requests by feature and by endpoint (path with ids and GUIDs replaced by `{id}`)
 - 429s, delayed responses and the sum of `X-RateLimit-Cost` where sent
 - endpoints that returned an `ETag`
 
 It also keeps the last rate-limit headers seen and the pressure level. Memory is bounded.
 
-`Azure DevOps: Connection status` adds a block per connected org:
+`Azure DevOps: Connection status` adds a block per connected org that had traffic in the last 5 minutes. An org with no traffic gets no block:
 
 ```
 contoso — connected as dev@contoso.com
   Requests, last 5 min: 41 (board 18, work 9, prs 8, pipelines 6)
-  Busiest: POST /_apis/wit/wiql 14 · GET /_apis/git/pullrequests 7 · POST /_apis/wit/workitemsbatch 5
+  Busiest: POST /{team}/_apis/wit/wiql 14 · GET /_apis/git/pullrequests 7 · POST /_apis/wit/workitemsbatch 5
   Rate limit: near, 152 of 200 TSTU left, polling ×2 (headers 40 s ago)
 ```
 
@@ -416,30 +458,40 @@ Each board remembers its last **Me / Everyone** choice. A board on *Me* reads on
 - **Where.** The choice is kept per org, team and board in `orca.storage`, under `boardFilters:<org>`.
   - It is a small map of `<teamId>/<boardId>` → `everyone`, holding at most 50 boards per org. The oldest choice is dropped first.
   - It is a preference, not cache. It sits outside `adoCache:`, so the cache budget and the version sweep never remove it.
-- **Protocol.** `work.board` takes `everyone` as optional, and its answer always carries the filter it used (`everyone: boolean`).
+- **Protocol.** `work.board` takes an optional `everyone` and an optional `remember`, and its answer always carries the filter it used (`everyone: boolean`).
   - Without `everyone`, the worker uses the remembered choice, or *Everyone* for a board never opened.
-  - With it, the worker remembers the choice.
-- **Editor.** It opens with neither button pressed, sends no filter on its first request, and takes the filter from the answer. Pressing **Me** or **Everyone** sends the choice.
+  - **Only `remember: true` stores a choice.** The editor sends it only from a press on **Me** or **Everyone**. A later load that re-sends the tab's current filter never overwrites a choice made in another editor tab.
+- **Editor.** It opens with neither button pressed, sends no filter on its first request, and takes the filter from the answer.
 - **Saved views** (5.7) are stored with their filter, so the remembered choice also picks the right saved view at start-up.
+
+### 5.11 Board age in the editor (section 10, item 7)
+
+Today `BoardResult` has no `updatedAt`, and the board editor ignores `stale` (`board-views.ts:7`, `src/board/board.ts:122–127`).
+
+- `BoardResult` gains `updatedAt`, set when the result was loaded, or to `savedAt` for a restored view.
+- While a result is `stale`, the editor's existing note shows *"Updated ‹relative time› · refreshing…"*, matching the panel's wording.
+  - A stale result that also carries a failure message shows *"Updated ‹relative time› · ‹message›"* instead.
+  - The relative time comes from `Intl.RelativeTimeFormat` in the frame's locale, recomputed on each paint and every 60 s while the note shows.
+- A live result clears it.
 
 ## 6. Data flows
 
 ### Work tab
 ```
-start ─► work.snapshot ─► memory? ─no─► persisted (account ok)? ─yes─► paint stale "Updated 3 h ago" + run mine now
-                             │yes                         └no─► first tick (audit) then paint
-tick (60 s visible, idle hidden)
+start ─► work.snapshot ─► memory? ─no─► persisted (connected, account ok)? ─yes─► paint stale "Updated 3 h ago" + run mine now
+                             │yes                                └no─► first tick (audit) then paint
+tick (60 s visible, idle hidden; visible lane)
   └─► sync: delta WIQL ──empty──► 'unchanged' (1 request)
-                 └ids─► membership re-check (if members changed) ─► items(stale) hydrate ─► parents/children via store
+                 └ids─► membership re-check (if members changed) ─► items(stale) ─► parents/children via items()/fields()
   └─► chips: store (prs/prChecks) ─► sweep/evaluations only when due
-  └─► project ─► overlay recent writes ─► cap ─► post work.changed if JSON changed ─► persist (≤1/min)
-move ─► PATCH ─► reload 1 item ─► store.put (rev guard) + recent.record ─► publish to every holder
+  └─► project ─► overlay recent writes ─► cap ─► post work.changed ─► persist (≤1/min)
+move ─► PATCH ─► reload 1 item ─► store.put (rev rule) + recent.record ─► publish to every holder
 ```
 
 ### Board editor
 ```
-open/visible ─► work.board ─► held view? ─yes─► return now; revalidate if >30 s
-                      └no─► persisted? ─yes─► return stale + run job now
+open/visible ─► work.board (filter: given, or remembered) ─► held view? ─yes─► return now; revalidate if >30 s
+                      └no─► persisted (filter matches)? ─yes─► return stale ("Updated ‹age› · refreshing…") + run job now
                                └no─► first tick
 tick (30 s visible; hidden: job removed, view kept) ─► same sync + project as Work, board clause
 store.prs/prChecks change ─► re-chip affected items ─► post work.boardChanged if changed
@@ -447,9 +499,9 @@ store.prs/prChecks change ─► re-chip affected items ─► post work.boardCh
 
 ### PRs
 ```
-prs:tick ─► heat: hot projects (+ cold if due) ─► lists ─► prs table (feeds chips)
-          ─► enrichment via prWorkItems/prChecks policy (≤8 evaluation reads/tick)
-          ─► compose ─► 'unchanged' or post prs.changed ─► persist
+prs:tick ─► heat: hot projects (+ cold every 5 min) ─► lists ─► prs table (feeds chips)
+          ─► enrichment via prWorkItems/prChecks rule (≤8 evaluation reads/tick)
+          ─► compose ─► 'unchanged' (≤5 min) or post prs.changed ─► persist
 observe ─► threads for PRs whose per-PR interval is due ─► notifier
 panel prs.snapshot ─► last full (even if stale) at once ─► revalidate if >60 s
 ```
@@ -458,7 +510,7 @@ panel prs.snapshot ─► last full (even if stale) at once ─► revalidate if
 ```
 runs:tick ─► heat ─► builds/approvals lists ─► builds table
           ─► timelines: active runs with stored changeId (skip if run view fresh) ─► runChips for finished
-          ─► compose ─► 'unchanged' (×4 back-off when nothing moved) or post runs.changed ─► persist
+          ─► compose ─► 'unchanged' (≤5 min) or post runs.changed ─► persist
 watch:tick ─► builds not read in last 30 s ─► buildsByIds
 runview:tick ─► timeline(changeId) every tick · logs every 2nd · build every 4th ─► timelines table
 ```
@@ -470,13 +522,13 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 | Surface | Before | After, quiet | After, busy | Where the saving comes from |
 | --- | ---: | ---: | ---: | --- |
 | Work tab, visible, board open | 20 | 3 | 9 | 1 delta WIQL a tick, ×2 when quiet; chips shared |
-| Team board, visible | 221 | 12 | 38 | delta sync; chip sweep; evaluations only when running or stale; no hourly burst |
+| Team board, visible | 221 | 12 | 38 | delta sync; chip sweep; evaluations only when due; no hourly burst |
 | **Work + board** | **241** | **15** | **47** | **≈16× quiet, ≈5× busy** |
 | Work tab, hidden | 4–18 | 0 | 0 | idles |
-| PRs, visible | 159 | 40 | 65 | hot/cold projects; checks policy; thread back-off |
-| PRs, hidden | 26 | 8 | 11 | hot projects; no full re-list for threads |
-| Pipelines, visible | 322 | 45 | 131 | hot/cold projects; ×4 quiet; shared timelines |
-| Pipelines, hidden | 20 | 9 | 11 | hot/cold |
+| PRs, visible | 159 | 40 | 65 | hot/cold projects; checks rule; thread back-off |
+| PRs, hidden | 26 | 16 | 20 | no full re-list for threads; thread back-off. All projects are still read every 5 min |
+| Pipelines, visible | 322 | 50 | 131 | hot/cold projects; ×4 quiet (≤5 min); shared timelines |
+| Pipelines, hidden | 20 | 20 | 20 | none: every project every 5 min, for notifications |
 | Watch | 10 | 0–5 | 0–5 | dedupe with the runs list; 60 s hidden |
 | Run view, step running | 180 | 80 | 105 | build every 4th tick; logs every 2nd; ×4 quiet |
 | Run view, waiting on approval | 240 | 15 | 30 | 30 s cadence |
@@ -485,12 +537,14 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 
 | Session | Before | After |
 | --- | ---: | ---: |
-| Sidebar on Work, board and run tab visible | ~477 | ~110–180 |
-| Sidebar on Pipelines | ~763 | ~150–300 |
+| Sidebar on Work, board and run tab visible | ~477 | ~135–200 |
+| Sidebar on PRs | ~594 | ~155–235 |
+| Sidebar on Pipelines | ~763 | ~160–295 |
 | Worker start | ~560 in the first minute | ~25–40 (persisted paint, then audits, sweep, ≤8 evaluations a tick) |
 | Hourly | +~370 | 0 (terminal chips are final) |
 
 - **The live run view now dominates.** It is the user's foreground focus. The pressure factor still slows it when ADO pushes back.
+- **The hidden PRs and Pipelines polls barely shrink.** That is the price of item 5 in section 10: every project is still read every 5 minutes so notifications stay within about 5 minutes.
 - **The busy board's remaining cost is real change.** That is 2–3 requests per change tick, plus evaluations for running PR builds. Remembering each board's filter (5.10) removes most of it for anyone who works on *Me*. The lever left after that is a 4-minute instead of 2-minute check for running PR builds.
 - **TSTUs fall further than requests.** The quiet-tick delta query has a change-date clause first and returns nothing. It replaces a 500-row WIQL plus up to 3 full-field `workitemsbatch` reads every tick. The metrics' `X-RateLimit-Cost` sum will show the real figure.
 
@@ -498,14 +552,15 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 
 **Order.** Every task in the plan leaves the plugin building, passing tests and working. The order puts the biggest rate-limit win first:
 
-1. Pressure and governor (tasks 1–3). They change no behaviour except throttling, and every service still calls `AdoHttp.json`.
-2. Board and Work fixes (tasks 4–7, plus 15): views kept when hidden, then the remembered board filter (task 15, right after task 4), then the store under the existing caches, then delta sync, then chips from the store.
-3. Persistence (tasks 8–9). It only adds a faster first paint, and a wrong key shape is fixed by bumping the version prefix.
-4. PR and pipeline cadence (tasks 10–13). Each is local to its service.
-5. Metrics (task 14). It depends only on task 2, so the lead can run it early to record a baseline before the other tasks land.
+1. Pressure and governor (tasks 1–2), then metrics (task 14), so the status command records a "before" baseline, then the scheduler (task 3).
+2. Board and Work fixes: views kept when hidden (task 4), the remembered board filter (task 15), the store under the existing caches (task 5), delta sync (task 6), chips from the store (task 7).
+3. Persistence of Work and boards (task 8), then the board's age in the editor (task 16, in parallel with task 9), then PRs and Pipelines persistence (task 9).
+4. PR and pipeline cadence: hot and cold projects (task 10), the run view (task 13, in parallel with tasks 6–11), then PRs (task 11) and pipelines (task 12) in parallel.
+5. One docs pass at the end (task 17), so code tasks don't collide on the docs.
 
 **Safety**
-- Only one panel protocol type changes. `work.board` takes an optional `everyone` and answers with the filter it used (5.10). The editor and the worker ship in the same plugin, so they always match. Restored views use the existing `stale`, `message` and `updatedAt` fields.
+- Task 2 keeps the old slow-down wrapped around the governor for the existing services until task 3 replaces it, so `main.test.ts`'s cross-feature slow-down test keeps passing in between.
+- Two panel protocol types change. `work.board` gains an optional `everyone` and `remember` and answers with `everyone` (5.10). `BoardResult` gains `updatedAt` (5.11). The editor and the worker ship in the same plugin, so they always match. Restored views use the existing `stale`, `message` and `updatedAt` fields.
 - `recent.ts`, the cap functions and the message budgets stay. The new code calls them with explicit budgets.
 - There is no feature flag. Rolling back is a revert per task, and the persisted keys are versioned and budgeted, so old data is harmless.
 
@@ -513,24 +568,37 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 
 | Risk | Mitigation |
 | --- | --- |
-| The delta query misses a change (replica lag, clock, link-only edits) | Watermark is the server's `asOf` with a 10 s overlap; revision audit every 15 min; deep audit hourly; Refresh forces an audit |
-| `timePrecision` rejected or ignored | Day-precision fallback with a revision check (3.9) |
+| The delta query misses a change (replica lag, clock, link-only edits, age-out, deletion) | Watermark is the server's `asOf` with a 10 s overlap; revision audit every 15 min, which also drops deleted and aged-out items; deep audit hourly; Refresh forces an audit |
+| `timePrecision` rejected or ignored | Day-precision fallback with a revision check, only for the date-precision 400 (3.9) |
 | A known-ids list too long for WIQL (32K characters) | Over 1,500 known ids, the view audits every tick instead |
-| `AsyncLocalStorage` context lost across a callback | Defaults to `user` / `other`; tests assert timer runs are `background` and panel handlers are `user` |
-| A merged request aborted by one caller | Per-caller abort; shared exchange aborted only when every caller is gone (tested) |
-| Persisted data shown as current | Always `stale: true` with the saved message until a live load; account-bound; never served for an org that isn't connected |
-| Storage hitting the 5 MiB cliff | 160 KiB per value; 1.5 MiB total; LRU eviction; version sweep; one index key |
+| `AsyncLocalStorage` context lost across a callback | Defaults to `user` / `other`; the governor dispatches each request in its captured context; tests assert timer runs carry `visible` or `hidden` and panel handlers `user` |
+| Background work starving a click | User requests are never held and always go first |
+| A user waiting on background work held by a block | Joining raises the lane, which releases the held requests |
+| A merged request aborted by one caller, or an aborted request leaking a slot | Internal controllers; per-caller abort; aborted entries leave the queue at once (tested) |
+| Persisted data shown as current | Always `stale: true` with the saved message, or the editor's age line, until a live load; account-bound; never served to an org that isn't connected; restored PR and Pipelines data never acted on |
+| Saved data deleted by a restart mid sign-in | Only explicit sign-out or removal deletes it |
+| Storage hitting the 5 MiB cliff | 160 KiB per value; 1.5 MiB total; LRU eviction; debounced index; version sweep |
 | Re-projection floods panel posts (200 per 10 s) | Batched per microtask; posted only when the JSON changed; capped |
 | Quiet back-off hides a teammate's change for up to 60 s on the board | Bounded ×2; becoming visible or Refresh resets it |
-| Cold projects delay a first review request or run by up to 5 min | Decision 2 |
-| A user request stuck behind `Retry-After` | Waits up to 10 s, then the existing "throttling" message |
+| `Retry-After` on a 200 honoured more loosely than Microsoft's text | Lead's call: ×8 background pace. To follow the text literally, also set a background-only `resumeAt` from it in `rate-limit.ts` |
 | A 304 misread as an auth failure if conditional requests are tried later | Called out in 3.5 |
 
 ## 10. Decisions for the user
 
-Settled by the user on 2026-11-11. All four take the recommended option.
+**Settled by the user on 2026-11-11.** All four take the recommended option.
 
 1. **Where the last-known data lives: `orca.storage`**, within a 1.5 MiB budget (5.7). The alternative, a file under `~/.orca-azure-devops/cache/`, was not chosen.
 2. **Cold projects are polled every 5 minutes** in the PRs and Pipelines tabs (5.8). In a project where you've had no PRs or runs for 24 hours, a new review request, run or approval can take up to 5 minutes to appear and to notify.
 3. **PR comment notifications back off** from 2 to 10 minutes on PRs with no new activity (5.8), so a comment on a quiet PR can take up to 10 minutes to notify. Today it is ≤1 minute while the PRs tab is visible and ≤5 minutes hidden.
 4. **Each board remembers its last Me / Everyone filter** (5.10). A board never opened before starts on *Everyone*, as today.
+
+**Lead's calls, pending user confirmation.** Planned as below. Each names what to change if the user decides otherwise.
+
+5. **Notification latency.** A new review request, failed run or approval in a cold project notifies within about 5 minutes, even while the panel is hidden.
+   - Cold projects are checked every 5 minutes in the background as well (5.8).
+   - Quiet back-off never stretches the `prs:` or `runs:` job past 5 minutes (`quietCapMs`, 5.3).
+   - *To flip:* change `COLD_EVERY_MS` and `quietCapMs`, and recompute the hidden estimates in section 7.
+6. **PR policy lag.** Policy evaluations are re-read on a push, on any reviewer or vote change, every 2 minutes while a build runs, and otherwise every 30 minutes (5.6). A comment-resolution policy change without a vote or push can lag up to 30 minutes.
+   - *To flip:* change `FRESHNESS.checksIdle`.
+7. **Board age in the editor.** It shows *"Updated ‹relative time› · refreshing…"* while a board view is stale, and clears when a live result arrives (5.11, task 16).
+   - *To flip:* drop task 16. Restored boards then show only the saved-data message.
