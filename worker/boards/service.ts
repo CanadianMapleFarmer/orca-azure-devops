@@ -194,7 +194,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     if (!account) return null
     const saved = await deps.persisted.load(request.org, savedBoardName(request.args.teamId, boardId), account)
     if (!saved || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
-    return { result: { ...saved.value.result, stale: true, message: SHOWING_SAVED }, savedAt: saved.savedAt }
+    return { result: { ...saved.value.result, stale: true, updatedAt: saved.savedAt }, savedAt: saved.savedAt }
   }
 
   function sourceOf(status: OrgStatus): ItemSource {
@@ -299,7 +299,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const { ids, sync } = board.requirementTypes.length === 0 ? { ids: NO_MEMBERS, sync: null } : await synced(source, board, boardClause(board, request.everyone), request)
     const loaded = await loadBoardItems(source, board, ids)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
-    const projected: BoardResult = { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }
+    const projected: BoardResult = { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}), updatedAt: now() }
     persist(status, savedBoardName(board.teamId, board.boardId), () => ({ result: capBoard(projected, loaded.truncated, VALUE_BUDGET_BYTES), everyone: request.everyone }))
     return { result: capBoard(projected, loaded.truncated), sync, known: loaded.known }
   }

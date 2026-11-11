@@ -905,7 +905,7 @@ test('a failed background board reload keeps the last board and says so, until a
   h.ado.clear()
   await h.clock.tick(30_000)
   assert.equal(h.boardPosts.length, 2)
-  assert.deepEqual(await h.service.board(args), view)
+  assert.deepEqual(await h.service.board(args), { ...view, updatedAt: T0 + MINUTE })
 })
 
 test('disposing the scheduler aborts an in-flight "mine" load and shows no error', async () => {
@@ -2153,7 +2153,7 @@ test('the board paints a saved view at once when no view is held, and revalidate
   const gate = h.ado.hold(() => true)
 
   const painted = await h.service.board(STORIES_BOARD)
-  assert.deepEqual(painted, { ...view, stale: true, message: SHOWING_SAVED })
+  assert.deepEqual(painted, { ...view, stale: true })
   assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
   assert.deepEqual(h.boardPosts, [])
 
@@ -2176,6 +2176,28 @@ test('a saved board view is served only for the filter it was saved with', async
   assert.equal(mine.everyone, false)
   assert.equal(mine.stale, undefined)
   assert.ok(h.ado.calls.some(isStoriesWiql))
+})
+
+test('a board result carries when it was loaded, and a restored one carries when it was saved', async () => {
+  const { view, cache } = await savedBoard()
+  assert.equal(view.updatedAt, T0)
+  const savedAt = T0 + 5 * MINUTE
+  ;(cache[cacheKey(ORG, `board:${TEAM}:${STORIES}`)] as { savedAt: number }).savedAt = savedAt
+
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  const gate = h.ado.hold(() => true)
+  const painted = await h.service.board(STORIES_BOARD)
+  assert.equal(painted.stale, true)
+  assert.equal(painted.updatedAt, savedAt)
+  assert.equal(painted.message, undefined, "the editor's own note says it is refreshing")
+
+  gate.release()
+  await drain()
+  const live = await h.service.board(STORIES_BOARD)
+  assert.equal(live.stale, undefined)
+  assert.equal(live.updatedAt, T0 + 30 * MINUTE)
 })
 
 test('saved board configs, type states and PR records seed the store with their original age', async () => {
