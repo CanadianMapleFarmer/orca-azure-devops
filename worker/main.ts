@@ -194,6 +194,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     now: Date.now,
     entities,
     persisted,
+    savedTables,
     log
   })
   const showNotification = (n: Shown) => orca.host.call('notifications.show', n)

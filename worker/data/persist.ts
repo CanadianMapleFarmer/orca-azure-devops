@@ -7,6 +7,7 @@ export const CACHE_VERSION = 'v1'
 export const VALUE_BUDGET_BYTES = 160 * 1024
 export const TOTAL_BUDGET_BYTES = 1536 * 1024
 export const WRITE_EVERY_MS = 60_000
+export const REFRESH_EVERY_MS = 15 * 60_000
 export const MAX_SAVED_BOARDS = 3
 
 export interface CachePort {
@@ -38,6 +39,7 @@ const VERSIONED = `${CACHE_PREFIX}${CACHE_VERSION}:`
 const INDEX_KEY = `${VERSIONED}index`
 const BOARD_NAME = 'board:'
 const MIN_DELAY_MS = 1000
+const TICK_STAMP = 'updatedAt'
 
 export function cacheKey(org: string, name: string): string {
   return `${VERSIONED}${org}:${name}`
@@ -48,6 +50,7 @@ export function createPersisted(deps: PersistedDeps): Persisted {
   const pending = new Map<string, Pending>()
   const timers = new Map<string, unknown>()
   const written = new Map<string, string>()
+  const refreshAt = new Map<string, number>()
   const lastWrite = new Map<string, number>()
   let index: Promise<Map<string, Use>> | null = null
   let queue = Promise.resolve()
@@ -93,6 +96,10 @@ export function createPersisted(deps: PersistedDeps): Persisted {
     )
   }
 
+  function current(key: string, body: string): boolean {
+    return written.get(key) === body && now() < (refreshAt.get(key) ?? Infinity)
+  }
+
   function cancel(key: string): void {
     if (timers.has(key)) clock.clearTimeout(timers.get(key))
     timers.delete(key)
@@ -107,6 +114,7 @@ export function createPersisted(deps: PersistedDeps): Persisted {
     const bytes = byteLength(next.value)
     if (bytes > VALUE_BUDGET_BYTES) {
       written.set(key, next.body)
+      refreshAt.delete(key)
       deps.log(`Saved data: ${key} is ${bytes} bytes, over the ${VALUE_BUDGET_BYTES}-byte budget; not saved.`)
       return
     }
@@ -116,6 +124,7 @@ export function createPersisted(deps: PersistedDeps): Persisted {
     await evict(used, key)
     await port.set(key, saved)
     written.set(key, next.body)
+    refreshAt.set(key, saved.savedAt + REFRESH_EVERY_MS)
     schedule(INDEX_KEY)
   }
 
@@ -132,6 +141,7 @@ export function createPersisted(deps: PersistedDeps): Persisted {
       await port.delete(key)
       used.delete(key)
       written.delete(key)
+      refreshAt.delete(key)
     }
   }
 
@@ -164,8 +174,8 @@ export function createPersisted(deps: PersistedDeps): Persisted {
 
     save(org, name, account, value) {
       const key = cacheKey(org, name)
-      const body = JSON.stringify([account, value])
-      if ((pending.get(key)?.body ?? written.get(key)) === body) return
+      const body = contentOf(account, value)
+      if (!pending.has(key) && current(key, body)) return
       pending.set(key, { org, account, value, body })
       schedule(key)
     },
@@ -184,6 +194,7 @@ export function createPersisted(deps: PersistedDeps): Persisted {
           if (!key.startsWith(prefix)) continue
           used.delete(key)
           written.delete(key)
+          refreshAt.delete(key)
           lastWrite.delete(key)
         }
         schedule(INDEX_KEY)
@@ -207,6 +218,10 @@ export function createPersisted(deps: PersistedDeps): Persisted {
       })
     }
   }
+}
+
+function contentOf(account: string, value: unknown): string {
+  return JSON.stringify([account, value], (key, held: unknown) => (key === TICK_STAMP ? undefined : held))
 }
 
 function isEntryKey(key: string): boolean {

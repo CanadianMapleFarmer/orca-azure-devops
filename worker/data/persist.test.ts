@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { OrgState, OrgStatus } from '../../src/shared/types'
 import { fakeClock, memoryCache } from '../test-support'
-import { cacheKey, createPersisted, TOTAL_BUDGET_BYTES, VALUE_BUDGET_BYTES, WRITE_EVERY_MS } from './persist'
+import { cacheKey, createPersisted, REFRESH_EVERY_MS, TOTAL_BUDGET_BYTES, VALUE_BUDGET_BYTES, WRITE_EVERY_MS, type Saved } from './persist'
 
 const T0 = Date.parse('2026-11-11T10:00:00Z')
 const MINUTE = 60_000
@@ -93,6 +93,69 @@ test('writes, including the index, are debounced to one per key per minute and s
   s.setOrgs([status('contoso', GRACE)])
   await s.clock.tick(0)
   assert.equal(s.cache.writes.length, 6, 'the same value for another account is a change')
+})
+
+interface Stamped { n: number; updatedAt: number }
+interface SavedBoardValue { result: Stamped; everyone: boolean }
+
+function countOf(writes: string[], key: string): number {
+  return writes.filter(written => written === key).length
+}
+
+test('a view whose only change is its updatedAt is written again only once its saved copy is 15 minutes old', async () => {
+  const s = setup()
+  const BOARD = cacheKey('contoso', 'board:t1:b1')
+  const written: Record<string, number[]> = { [WORK]: [], [BOARD]: [] }
+  for (let minute = 0; minute <= 60; minute += 1) {
+    const before = { [WORK]: countOf(s.cache.writes, WORK), [BOARD]: countOf(s.cache.writes, BOARD) }
+    s.persisted.save('contoso', 'work', ADA, { n: 1, updatedAt: s.clock.now() })
+    s.persisted.save('contoso', 'board:t1:b1', ADA, { result: { n: 1, updatedAt: s.clock.now() }, everyone: true })
+    await s.clock.tick(0)
+    for (const key of [WORK, BOARD]) if (countOf(s.cache.writes, key) > before[key]) written[key].push(minute)
+    await s.clock.tick(MINUTE)
+  }
+
+  assert.equal(REFRESH_EVERY_MS, 15 * MINUTE)
+  assert.deepEqual(written, { [WORK]: [0, 15, 30, 45, 60], [BOARD]: [0, 15, 30, 45, 60] })
+  const work = s.cache.data[WORK] as Saved<Stamped>
+  assert.deepEqual([work.savedAt, work.value.updatedAt], [T0 + 60 * MINUTE, T0 + 60 * MINUTE], 'the refresh carries the latest stamp')
+  assert.equal((s.cache.data[BOARD] as Saved<SavedBoardValue>).value.result.updatedAt, T0 + 60 * MINUTE)
+})
+
+test('a real change is written within the 60 s debounce, however long the view was quiet', async () => {
+  const s = setup()
+  for (let minute = 0; minute < 10; minute += 1) {
+    s.persisted.save('contoso', 'work', ADA, { n: 1, updatedAt: s.clock.now() })
+    await s.clock.tick(MINUTE)
+  }
+  assert.equal(countOf(s.cache.writes, WORK), 1)
+
+  s.persisted.save('contoso', 'work', ADA, { n: 2, updatedAt: s.clock.now() })
+  await s.clock.tick(0)
+  assert.equal(countOf(s.cache.writes, WORK), 2, 'at once, since the last write is over a minute old')
+
+  await s.clock.tick(30_000)
+  s.persisted.save('contoso', 'work', ADA, { n: 3, updatedAt: s.clock.now() })
+  await s.clock.tick(WRITE_EVERY_MS - 30_000 - 1)
+  assert.equal(countOf(s.cache.writes, WORK), 2)
+  await s.clock.tick(1)
+  assert.equal(countOf(s.cache.writes, WORK), 3, 'within 60 s of the last write')
+  assert.equal((s.cache.data[WORK] as Saved<Stamped>).value.n, 3)
+})
+
+test('a saved copy is never more than 15 minutes older than the last time its content was confirmed', async () => {
+  const s = setup()
+  let n = 0
+  for (let step = 0; step < 120; step += 1) {
+    if (step % 41 === 0) n += 1
+    const confirmed = s.clock.now()
+    s.persisted.save('contoso', 'work', ADA, { n, updatedAt: confirmed })
+    await s.clock.tick(0)
+    const saved = s.cache.data[WORK] as Saved<Stamped>
+    assert.ok(confirmed - saved.savedAt < REFRESH_EVERY_MS, `step ${step}: saved ${(confirmed - saved.savedAt) / 1000} s before`)
+    assert.ok(confirmed - saved.value.updatedAt < REFRESH_EVERY_MS, `step ${step}: stamped ${(confirmed - saved.value.updatedAt) / 1000} s before`)
+    await s.clock.tick(step % 3 === 0 ? 30_000 : 97_000)
+  }
 })
 
 test('a pending write is dropped when its org is no longer connected or its account changed', async () => {

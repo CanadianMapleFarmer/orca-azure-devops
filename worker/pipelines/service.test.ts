@@ -761,6 +761,21 @@ function fixtureTimeline(ado: FakePipelines): RawTimeline {
   return structuredClone(ado.runs.timelines.get(4520) ?? assert.fail('no timeline for 4520'))
 }
 
+test('a quiet Pipelines tab keeps loading in full without rewriting its saved copy until that copy is 15 minutes old', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const writes = () => h.cache.writes.filter(entry => entry === cacheKey(ORG, 'runs')).length
+  const loads = h.ado.count(isMineRuns)
+
+  await h.clock.tick(14 * MINUTE)
+  assert.ok(h.ado.count(isMineRuns) >= loads + 2 * 10, 'every project kept loading')
+  assert.equal(writes(), 1, 'written once, after the first load')
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(writes(), 2)
+})
+
 async function savedRuns(): Promise<{ live: RunsSnapshot; cache: Record<string, unknown> }> {
   const before = harness()
   const live = await before.service.snapshot(ORG)

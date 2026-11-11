@@ -11,7 +11,7 @@ import { fly, inLane, join, type Flight } from '../data/context'
 import type { Entities, OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
-import { createSavedTables } from '../data/saved-tables'
+import type { SavedTables } from '../data/saved-tables'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
@@ -51,6 +51,7 @@ export interface BoardsServiceDeps {
   now: () => number
   entities: Entities
   persisted: Persisted
+  savedTables: SavedTables
   log: (message: string) => void
 }
 
@@ -91,11 +92,10 @@ const INFO_FIELDS = ['System.WorkItemType', 'System.Title', 'System.TeamProject'
 const NO_MEMBERS: ViewIds = { members: [], stale: new Set() }
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
-  const { http, scheduler, now, entities } = deps
+  const { http, scheduler, now, entities, savedTables } = deps
   const nudges = createNudgeStore(deps.store)
   const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
-  const savedTables = createSavedTables(entities, deps.persisted)
   const sources = new Map<string, ItemSource>()
   const work = new Map<string, OrgWork>()
   const homes = new Map<string, string>()
@@ -316,7 +316,6 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   function forget(org: string): void {
     work.delete(org)
     sources.delete(org)
-    savedTables.forget(org)
     recent.drop(mineKey(org))
     boardViews.forget(org)
   }

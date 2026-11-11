@@ -624,6 +624,21 @@ test('reloadFresh waits for the load in flight and then runs a full load of its 
   assert.deepEqual(await rejection(h.service.reloadFresh('fabrikam')), new AdoError('unauthorized', 401, NOT_CONNECTED))
 })
 
+test('a quiet PRs tab keeps loading in full without rewriting its saved copy until that copy is 15 minutes old', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const writes = () => h.cache.writes.filter(entry => entry === cacheKey(ORG, 'prs')).length
+  const loads = h.ado.count(isMineActive)
+
+  await h.clock.tick(14 * MINUTE)
+  assert.ok(h.ado.count(isMineActive) >= loads + 2 * 10, 'every project kept loading')
+  assert.equal(writes(), 1, 'written once, after the first load')
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(writes(), 2)
+})
+
 async function savedPrs(): Promise<{ live: PrSnapshot; cache: Record<string, unknown> }> {
   const before = harness()
   const live = await before.service.snapshot(ORG)

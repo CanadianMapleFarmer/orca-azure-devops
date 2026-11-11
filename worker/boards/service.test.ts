@@ -8,6 +8,7 @@ import type { StorePort } from '../connections'
 import { currentContext, type Priority } from '../data/context'
 import { createEntities } from '../data/entities'
 import { cacheKey, createPersisted } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
 import { createScheduler } from '../poll/scheduler'
 import { drain, fakeClock, memoryCache } from '../test-support'
 import {
@@ -109,6 +110,7 @@ function harness(first: OrgStatus = status(), restart: { cache?: Record<string, 
     now: clock.now,
     entities,
     persisted,
+    savedTables: createSavedTables(entities, persisted),
     log: message => logs.push(message)
   })
   return {
@@ -2198,6 +2200,40 @@ test('a board result carries when it was loaded, and a restored one carries when
   const live = await h.service.board(STORIES_BOARD)
   assert.equal(live.stale, undefined)
   assert.equal(live.updatedAt, T0 + 30 * MINUTE)
+})
+
+test('a quiet Work tab and board keep polling without rewriting their saved copies, refreshing each at most once per 15 minutes', async () => {
+  const h = harness(status({ account: ALEX }))
+  h.service.visibility({ surface: 'work', org: ORG, visible: true })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  await h.service.board(STORIES_BOARD)
+  await h.clock.tick(0)
+  const views = [cacheKey(ORG, 'work'), cacheKey(ORG, `board:${TEAM}:${STORIES}`)]
+  const written: number[][] = views.map(() => [])
+  const record = () =>
+    views.forEach((key, index) => {
+      while (written[index].length < h.cache.writes.filter(entry => entry === key).length) written[index].push((h.clock.now() - T0) / MINUTE)
+    })
+  record()
+  assert.deepEqual(written, [[0], [0]])
+  const loads = [h.ado.count(isMineWiql), h.ado.count(isBoardWiql)]
+
+  for (let minute = 1; minute <= 10; minute += 1) {
+    await h.clock.tick(MINUTE)
+    record()
+  }
+  assert.ok(h.ado.count(isMineWiql) >= loads[0] + 4 && h.ado.count(isBoardWiql) >= loads[1] + 8, 'both views kept polling')
+  assert.deepEqual(written, [[0], [0]], 'nothing changed, so nothing was written')
+
+  for (let minute = 11; minute <= 60; minute += 1) {
+    await h.clock.tick(MINUTE)
+    record()
+  }
+  for (const [index, times] of written.entries()) {
+    assert.ok(times.length >= 4, `${views[index]} is refreshed: ${times}`)
+    times.slice(1).forEach((at, step) => assert.ok(at - times[step] >= 15 && at - times[step] <= 17, `${views[index]} written at ${times}`))
+  }
 })
 
 test('saved board configs, type states and PR records seed the store with their original age', async () => {
