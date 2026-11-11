@@ -367,20 +367,21 @@ Each tick:
 | Name | Holds |
 | --- | --- |
 | `<org>:work` | the last `WorkSnapshot` |
-| `<org>:board:<teamId>:<boardId>` | the last `BoardResult` and its `everyone` flag, up to 3 boards per org (LRU) |
+| `<org>:board:<teamId>:<boardId>` | the last `BoardResult` and its `everyone` flag, up to 4 boards per org (LRU) |
 | `<org>:prs` | the last full `PrSnapshot` |
 | `<org>:runs` | the last full `RunsSnapshot` |
-| `<org>:meta` | board configs, type states, code projects |
-| `<org>:pr-records` | the newest 600 `prs` records and their `prChecks` |
+| `<org>:meta` | board configs, type states, code projects, as `[key, value, at]` rows |
+| `<org>:pr-records` | `{ repos: [{ projectId, repoId, prs }] }`: the newest 600 `prs` records that fit in 160 KiB, grouped by repository, each with its `at` and its `prChecks` entry as `checks` |
 
 **Budgets**
 - Each value is at most **160 KiB**. Views are re-capped with the existing cap functions, now given a budget. A value still over is skipped and logged.
 - All cache keys together stay under **1.5 MiB**. Saving past that evicts the least recently used entries, so the store file stays far below Orca's 5 MiB cliff.
 
 **Writes**
-- At most one write per key per **60 s**, and only when the JSON changed. The index key is debounced the same way.
+- At most one write per key per **60 s**, and only when the content changed. The index key is debounced the same way.
+- Content is compared without its time stamps: `updatedAt` at any depth, and the `at` of `meta` and `pr-records` rows. A change to time stamps alone is written once the saved copy is **15 minutes** old, or on flush, so a restored age stays roughly right.
 - A write is dropped at flush time when its org is no longer connected, or its account no longer matches the pinned one.
-- Pending writes flush on `deactivate`.
+- Pending writes, time-only ones included, flush on `deactivate` alongside stopping commands, capped at **1.5 s**. Anything not written by then is logged.
 
 **Versioning**
 - On activation, any `adoCache:` key not under `adoCache:v1:` is deleted.
@@ -389,9 +390,11 @@ Each tick:
 **Restore**
 - The first `work.snapshot`, `work.board`, `prs.snapshot` or `runs.snapshot` for an org with nothing in memory loads the saved view.
 - It is used only when the org is connected and `account` equals the pinned account's `adoId`.
-- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The Work, PRs and Pipelines toolbars already show "Updated ‹relative time›". A restored board carries the same message until task 16, which replaces it with the editor's own line, *"Updated ‹relative time› · refreshing…"* (5.11).
+- It is returned with `stale: true`, the message *"Showing what was saved last time. Refreshing…"*, and its original `updatedAt`. The Work, PRs and Pipelines toolbars already show "Updated ‹relative time›". A restored board carries no message: its `updatedAt` is `savedAt`, and the editor shows *"Updated ‹relative time› · refreshing…"* (5.11).
 - At the same time, the view's job runs now. When it finishes, the live view replaces the saved one through the usual `*.changed` post.
-- A restored board view's `at` is its `savedAt`, so the 30-second freshness check in `reload` doesn't skip the revalidation.
+- A restored board view's `at` is `min(savedAt, now − 30 s)`, so the 30-second freshness check in `reload` never skips the revalidation.
+- Restored Work and board views stay flagged until a live load replaces them, and are dropped while their org isn't connected. Every restore path re-checks the org after its awaits.
+- Delta sync state (5.5) is not saved, so the first tick after a restart audits.
 - **Restored PR and Pipelines data is marked.** `cachedRun`, `approval()`, `watch()` and `prs.cached()` treat it as a miss and read ADO before acting, so a share or an approval never acts on a saved copy.
 - `meta` and `pr-records` seed the store with their original `at`, so freshness rules still apply. Persisted `runs` seed `runChips` for finished runs.
 
@@ -412,7 +415,7 @@ Hidden is not gone:
 | `prs:` | 60 s; hot projects every tick, cold every 5 min | 300 s; every project | ×2, capped at 5 min | 60 s / 300 s, every project |
 | `runs:` | 30 s; hot projects every tick, cold every 5 min | 300 s; every project | ×4, capped at 5 min | 30 s / 300 s, every project |
 | `watch:` | 30 s; skips builds read in the last 30 s | 60 s | — | 30 s / 30 s |
-| `runview:` step running | 5 s; build read every 4th tick, logs every 2nd | idle | ×4 | 5 s, 3 calls each tick |
+| `runview:` step running | 5 s; build read every 4th tick, logs every 2nd and whenever the timeline's `changeId` moves | idle | ×4 | 5 s, 3 calls each tick |
 | `runview:` queued or waiting on approval | 30 s | idle | ×2 | 5 s, 3–4 calls each tick |
 | `runview:` finished | 60 s | idle | ×4 | 60 s |
 
@@ -512,7 +515,7 @@ runs:tick ─► heat ─► builds/approvals lists ─► builds table
           ─► timelines: active runs with stored changeId (skip if run view fresh) ─► runChips for finished
           ─► compose ─► 'unchanged' (≤5 min) or post runs.changed ─► persist
 watch:tick ─► builds not read in last 30 s ─► buildsByIds
-runview:tick ─► timeline(changeId) every tick · logs every 2nd · build every 4th ─► timelines table
+runview:tick ─► timeline(changeId) every tick · logs every 2nd or on a changeId move · build every 4th ─► timelines table
 ```
 
 ## 7. Before and after (requests per 5 minutes, one org)
