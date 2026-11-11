@@ -37,7 +37,7 @@ import {
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
 import type { Scheduler } from '../poll/scheduler'
-import { placeApproval, placeIsUnsettled, placeKey, waitingIf, type ApprovalPlace } from './load'
+import { placeApproval, placeIsUnsettled, placeKey, settled, waitingIf, type ApprovalPlace } from './load'
 
 export interface RunViewsDeps {
   http: AdoHttp
@@ -462,10 +462,6 @@ function sameFinish(before: RawBuild, after: RawBuild): boolean {
 
 function inProgress(timeline: RawTimeline): boolean {
   return timeline.records.some(record => record.state === IN_PROGRESS)
-}
-
-function settled(timeline: RawTimeline): boolean {
-  return !timeline.records.some(record => record.state === PENDING || record.state === IN_PROGRESS)
 }
 
 function unlessGone<T>(request: Promise<T>): Promise<T | typeof GONE> {

@@ -76,8 +76,9 @@ interface OrgRuns {
   restoring?: Promise<RunsSnapshot | null>
 }
 
-const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000, quietCapMs: NOTIFY_CAP_MS }
-const WATCH_MS = { visibleMs: 30_000, backgroundMs: 30_000 }
+const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000, quietMax: 4, quietCapMs: NOTIFY_CAP_MS }
+const WATCH_MS = { visibleMs: 30_000, backgroundMs: 60_000 }
+const WATCH_SKIP_MS = 30_000
 const FRESH_MS = 30_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
 const MAX_RUNS = 100
@@ -142,6 +143,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function syncWatchJob(org: string): void {
     if (jobs.has(org) && (entries.get(org)?.watched.length ?? 0) > 0) {
       scheduler.upsert({ key: watchKey(org), org, ...WATCH_MS, run: signal => pollWatched(org, signal) })
+      scheduler.setVisible(watchKey(org), visible.has(org))
     } else {
       scheduler.remove(watchKey(org))
     }
@@ -302,12 +304,13 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const status = await statusOf(org)
       const keys = await deps.watchList.list(org)
       entry.watched = keys
-      if (keys.length === 0) return
+      const due = entry.source.unread(keys, WATCH_SKIP_MS)
+      if (due.length === 0) return
       const me = status.account.adoId
-      const read = await entry.source.watched(me, keys, signal)
+      const read = await entry.source.watched(me, due, signal)
       signal.throwIfAborted()
       const latest = entry.base ?? base
-      const runs = await settle(org, entry, mergeWatched(latest.runs, read), keys, read, signal)
+      const runs = await settle(org, entry, mergeWatched(latest.runs, read), due, read, signal)
       const merged = compose(org, me, runs, latest.message)
       publish(entry, latest.stale ? { ...merged, stale: true } : merged)
     } catch (error) {
@@ -325,9 +328,11 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     if ((entry.fullLoads === loads || entry.readAll) && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
-  async function poll(org: string, signal: AbortSignal): Promise<void> {
+  async function poll(org: string, signal: AbortSignal): Promise<void | 'unchanged'> {
+    const before = entries.get(org)?.base ?? null
     try {
       await untilAborted(load(org, visible.has(org) || entries.get(org)?.restored ? 'full' : 'background'), signal)
+      return sameRuns(before, entries.get(org)?.base ?? null) ? 'unchanged' : undefined
     } finally {
       if (!signal.aborted && jobs.has(org)) upsertRuns(org)
     }
@@ -368,7 +373,11 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   async function snapshot(org: string): Promise<RunsSnapshot> {
     const status = await statusOf(org)
     const entry = entries.get(org)
-    if (fresh(entry)) return entry.snapshot
+    const last = lastFull(org)
+    if (last) {
+      if (!fresh(entry)) void loadInFull(org)
+      return last
+    }
     const restored = await restore(org, status)
     if (restored && connected(org)) return restored
     try {
@@ -442,6 +451,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       if (shown) visible.add(org)
       else visible.delete(org)
       scheduler.setVisible(runsKey(org), shown)
+      scheduler.setVisible(watchKey(org), shown)
       if (becameVisible && jobs.has(org) && !fresh(entries.get(org))) void loadInFull(org)
       return { ok: true }
     },
@@ -494,6 +504,10 @@ function mergeWatched(current: RunSummary[], read: RunSummary[]): RunSummary[] {
     byId.set(run.buildId, { ...next, stages: carriedChips(previous, next) })
   }
   return orderRuns([...byId.values()])
+}
+
+function sameRuns(before: RunsSnapshot | null, after: RunsSnapshot | null): boolean {
+  return before !== null && after !== null && JSON.stringify({ ...before, updatedAt: 0 }) === JSON.stringify({ ...after, updatedAt: 0 })
 }
 
 function capRunsSnapshot(snapshot: RunsSnapshot, budget = POST_BUDGET_BYTES): RunsSnapshot {
