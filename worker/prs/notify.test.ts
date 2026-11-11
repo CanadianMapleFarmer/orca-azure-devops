@@ -598,7 +598,7 @@ test('my 20 newest active pull requests are watched, from the tab load while it 
     const lists = h.ado.count(isMineActive)
     h.service.visibility({ org: ORG, visible: true })
     await drain()
-    assert.equal(h.ado.count(isMineActive), lists + 2, 'the full load lists them')
+    assert.equal(h.ado.count(isMineActive), lists + 1, "the full load lists them, keeping the quiet project's list the poll just read")
     await h.clock.tick(3 * MINUTE)
     assert.equal(read().length, 40, 'their threads are read again once due')
     assert.equal(h.ado.count(isMineActive), lists + 4, 'from the lists of the tab loads, with no list of their own')

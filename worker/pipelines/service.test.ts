@@ -213,7 +213,7 @@ function listedProjects(calls: readonly AdoCall[]) {
   }
 }
 
-test("a visible runs tick lists only hot projects and keeps the cold projects' last runs", async () => {
+test("a visible runs tick lists only hot projects and keeps the cold projects' last runs, until the longest tick would be too late", async () => {
   const h = harness()
   keepMoving(h)
   h.setOrgs([status()])
@@ -229,7 +229,7 @@ test("a visible runs tick lists only hot projects and keeps the cold projects' l
     project: { id: PLATFORM, name: 'Fabrikam Platform' }
   })
 
-  for (let tick = 1; tick < 10; tick += 1) {
+  for (let tick = 1; tick < 6; tick += 1) {
     const before = h.ado.calls.length
     await h.clock.tick(30_000)
     assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PROJECT], running: [PROJECT], approvals: [PROJECT] }, `tick ${tick}`)
@@ -237,8 +237,30 @@ test("a visible runs tick lists only hot projects and keeps the cold projects' l
   }
   const before = h.ado.calls.length
   await h.clock.tick(30_000)
-  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] })
+  assert.deepEqual(
+    listedProjects(h.ado.calls.slice(before)),
+    { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] },
+    'at 3 minutes, since a quiet tab can wait 2 minutes between ticks'
+  )
   assert.ok(ids(h.posts.at(-1)?.runs).includes(4800), 'a run in a cold project appears within 5 minutes')
+})
+
+test("a hidden runs tick never counts as a read of a cold project's running list", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  h.show(false)
+  await h.clock.tick(5 * MINUTE)
+
+  const before = h.ado.calls.length
+  h.show()
+  await h.clock.tick(0)
+  assert.deepEqual(
+    listedProjects(h.ado.calls.slice(before)),
+    { mine: [PROJECT], running: [PLATFORM, PROJECT], approvals: [PROJECT] },
+    'the hidden tick read only my runs and approvals, so the running list is still due'
+  )
 })
 
 test('Refresh lists every project', async () => {
@@ -684,7 +706,7 @@ test('a forbidden builds list pauses the org; a forbidden approvals list only tu
   assert.equal(runOf(snapshot, 4520).state, 'running')
   const tried = approvals.ado.count(isApprovals)
   await approvals.clock.tick(9 * MINUTE)
-  assert.equal(approvals.ado.count(isMineRuns), 21, 'runs keep loading every 30 s')
+  assert.equal(approvals.ado.count(isMineRuns), 23, 'runs keep loading every 30 s, and the quiet project every 3 minutes')
   assert.equal(approvals.ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
   assert.equal(approvals.posts.at(-1)?.message, APPROVALS_NEED_ACCESS)
 })

@@ -27,6 +27,8 @@ export interface Scheduler {
   dispose(): void
 }
 
+type Cadence = Pick<Job, 'visibleMs' | 'quietMax' | 'quietCapMs'>
+
 type Outcome = 'unchanged' | 'changed'
 
 const MIN_DELAY_MS = 1000
@@ -55,6 +57,14 @@ function assertValidIntervals(job: Job): void {
       throw new Error(`Polling job "${job.key}" needs finite intervals of at least ${MIN_DELAY_MS} ms.`)
     }
   }
+}
+
+function stretched({ quietCapMs = Infinity }: Cadence, base: number, quiet: number): number {
+  return Math.min(base * quiet, Math.max(base, quietCapMs))
+}
+
+export function longestVisibleMs(job: Cadence): number {
+  return stretched(job, job.visibleMs, job.quietMax ?? 1)
 }
 
 async function attempt(job: Job, signal: AbortSignal): Promise<Outcome> {
@@ -92,9 +102,7 @@ export function createScheduler(clock: Clock, pace?: Pace): Scheduler {
   }
 
   function quietIntervalOf(entry: Entry, base: number): number {
-    const { quietMax = 1, quietCapMs = Infinity } = entry.job
-    const quiet = Math.min(2 ** entry.streak, quietMax)
-    return Math.min(base * quiet, Math.max(base, quietCapMs))
+    return stretched(entry.job, base, Math.min(2 ** entry.streak, entry.job.quietMax ?? 1))
   }
 
   function dueAt(entry: Entry, base: number): number {

@@ -3,7 +3,7 @@ import { AdoError } from '../ado/http'
 import { currentContext, inLane, type Lane } from '../data/context'
 import type { Pace, Pressure } from '../data/rate-limit'
 import { fakeClock, paced, type FakeClock } from '../test-support'
-import { createScheduler, NOTIFY_CAP_MS, realClock, type Job } from './scheduler'
+import { createScheduler, longestVisibleMs, NOTIFY_CAP_MS, realClock, type Job } from './scheduler'
 
 const T0 = 1_000_000
 const HOUR = 3_600_000
@@ -305,6 +305,23 @@ test('quiet back-off never stretches an interval past quietCapMs', async () => {
   await clock.tick(0)
   await clock.tick(900_000)
   assert.deepEqual(starts, [0, 300_000, 600_000, 900_000])
+})
+
+test('longestVisibleMs is the visible interval fully backed off, within quietCapMs', async () => {
+  assert.equal(longestVisibleMs({ visibleMs: 60_000, quietMax: 2, quietCapMs: NOTIFY_CAP_MS }), 120_000)
+  assert.equal(longestVisibleMs({ visibleMs: 30_000, quietMax: 4, quietCapMs: NOTIFY_CAP_MS }), 120_000)
+  assert.equal(longestVisibleMs({ visibleMs: 100_000, quietMax: 4, quietCapMs: NOTIFY_CAP_MS }), NOTIFY_CAP_MS)
+  assert.equal(longestVisibleMs({ visibleMs: 30_000 }), 30_000)
+
+  const clock = fakeClock(T0)
+  const scheduler = createScheduler(clock)
+  const { job, starts } = trackedJob(clock, unchanged, { visibleMs: 30_000, quietMax: 4, quietCapMs: NOTIFY_CAP_MS })
+  scheduler.upsert(job)
+  scheduler.setVisible('mine', true)
+  await clock.tick(0)
+  await clock.tick(600_000)
+  const gaps = starts.slice(1).map((start, index) => start - starts[index])
+  assert.equal(Math.max(...gaps), longestVisibleMs(job))
 })
 
 test('upsert keeps the quiet streak', async () => {

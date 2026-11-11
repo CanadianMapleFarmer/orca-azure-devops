@@ -41,8 +41,8 @@ type Listed = PrSummary & { record: PrRecord }
 type List = 'mine' | 'completed' | 'review'
 type Kept = Partial<Record<List, Listed[]>> & { completedAt?: number }
 
-export function createPrSource(http: AdoHttp, org: string, now: () => number, tables: PrTables): PrSource {
-  const heat = createHeat(now)
+export function createPrSource(http: AdoHttp, org: string, now: () => number, tables: PrTables, longestTickMs: number): PrSource {
+  const heat = createHeat<List>(now, longestTickMs)
   const kept = new Map<string, Kept>()
   const offUntil: Record<Enrichment, number> = { workItems: -Infinity, checks: -Infinity }
 
@@ -56,12 +56,10 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number, ta
   async function listsOf(scoped: AdoHttp, me: string, projects: NamedItem[], all: boolean, lists: readonly List[]): Promise<Kept[]> {
     const current = new Set(projects.map(project => `${me}/${project.id}`))
     for (const key of kept.keys()) if (!current.has(key)) kept.delete(key)
-    const due = new Set(heat.pick(projects, all).map(project => project.id))
-    const read = projects.filter(project => due.has(project.id) || lists.some(list => !keptOf(me, project.id)[list]))
-    const reads = read.flatMap(project => {
+    const reads = projects.flatMap(project => {
       const entry = keptOf(me, project.id)
       return lists.flatMap(list => {
-        const criteria = criteriaOf(me, entry, list)
+        const criteria = (all || !entry[list] || heat.due(list, project.id)) && criteriaOf(me, entry, list)
         return criteria ? [{ entry, projectId: project.id, list, criteria }] : []
       })
     })
@@ -69,7 +67,7 @@ export function createPrSource(http: AdoHttp, org: string, now: () => number, ta
       entry[list] = await listed(scoped, projectId, criteria)
       if (list === 'completed') entry.completedAt = now()
     })
-    for (const project of read) heat.saw(project.id, found(keptOf(me, project.id)))
+    for (const { entry, projectId, list } of reads) heat.saw(list, projectId, found(entry))
     return projects.map(project => keptOf(me, project.id))
   }
 

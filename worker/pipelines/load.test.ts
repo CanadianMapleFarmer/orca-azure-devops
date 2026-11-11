@@ -44,7 +44,7 @@ function setup() {
   const clock = { now: T0 }
   const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
   const tables = createEntities(() => clock.now).of(ORG)
-  return { ado, clock, tables, source: createRunSource(http, ORG, () => clock.now, tables) }
+  return { ado, clock, tables, source: createRunSource(http, ORG, () => clock.now, tables, 2 * MINUTE) }
 }
 
 function iso(ms: number): string {

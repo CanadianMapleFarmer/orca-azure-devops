@@ -20,7 +20,7 @@ import {
   SHOWING_SAVED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
-import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
+import { longestVisibleMs, NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
 import { createPrSource, type FullLoad, type PrSource, type ThreadRead } from './load'
 import { watchedPrs, type PrNotifier, type PrThreads } from './notify'
 import { newestCreatedAt, releaseSets, reviewedOf, toReviewOf } from './release-sets'
@@ -74,7 +74,7 @@ interface OrgPrs {
   restoring?: Promise<PrSnapshot | null>
 }
 
-const PRS_MS = { visibleMs: 60_000, backgroundMs: 300_000, quietMax: 2 }
+const PRS_MS = { visibleMs: 60_000, backgroundMs: 300_000, quietMax: 2, quietCapMs: NOTIFY_CAP_MS }
 const FRESH_MS = 60_000
 const MINE_REUSED_MS = 10 * 60_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
@@ -99,7 +99,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
   function entryOf(org: string): OrgPrs {
     const entry = entries.get(org) ?? {
       controller: new AbortController(),
-      source: createPrSource(http, org, now, deps.entities.of(org)),
+      source: createPrSource(http, org, now, deps.entities.of(org), longestVisibleMs(PRS_MS)),
       projects: cachedCodeProjects(http, org, deps.entities.of(org).projects),
       threads: createThreadCadence(now),
       base: null,
@@ -353,7 +353,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
       for (const org of signedIn) {
         if (jobs.has(org)) continue
         jobs.add(org)
-        scheduler.upsert({ key: jobKey(org), org, ...PRS_MS, quietCapMs: NOTIFY_CAP_MS, run: signal => poll(org, signal) })
+        scheduler.upsert({ key: jobKey(org), org, ...PRS_MS, run: signal => poll(org, signal) })
         scheduler.setVisible(jobKey(org), visible.has(org))
       }
     },

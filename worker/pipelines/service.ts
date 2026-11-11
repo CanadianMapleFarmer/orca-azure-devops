@@ -24,7 +24,7 @@ import {
   SHOWING_SAVED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
-import { NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
+import { longestVisibleMs, NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
 import { carriedChips, createRunSource, waitingIf, type RunSource, type RunsLoad } from './load'
 import type { RunSignals } from './signals'
 import type { WatchList } from './watched'
@@ -101,7 +101,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     if (existing) return existing
     const entry: OrgRuns = {
       controller: new AbortController(),
-      source: createRunSource(deps.http, org, now, deps.entities.of(org)),
+      source: createRunSource(deps.http, org, now, deps.entities.of(org), longestVisibleMs(RUNS_MS)),
       projects: cachedCodeProjects(deps.http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,

@@ -227,7 +227,7 @@ test('loads are single-flight per org, and a full load waits for a reviews load 
   assert.equal(background.ado.count(isMineActive), 0, 'the full load waits')
   held.release()
   assert.equal((await full).sets.length, 3)
-  assert.deepEqual([background.ado.count(isMineActive), background.ado.count(isReviewList)], [2, 4])
+  assert.deepEqual([background.ado.count(isMineActive), background.ado.count(isReviewList)], [2, 3], "the full load keeps the quiet project's review list the reviews load just read")
 })
 
 test('a code-project list limits the fan-out', async () => {
@@ -259,7 +259,7 @@ function listedProjects(calls: readonly AdoCall[]) {
   }
 }
 
-test("a visible PR tick lists only hot projects and keeps the cold projects' last results", async () => {
+test("a visible PR tick lists only hot projects and keeps the cold projects' last results, until the next tick would be too late", async () => {
   const h = harness()
   h.setOrgs([status()])
   h.show()
@@ -267,12 +267,19 @@ test("a visible PR tick lists only hot projects and keeps the cold projects' las
   const first = h.posts.at(-1)
   reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, T0, 'Asked in a quiet project'))])
 
-  for (const minute of [1, 3]) {
-    const before = h.ado.calls.length
-    await h.clock.tick(T0 + minute * MINUTE - h.clock.now())
-    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, `minute ${minute}`)
-    assert.deepEqual(h.posts.at(-1), { ...first, updatedAt: T0 + minute * MINUTE }, 'the cold project and the completed lists keep their last results')
-  }
+  let before = h.ado.calls.length
+  await h.clock.tick(MINUTE)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PROJECT] }, 'minute 1')
+  assert.deepEqual(h.posts.at(-1), { ...first, updatedAt: T0 + MINUTE }, 'the cold project and the completed lists keep their last results')
+
+  before = h.ado.calls.length
+  await h.clock.tick(2 * MINUTE)
+  assert.deepEqual(
+    listedProjects(h.ado.calls.slice(before)),
+    { active: [PLATFORM, PROJECT], completed: [], review: [PLATFORM, PROJECT] },
+    'minute 3: a quiet tab ticks every 2 minutes, so waiting for minute 5 could land at minute 7'
+  )
+  assert.equal(h.posts.at(-1)?.toReviewCount, 2)
 })
 
 test('a hidden PR tick reads every project', async () => {
@@ -327,22 +334,33 @@ test('Refresh during a visible tick in flight still lists every project', async 
   assert.deepEqual(listed, { active: [PLATFORM, PROJECT, PROJECT], completed: [], review: [PLATFORM, PROJECT, PROJECT] }, 'the tick lists the hot project, then Refresh every project')
 })
 
-test('a review request in a cold project appears within 5 minutes, visible or hidden', async () => {
+async function ticksUntil(h: ReturnType<typeof harness>, done: () => boolean, limitMs: number): Promise<number> {
+  const start = h.clock.now()
+  while (!done()) {
+    if (h.clock.now() - start > limitMs) return assert.fail(`nothing within ${limitMs / MINUTE} minutes`)
+    await h.clock.tick(1_000)
+  }
+  return h.clock.now() - start
+}
+
+test('a review request just after a cold project was read notifies within 5 minutes, visible or hidden', async () => {
   for (const visible of [true, false]) {
+    const mode = visible ? 'visible' : 'hidden'
     const shown: Shown[] = []
     const notifier = createPrNotifier({ show: async note => shown.push(note), prefs: () => ({ reviews: true, comments: false }), log: () => {} })
     const h = harness({ notifier })
     h.setOrgs([status()])
     h.show(visible)
     await h.clock.tick(0)
-    await h.clock.tick(30_000)
-    reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, T0 + 30_000, 'Asked in a quiet project'))])
+    await h.clock.tick(10 * MINUTE)
+    const coldReads = () => h.ado.calls.filter(call => isReviewList(call) && projectOf(call) === PLATFORM).length
+    const read = coldReads()
+    await ticksUntil(h, () => coldReads() > read, 5 * MINUTE)
+    reviewsAlso(h.ado, [inPlatform(toReviewPr(4300, h.clock.now(), 'Asked in a quiet project'))])
 
-    await h.clock.tick(4 * MINUTE)
-    assert.deepEqual([h.counts.at(-1), shown.length], [[ORG, 1], 0], `${visible ? 'visible' : 'hidden'}: not listed yet`)
-    await h.clock.tick(30_000)
-    assert.deepEqual(h.counts.at(-1), [ORG, 2], visible ? 'visible' : 'hidden')
-    assert.deepEqual(shown.map(note => note.title), ['Review requested: Pull Request 4300'])
+    const waited = await ticksUntil(h, () => shown.length > 0, 10 * MINUTE)
+    assert.ok(waited <= 5 * MINUTE, `${mode}: notified after ${waited / 1000} s`)
+    assert.deepEqual(shown.map(note => note.title), ['Review requested: Pull Request 4300'], mode)
   }
 })
 
@@ -444,7 +462,7 @@ test('a new comment on a quiet PR notifies once within 10 minutes', async () => 
   }
 })
 
-test('a hidden observe lists active PRs only in hot projects', async () => {
+test('a hidden observe lists my active PRs in every project at each 5-minute tick, cold ones included', async () => {
   const notifier = createPrNotifier({ show: async () => {}, prefs: () => ({ reviews: false, comments: true }), log: () => {} })
   const h = harness({ notifier })
   h.setOrgs([status()])
@@ -458,8 +476,30 @@ test('a hidden observe lists active PRs only in hot projects', async () => {
   for (let tick = 2; tick <= 4; tick += 1) {
     before = h.ado.calls.length
     await h.clock.tick(5 * MINUTE)
-    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PROJECT], completed: [], review: [PLATFORM, PROJECT] }, `hidden tick ${tick}`)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { active: [PLATFORM, PROJECT], completed: [], review: [PLATFORM, PROJECT] }, `hidden tick ${tick}`)
   }
+})
+
+test('a comment on my new PR in a cold project notifies within about 5 minutes while the PRs tab is hidden', async () => {
+  const shown: Shown[] = []
+  const notifier = createPrNotifier({ show: async note => shown.push(note), prefs: () => ({ reviews: false, comments: true }), log: () => {} })
+  const h = harness({ notifier })
+  const mine = fixture<{ value: RawPullRequest[] }>('pull-requests-mine').value
+  const opened: RawPullRequest[] = []
+  const threads: RawThread[] = []
+  h.ado.on(isMineActive, call => json(200, { value: [...mine, ...opened].filter(pr => pr.repository.project.id === projectOf(call)) }))
+  h.ado.on(isThreads, call => json(200, { value: threadsPrIdOf(call) === 4300 ? threads : [] }))
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  await h.clock.tick(12 * MINUTE)
+
+  opened.push(inPlatform(rawPr(4300, h.clock.now(), 'Opened in a quiet project')))
+  await h.clock.tick(5 * MINUTE)
+  threads.push({ id: 301, status: 'active', comments: [commentAt(1, h.clock.now(), 'Please rename this.')] })
+
+  const waited = await ticksUntil(h, () => shown.length > 0, 15 * MINUTE)
+  assert.ok(waited <= 5 * MINUTE, `notified after ${waited / 1000} s`)
+  assert.deepEqual(shown.map(note => note.title), ['New comment on Pull Request 4300'])
 })
 
 test('the snapshot holds release sets, to-review PRs and the saved auto-complete options', async () => {
@@ -586,7 +626,7 @@ test('a forbidden enrichment turns off only that enrichment for 10 minutes', asy
 
     const tried = h.ado.count(refused)
     await h.clock.tick(9 * MINUTE)
-    assert.equal(h.ado.count(isMineActive), 8, 'the lists keep loading, every 2 minutes once nothing changes')
+    assert.equal(h.ado.count(isMineActive), 9, 'the lists keep loading, every 2 minutes once nothing changes, and the quiet project at minutes 3 and 7')
     assert.equal(h.ado.count(refused), tried, 'the refused enrichment is not asked for 10 minutes')
     assert.equal(h.posts.at(-1)?.message, message)
 

@@ -137,7 +137,7 @@ All seven of the lead's original calls stand. The builder check added four more,
 - **A click always works.** The governor never fails a user request because of a block. User requests go first and are sent; only background work is held back. ADO's own 429 surfaces the existing "throttling" message.
 - **`Retry-After` on any response sets `resumeAt`,** a 200 included, as Microsoft asks. Background work waits until it passes, then is paced ×8 (*delayed*) for 5 minutes. User requests are never held, so honouring it literally costs the user nothing. A 429 without `Retry-After` blocks for 60 s.
 - **Three priority tiers:** user requests, then *visible* background jobs (the visible board, an open run tab, the visible sidebar tab), then *hidden* background jobs. The scheduler passes visibility through the request context.
-- **Notification latency** (section 10, item 5): cold projects are checked every 5 minutes even while hidden, and quiet back-off never stretches a notification-driving check past 5 minutes.
+- **Notification latency** (section 10, item 5): cold projects are read early enough that the next tick still lands within 5 minutes, visible or hidden, and quiet back-off never stretches a notification-driving check past 5 minutes.
 
 Three adjustments from the first draft still hold:
 
@@ -412,8 +412,8 @@ Hidden is not gone:
 | --- | --- | --- | --- | --- |
 | `mine` (Work tab) | 60 s | idle | ×2 | 60 s / 300 s |
 | `board:` | 30 s | idle, view kept | ×2 | 30 s / dropped |
-| `prs:` | 60 s; hot projects every tick, cold every 5 min | 300 s; every project | ×2, capped at 5 min | 60 s / 300 s, every project |
-| `runs:` | 30 s; hot projects every tick, cold every 5 min | 300 s; every project | ×4, capped at 5 min | 30 s / 300 s, every project |
+| `prs:` | 60 s; hot projects every tick, cold every 3 min | 300 s; every project | ×2, capped at 5 min | 60 s / 300 s, every project |
+| `runs:` | 30 s; hot projects every tick, cold every 3 min | 300 s; every project | ×4, capped at 5 min | 30 s / 300 s, every project |
 | `watch:` | 30 s; skips builds read in the last 30 s | 60 s | — | 30 s / 30 s |
 | `runview:` step running | 5 s; build read every 4th tick, logs every 2nd and whenever the timeline's `changeId` moves | idle | ×4 | 5 s, 3 calls each tick |
 | `runview:` queued or waiting on approval | 30 s | idle | ×2 | 5 s, 3–4 calls each tick |
@@ -423,14 +423,15 @@ Every interval above is multiplied by the pressure factor (5.2).
 
 **Hot and cold projects** (`worker/data/heat.ts`)
 - A project is *hot* when it returned anything for the user in the last 24 hours. For PRs that is mine or to-review; for pipelines it is my runs, running runs or pending approvals.
-- A cold project is read at most every **5 minutes, visible or hidden** (section 10, item 5). The hidden ticks come every 5 minutes anyway, so hidden polls read every project; the saving is in the visible tabs. Last results are reused in between, so lists stay complete.
+- Heat is kept **per list**: mine, completed and to-review for PRs; my runs, running runs and approvals for pipelines. A pass that reads one list never counts as a read of another, so the hidden to-review pass can't hold back a cold project's mine list. Hot or cold is still decided per project, by any of its lists.
+- A cold project's list falls due `COLD_EVERY_MS` (5 minutes) less the job's longest visible interval with quiet back-off (`longestVisibleMs`: 2 minutes for both `prs:` and `runs:`), so **3 minutes** after its last read. The next tick then still lands within 5 minutes, visible or hidden (section 10, item 5). The hidden ticks come every 5 minutes anyway, so hidden polls read every project; the saving is in the visible tabs. Last results are reused in between, so lists stay complete.
 - Refresh reads every project.
 
 **PR threads** (comment notifications, decision 3)
 - Each PR has its own interval: 2 minutes, doubling while its thread list is unchanged, up to 10 minutes.
 - New activity on the PR resets it to 2 minutes.
 - The cadence map is pruned to the PRs still watched.
-- Hidden observes reuse the last known active list for hot projects instead of re-listing every project.
+- Hidden observes reuse the PRs tab's active list while its last load is under 10 minutes old. Otherwise they list active PRs by the same per-list rule, which reads every project at each 5-minute hidden tick, so a new PR in a cold project is seen, and its comments read, within about 5 minutes.
 
 **Runs list timelines**
 - They come from `timelines`. They are read with the stored `changeId`, and skipped when a run view refreshed that build in the last 5 seconds. That skip only helps once run views write to the table (task 13 before task 12).
@@ -502,7 +503,7 @@ store.prs/prChecks change ─► re-chip affected items ─► post work.boardCh
 
 ### PRs
 ```
-prs:tick ─► heat: hot projects (+ cold every 5 min) ─► lists ─► prs table (feeds chips)
+prs:tick ─► heat per list: hot projects (+ cold every 3 min) ─► lists ─► prs table (feeds chips)
           ─► enrichment via prWorkItems/prChecks rule (≤8 evaluation reads/tick)
           ─► compose ─► 'unchanged' (≤5 min) or post prs.changed ─► persist
 observe ─► threads for PRs whose per-PR interval is due ─► notifier
@@ -598,7 +599,7 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 **Lead's calls, pending user confirmation.** Planned as below. Each names what to change if the user decides otherwise.
 
 5. **Notification latency.** A new review request, failed run or approval in a cold project notifies within about 5 minutes, even while the panel is hidden.
-   - Cold projects are checked every 5 minutes in the background as well (5.8).
+   - A cold project is read 3 minutes after its last read, so the next tick, at most 2 minutes later on a quiet visible tab or every 5 minutes hidden, still lands within 5 minutes (5.8).
    - Quiet back-off never stretches the `prs:` or `runs:` job past 5 minutes (`quietCapMs`, 5.3).
    - *To flip:* change `COLD_EVERY_MS` and `quietCapMs`, and recompute the hidden estimates in section 7.
 6. **PR policy lag.** Policy evaluations are re-read on a push, on any reviewer or vote change, every 2 minutes while a build runs, and otherwise every 30 minutes (5.6). A comment-resolution policy change without a vote or push can lag up to 30 minutes.

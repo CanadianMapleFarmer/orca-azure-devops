@@ -69,9 +69,15 @@ interface Kept {
 
 type Kind = 'full' | 'background'
 
-export function createRunSource(http: AdoHttp, org: string, now: () => number, tables: Pick<OrgEntities, 'runChips' | 'builds' | 'timelines'>): RunSource {
+export function createRunSource(
+  http: AdoHttp,
+  org: string,
+  now: () => number,
+  tables: Pick<OrgEntities, 'runChips' | 'builds' | 'timelines'>,
+  longestTickMs: number
+): RunSource {
   const { runChips, builds, timelines } = tables
-  const heat = createHeat(now)
+  const heat = createHeat<List>(now, longestTickMs)
   const kept = new Map<string, Kept>()
   let places = new Map<string, ApprovalPlace>()
   let lastFull = new Map<number, RunSummary>()
@@ -115,11 +121,12 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number, t
     const wanted: List[] = kind === 'full' ? ['mine', 'running', 'approvals'] : ['mine', 'approvals']
     const current = new Set(projects.map(project => `${me}/${project.id}`))
     for (const key of kept.keys()) if (!current.has(key)) kept.delete(key)
-    const due = new Set(heat.pick(projects, all).map(project => project.id))
-    const read = projects.filter(project => due.has(project.id) || wanted.some(list => !keptOf(me, project.id)[list]))
-    const reads = read.flatMap(project => wanted.map(list => ({ entry: keptOf(me, project.id), projectId: project.id, list })))
+    const reads = projects.flatMap(project => {
+      const entry = keptOf(me, project.id)
+      return wanted.filter(list => all || !entry[list] || heat.due(list, project.id)).map(list => ({ entry, projectId: project.id, list }))
+    })
     await mapLimit(reads, IN_FLIGHT, ({ entry, projectId, list }) => readInto(scoped, me, entry, projectId, list))
-    for (const project of read) heat.saw(project.id, found(keptOf(me, project.id)))
+    for (const { entry, projectId, list } of reads) heat.saw(list, projectId, found(entry))
     const held = projects.map(project => keptOf(me, project.id))
     return {
       builds: held.flatMap(entry => [...(entry.mine ?? []), ...(kind === 'full' ? (entry.running ?? []) : [])]),
