@@ -102,6 +102,7 @@ export function metricsLines(report: MetricsReport, pressure: PressureState, now
   if (report.throttled > 0 || report.delayed > 0 || (report.cost ?? 0) > 0) {
     lines.push(`  Throttled ${report.throttled}, delayed ${report.delayed}, cost ${Number((report.cost ?? 0).toFixed(4))} TSTU`)
   }
+  if (report.etags.length > 0) lines.push(`  ETag seen: ${report.etags.join(' · ')}`)
   return lines
 }
 

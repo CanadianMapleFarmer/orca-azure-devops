@@ -446,13 +446,14 @@ The same `observe` hook feeds a per-org ring of five 1-minute buckets. Because t
 
 It also keeps the last rate-limit headers seen and the pressure level. Memory is bounded.
 
-`Azure DevOps: Connection status` adds a block per connected org that had traffic in the last 5 minutes. An org with no traffic gets no block:
+`Azure DevOps: Connection status` adds a block per connected org that had traffic in the last 5 minutes. An org with no traffic gets no block. The `ETag seen` line shows only when an endpoint sent one:
 
 ```
 contoso — connected as dev@contoso.com
   Requests, last 5 min: 41 (board 18, work 9, prs 8, pipelines 6)
   Busiest: POST /{team}/_apis/wit/wiql 14 · GET /_apis/git/pullrequests 7 · POST /_apis/wit/workitemsbatch 5
   Rate limit: near, 152 of 200 TSTU left, polling ×2 (headers 40 s ago)
+  ETag seen: GET /_apis/wiki/wikis/{id}/pages
 ```
 
 ### 5.10 Board filter memory (decision 4)

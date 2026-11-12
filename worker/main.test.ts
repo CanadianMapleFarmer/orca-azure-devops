@@ -225,9 +225,10 @@ test('orgs handlers connect, sign out and remove an org', async () => {
         tone: 'success',
         tooltip: 'Azure DevOps: contoso (ada@contoso.com)'
       })
-      const [first, requests] = String(await w.command('status')).split('\n')
+      const [first, requests, ...rest] = String(await w.command('status')).split('\n')
       assert.equal(first, 'contoso — connected as ada@contoso.com')
       assert.match(requests, /^ {2}Requests, last 5 min: \d+ \(.*\bconnect \d+/)
+      assert.ok(rest.every(line => !line.includes('ETag')), 'no answer carried an ETag')
       assert.equal((await w.request('orgs.list', {}))[0].state, 'connected')
       assert.equal(Object.keys(w.host.data().secrets).includes('pat:contoso'), true)
 
@@ -1231,6 +1232,7 @@ test('wiki.publish answers through the handler', async () => {
         const page = ado.pages.get(ref.path)!
         const puts = () => ado.calls.filter(call => call.method === 'PUT').length
         await w.request('wiki.edit', ref)
+        assert.equal(String(await w.command('status')).split('\n').at(-1), '  ETag seen: GET /_apis/wiki/wikis/{id}/pages')
         assert.deepEqual(await w.request('wiki.publish', { key }), {
           status: 'unchanged',
           message: 'Nothing to publish yet. Save your changes in the editor first.'

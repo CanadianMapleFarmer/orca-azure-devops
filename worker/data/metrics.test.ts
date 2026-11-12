@@ -150,6 +150,16 @@ test('metricsLines shows the pressure level when no rate-limit headers were seen
   assert.equal(metricsLines(bare, pressure({}), T0)[2], '  Rate limit: no pressure seen')
 })
 
+test('metricsLines names the endpoints that sent an ETag, only when there are any', () => {
+  const quiet = report({ total: 3, byFeature: { wiki: 3 }, byEndpoint: [{ endpoint: 'GET /_apis/wiki/wikis/{id}/pages', count: 3 }] })
+  assert.ok(metricsLines(quiet, pressure({}), T0).every(line => !line.includes('ETag')))
+
+  const etags = ['GET /_apis/wiki/wikis/{id}/pages', 'GET /_apis/projects']
+  assert.equal(metricsLines({ ...quiet, etags }, pressure({}), T0).at(-1), '  ETag seen: GET /_apis/wiki/wikis/{id}/pages · GET /_apis/projects')
+  const throttled = { ...quiet, etags, throttled: 1 }
+  assert.deepEqual(metricsLines(throttled, pressure({}), T0).slice(3), ['  Throttled 1, delayed 0, cost 0 TSTU', '  ETag seen: GET /_apis/wiki/wikis/{id}/pages · GET /_apis/projects'])
+})
+
 test('metricsLines shows nothing for an org with no traffic', () => {
   assert.deepEqual(metricsLines(report({}), pressure({ level: 'near', factor: 2 }), T0), [])
 })

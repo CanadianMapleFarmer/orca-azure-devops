@@ -40,13 +40,15 @@ Each number adds up your connected organisations. The tooltip and **Azure DevOps
 - the requests, by feature (`work`, `board`, `prs`, `pipelines`, `run` and so on);
 - the three busiest endpoints, with ids shown as `{id}` and team names as `{team}`;
 - the rate-limit state: the pressure level, how much of the limit is left when Azure DevOps says, how much polling has slowed, and how long ago the last rate-limit headers came;
-- how many requests were throttled or delayed and the sum of `X-RateLimit-Cost`, when there was any.
+- how many requests were throttled or delayed and the sum of `X-RateLimit-Cost`, when there was any;
+- the endpoints that answered with an `ETag`, when any did.
 
 ```
 contoso — connected as dev@contoso.com
   Requests, last 5 min: 41 (board 18, work 9, prs 8, pipelines 6)
   Busiest: POST /{team}/_apis/wit/wiql 14 · GET /_apis/git/pullrequests 7 · POST /_apis/wit/workitemsbatch 5
   Rate limit: near, 152 of 200 TSTU left, polling ×2 (headers 40 s ago)
+  ETag seen: GET /_apis/wiki/wikis/{id}/pages
 ```
 
 ## Polling

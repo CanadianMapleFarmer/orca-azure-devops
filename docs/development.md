@@ -93,4 +93,4 @@ Panel overhaul:
 
 General:
 
-- On the client organisation, read **Connection status** after 10 minutes with the Work tab and a board open, and record the request totals and the `Rate limit` line with its `X-RateLimit-*` figures. Also record which endpoints answer with an `ETag` once Connection status prints them: the metrics already collect them, but nothing shows them yet.
+- On the client organisation, read **Connection status** after 10 minutes with the Work tab and a board open, and record the request totals and the `Rate limit` line with its `X-RateLimit-*` figures. Also record the `ETag seen` line, which names the endpoints that answer with an `ETag`.
