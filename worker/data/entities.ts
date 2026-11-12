@@ -10,7 +10,7 @@ import { MAX_ENTRIES } from './freshness'
 import type { CheckRecord, ItemRecord, PrRecord } from './records'
 
 export interface Stamped<T> { value: T; at: number }
-export interface TableSpec<T> { maxEntries: number; replaces?: (incoming: T, stored: T) => boolean }
+interface TableSpec<T> { maxEntries: number; replaces?: (incoming: T, stored: T) => boolean }
 
 export interface Table<T> {
   get(key: string): Stamped<T> | undefined
@@ -51,10 +51,6 @@ interface Load<T> {
   readonly settled: Promise<T>
   signals: number
   unbounded: boolean
-}
-
-export function createTable<T>(now: () => number, spec: TableSpec<T>): Table<T> {
-  return tableOf(now, spec, () => {})
 }
 
 export function createEntities(now: () => number): Entities {

@@ -12,6 +12,7 @@ import type { Entities, OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
 import type { SavedTables } from '../data/saved-tables'
+import { isRecord, sameApartFromTime } from '../data/values'
 import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
@@ -598,10 +599,6 @@ function isSavedBoard(value: unknown, boardId: string): value is { result: Board
   )
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 function meOf(status: OrgStatus): Me | null {
   return status.account ? { id: status.account.adoId, uniqueName: status.account.uniqueName } : null
 }
@@ -620,10 +617,6 @@ function forcingAudit(held: Synced): Synced {
 
 function sameTarget(board: BoardConfig | null | undefined, target: Pick<BoardConfig, 'projectId' | 'teamId'>): boolean {
   return board?.projectId === target.projectId && board.teamId === target.teamId
-}
-
-function sameApartFromTime(a: WorkSnapshot, b: WorkSnapshot): boolean {
-  return JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 })
 }
 
 function holds(snapshot: WorkSnapshot, id: number): boolean {

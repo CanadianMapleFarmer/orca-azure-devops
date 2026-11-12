@@ -1,14 +1,15 @@
 import type { OrgStatus } from '../../src/shared/types'
 import { byteLength } from '../budget'
 import type { Clock } from '../poll/scheduler'
+import { isRecord } from './values'
 
-export const CACHE_PREFIX = 'adoCache:'
-export const CACHE_VERSION = 'v1'
+const CACHE_PREFIX = 'adoCache:'
+const CACHE_VERSION = 'v1'
 export const VALUE_BUDGET_BYTES = 160 * 1024
 export const TOTAL_BUDGET_BYTES = 1536 * 1024
 export const WRITE_EVERY_MS = 60_000
 export const REFRESH_EVERY_MS = 15 * 60_000
-export const MAX_SAVED_BOARDS = 4
+const MAX_SAVED_BOARDS = 4
 
 export interface CachePort {
   get(key: string): Promise<unknown>
@@ -260,10 +261,6 @@ function extraBoards(used: Map<string, Use>, kept: string): string[] {
 
 function orgOf(key: string): string {
   return key.slice(VERSIONED.length).split(':')[0]
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isUse(value: unknown): value is Use {

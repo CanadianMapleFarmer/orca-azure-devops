@@ -2,11 +2,16 @@ import { assert, test } from 'orca/testing'
 import type { RawTimeline } from '../ado/timeline'
 import { drain } from '../test-support'
 import { currentContext, inLane, type Lane } from './context'
-import { createEntities, createTable } from './entities'
+import { createEntities, type Table } from './entities'
+import { MAX_ENTRIES } from './freshness'
 import type { ItemRecord } from './records'
 
 const T0 = Date.parse('2026-11-11T10:00:00Z')
 const MINUTE = 60_000
+const ALPHA = [1201]
+const BETA = [1202]
+const GAMMA = [1203]
+const ABANDONED = [1299]
 
 function clock() {
   let now = T0
@@ -39,46 +44,50 @@ function counted<T>(answer: () => Promise<T>) {
   }
 }
 
+function tableOn(now: () => number): Table<number[]> {
+  return createEntities(now).of('contoso').prWorkItems
+}
+
 function record(id: number, rev: number, withRelations: boolean): ItemRecord {
   return { id, rev, fields: { 'System.Title': `Story ${id} rev ${rev}` }, url: `https://dev.azure.com/contoso/_apis/wit/workItems/${id}`, withRelations }
 }
 
 test('fresh returns a value only within its age', () => {
   const time = clock()
-  const table = createTable<string>(time.now, { maxEntries: 10 })
+  const table = tableOn(time.now)
   assert.equal(table.fresh('a', MINUTE), undefined)
-  table.put('a', 'alpha')
-  assert.equal(table.fresh('a', MINUTE), 'alpha')
+  table.put('a', ALPHA)
+  assert.equal(table.fresh('a', MINUTE), ALPHA)
   time.advance(MINUTE - 1)
-  assert.equal(table.fresh('a', MINUTE), 'alpha')
+  assert.equal(table.fresh('a', MINUTE), ALPHA)
   time.advance(1)
   assert.equal(table.fresh('a', MINUTE), undefined)
-  assert.deepEqual(table.get('a'), { value: 'alpha', at: T0 }, 'a stale value is still held')
+  assert.deepEqual(table.get('a'), { value: ALPHA, at: T0 }, 'a stale value is still held')
 })
 
 test('read loads once for concurrent callers and caches the result', async () => {
   const time = clock()
-  const table = createTable<string>(time.now, { maxEntries: 10 })
-  const gate = deferred<string>()
+  const table = tableOn(time.now)
+  const gate = deferred<number[]>()
   const source = counted(() => gate.promise)
   const first = table.read('a', MINUTE, source.load)
   const second = table.read('a', MINUTE, source.load)
-  gate.resolve('alpha')
-  assert.deepEqual(await Promise.all([first, second]), ['alpha', 'alpha'])
+  gate.resolve(ALPHA)
+  assert.deepEqual(await Promise.all([first, second]), [ALPHA, ALPHA])
   assert.equal(source.signals.length, 1)
 
-  assert.equal(await table.read('a', MINUTE, source.load), 'alpha')
+  assert.equal(await table.read('a', MINUTE, source.load), ALPHA)
   assert.equal(source.signals.length, 1, 'a fresh value answers without loading')
-  assert.deepEqual(table.get('a'), { value: 'alpha', at: T0 })
+  assert.deepEqual(table.get('a'), { value: ALPHA, at: T0 })
 
   time.advance(MINUTE)
-  const again = counted(async () => 'beta')
-  assert.equal(await table.read('a', MINUTE, again.load), 'beta')
+  const again = counted(async () => BETA)
+  assert.equal(await table.read('a', MINUTE, again.load), BETA)
   assert.equal(again.signals.length, 1, 'a stale value loads again')
 })
 
 test('read does not cache a failed load, and the next read tries again', async () => {
-  const table = createTable<string>(clock().now, { maxEntries: 10 })
+  const table = tableOn(clock().now)
   const boom = new Error('Azure DevOps is down')
   const failing = counted(() => Promise.reject(boom))
   const results = await Promise.allSettled([table.read('a', MINUTE, failing.load), table.read('a', MINUTE, failing.load)])
@@ -86,14 +95,14 @@ test('read does not cache a failed load, and the next read tries again', async (
   assert.equal(failing.signals.length, 1)
   assert.equal(table.get('a'), undefined)
 
-  const working = counted(async () => 'alpha')
-  assert.equal(await table.read('a', MINUTE, working.load), 'alpha')
+  const working = counted(async () => ALPHA)
+  assert.equal(await table.read('a', MINUTE, working.load), ALPHA)
   assert.equal(working.signals.length, 1)
 })
 
 test('read runs its load on its own signal: one caller aborting leaves the load running for the others', async () => {
-  const table = createTable<string>(clock().now, { maxEntries: 10 })
-  const gate = deferred<string>()
+  const table = tableOn(clock().now)
+  const gate = deferred<number[]>()
   const source = counted(() => gate.promise)
   const a = new AbortController()
   const b = new AbortController()
@@ -102,11 +111,11 @@ test('read runs its load on its own signal: one caller aborting leaves the load 
   a.abort('panel closed')
   await assert.rejects(first, reason => reason === 'panel closed')
   assert.equal(source.signals[0].aborted, false)
-  gate.resolve('alpha')
-  assert.equal(await second, 'alpha')
-  assert.equal(table.get('a')?.value, 'alpha')
+  gate.resolve(ALPHA)
+  assert.equal(await second, ALPHA)
+  assert.equal(table.get('a')?.value, ALPHA)
 
-  const hung = counted(() => new Promise<string>(() => {}))
+  const hung = counted(() => new Promise<number[]>(() => {}))
   const c = new AbortController()
   const unbounded = table.read('b', MINUTE, hung.load, c.signal)
   void table.read('b', MINUTE, hung.load)
@@ -114,7 +123,7 @@ test('read runs its load on its own signal: one caller aborting leaves the load 
   await assert.rejects(unbounded, reason => reason === 'gone')
   assert.equal(hung.signals[0].aborted, false, 'a caller without a signal keeps the load alive')
 
-  const late = deferred<string>()
+  const late = deferred<number[]>()
   const abandoned = counted(() => late.promise)
   const d = new AbortController()
   const e = new AbortController()
@@ -123,17 +132,17 @@ test('read runs its load on its own signal: one caller aborting leaves the load 
   e.abort('e')
   await Promise.allSettled(reads)
   assert.equal(abandoned.signals[0].aborted, true, 'the load aborts once every caller has')
-  late.resolve('kept by nobody')
+  late.resolve(ABANDONED)
   await drain()
   assert.equal(table.get('c'), undefined, 'an aborted load is not cached')
-  const next = counted(async () => 'gamma')
-  assert.equal(await table.read('c', MINUTE, next.load), 'gamma')
+  const next = counted(async () => GAMMA)
+  assert.equal(await table.read('c', MINUTE, next.load), GAMMA)
   assert.equal(next.signals.length, 1, 'a read after every caller left starts a new load')
 })
 
 test('a user caller joining a read raises its lane', async () => {
-  const table = createTable<string>(clock().now, { maxEntries: 10 })
-  const gate = deferred<string>()
+  const table = tableOn(clock().now)
+  const gate = deferred<number[]>()
   let lane: Lane | undefined
   const load = () => {
     lane = currentContext().lane
@@ -145,8 +154,8 @@ test('a user caller joining a read raises its lane', async () => {
   assert.equal(lane?.priority, 'hidden', 'a background caller does not raise it')
   const user = inLane('board', 'user', () => table.read('a', MINUTE, load))
   assert.equal(lane?.priority, 'user')
-  gate.resolve('alpha')
-  assert.deepEqual(await Promise.all([background, visible, user]), ['alpha', 'alpha', 'alpha'])
+  gate.resolve(ALPHA)
+  assert.deepEqual(await Promise.all([background, visible, user]), [ALPHA, ALPHA, ALPHA])
 })
 
 test('the rev rule keeps the newer record and never trades relations away', () => {
@@ -174,20 +183,19 @@ test('the timeline rule keeps the higher changeId', () => {
   assert.equal(timelines.put('7', timeline(13)).changeId, 13)
 })
 
-test('tables evict the least recently used entries past maxEntries', async () => {
-  const table = createTable<string>(clock().now, { maxEntries: 3 })
-  table.put('a', 'alpha')
-  table.put('b', 'beta')
-  table.put('c', 'gamma')
-  table.get('a')
-  table.put('d', 'delta')
-  assert.deepEqual(table.entries().map(([key]) => key), ['c', 'a', 'd'], 'get counts as a use')
-  table.fresh('c', MINUTE)
-  table.put('e', 'epsilon')
-  assert.deepEqual(table.entries().map(([key]) => key), ['d', 'c', 'e'], 'fresh counts as a use')
-  await table.read('d', MINUTE, async () => 'unused')
-  table.put('f', 'phi')
-  assert.deepEqual(table.entries().map(([key]) => key), ['e', 'd', 'f'], 'a read hit counts as a use')
+test('tables evict the least recently used entries past their limit', async () => {
+  const projects = createEntities(clock().now).of('contoso').projects
+  assert.equal(MAX_ENTRIES.projects, 4)
+  for (const key of ['a', 'b', 'c', 'd']) projects.put(key, [])
+  projects.get('a')
+  projects.put('e', [])
+  assert.deepEqual(projects.entries().map(([key]) => key), ['c', 'd', 'a', 'e'], 'get counts as a use')
+  projects.fresh('c', MINUTE)
+  projects.put('f', [])
+  assert.deepEqual(projects.entries().map(([key]) => key), ['a', 'e', 'c', 'f'], 'fresh counts as a use')
+  await projects.read('a', MINUTE, async () => [])
+  projects.put('g', [])
+  assert.deepEqual(projects.entries().map(([key]) => key), ['c', 'f', 'a', 'g'], 'a read hit counts as a use')
 })
 
 test('watchers hear changed keys per org, batched per microtask, and still hear them after forget', async () => {
@@ -223,10 +231,10 @@ test('watchers hear changed keys per org, batched per microtask, and still hear 
 })
 
 test('put with an explicit at keeps it, so restored values age honestly', () => {
-  const table = createTable<string>(clock().now, { maxEntries: 10 })
-  table.put('a', 'alpha', T0 - 50_000)
-  assert.deepEqual(table.get('a'), { value: 'alpha', at: T0 - 50_000 })
-  assert.equal(table.fresh('a', MINUTE), 'alpha')
+  const table = tableOn(clock().now)
+  table.put('a', ALPHA, T0 - 50_000)
+  assert.deepEqual(table.get('a'), { value: ALPHA, at: T0 - 50_000 })
+  assert.equal(table.fresh('a', MINUTE), ALPHA)
   assert.equal(table.fresh('a', 30_000), undefined)
 })
 

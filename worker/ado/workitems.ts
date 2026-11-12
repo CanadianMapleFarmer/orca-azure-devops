@@ -55,14 +55,6 @@ export function membershipWiql(clause: string): string {
   return select([IN_PROJECT, clause])
 }
 
-export function wiqlMine(_cfg: BoardConfig, allDoneStates: string[]): string {
-  return membershipWiql(mineClause(allDoneStates))
-}
-
-export function wiqlBoard(cfg: BoardConfig, everyone: boolean): string {
-  return membershipWiql(boardClause(cfg, everyone))
-}
-
 export function deltaWiql(clause: string, since: string, known: readonly number[]): string {
   const outside = known.length === 0 ? '' : ` OR [System.Id] IN (${known.join(', ')})`
   return select([`[System.ChangedDate] >= ${since}`, `((${IN_PROJECT} AND (${clause}))${outside})`])

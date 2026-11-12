@@ -3,12 +3,15 @@ import { assert, test } from 'orca/testing'
 import type { BoardConfig } from '../../src/shared/work'
 import { AdoError, createAdoHttp } from './http'
 import {
+  boardClause,
   CHILD_LINK,
   childIdsOf,
   deltaWiql,
   hydrate,
   isDatePrecisionError,
   KEPT_FIELDS,
+  membershipWiql,
+  mineClause,
   parsePrRef,
   queryIdsAt,
   readFields,
@@ -17,8 +20,6 @@ import {
   TASK_FIELDS,
   toRecord,
   toSummary,
-  wiqlBoard,
-  wiqlMine,
   type RawWorkItem
 } from './workitems'
 
@@ -79,40 +80,40 @@ const SEARCH = [
 const RECENT_DONE = "([System.State] NOT IN ('Closed', 'Removed') OR [System.ChangedDate] >= @Today - 14)"
 const NEWEST_FIRST = 'ORDER BY [System.ChangedDate] DESC'
 
-test('wiqlMine excludes done states and escapes quotes', () => {
+test('the mine query excludes done states and escapes quotes', () => {
   assert.equal(
-    wiqlMine(config(), ['Closed', "Won't Fix"]),
+    membershipWiql(mineClause(['Closed', "Won't Fix"])),
     "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Won''t Fix') ORDER BY [System.ChangedDate] DESC"
   )
 })
 
-test('wiqlMine lists each done state once and drops the state clause when there are none', () => {
-  assert(wiqlMine(config(), ['Closed', 'Removed', 'Closed']).includes("NOT IN ('Closed', 'Removed')"))
+test('the mine query lists each done state once and drops the state clause when there are none', () => {
+  assert(membershipWiql(mineClause(['Closed', 'Removed', 'Closed'])).includes("NOT IN ('Closed', 'Removed')"))
   assert.equal(
-    wiqlMine(config(), []),
+    membershipWiql(mineClause([])),
     'SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me ORDER BY [System.ChangedDate] DESC'
   )
 })
 
-test('wiqlBoard adds the area clause and the me filter', () => {
-  assert.equal(wiqlBoard(config(), true), `${SEARCH} AND ${RECENT_DONE} ${NEWEST_FIRST}`)
-  assert.equal(wiqlBoard(config(), false), `${SEARCH} AND [System.AssignedTo] = @Me AND ${RECENT_DONE} ${NEWEST_FIRST}`)
+test('the board query adds the area clause and the me filter', () => {
+  assert.equal(membershipWiql(boardClause(config(), true)), `${SEARCH} AND ${RECENT_DONE} ${NEWEST_FIRST}`)
+  assert.equal(membershipWiql(boardClause(config(), false)), `${SEARCH} AND [System.AssignedTo] = @Me AND ${RECENT_DONE} ${NEWEST_FIRST}`)
 })
 
-test('wiqlBoard escapes quotes in types, areas and states, and keeps one entry per done state', () => {
+test('the board query escapes quotes in types, areas and states, and keeps one entry per done state', () => {
   const cfg = config({
     requirementTypes: ["Dealer's Story"],
     areaPaths: [{ value: "Fabrikam Web\\Owner's", includeChildren: true }],
     doneStates: { "Dealer's Story": ["Won't Fix", 'Closed'], Bug: ['Closed'], Task: ['Closed'] }
   })
-  const query = wiqlBoard(cfg, true)
+  const query = membershipWiql(boardClause(cfg, true))
   assert(query.includes("[System.WorkItemType] IN ('Dealer''s Story')"))
   assert(query.includes("([System.AreaPath] UNDER 'Fabrikam Web\\Owner''s')"))
   assert(query.includes("[System.State] NOT IN ('Won''t Fix', 'Closed')"))
 })
 
-test('wiqlBoard without done states or area paths drops those clauses', () => {
-  const query = wiqlBoard(config({ areaPaths: [], doneStates: {} }), true)
+test('the board query without done states or area paths drops those clauses', () => {
+  const query = membershipWiql(boardClause(config({ areaPaths: [], doneStates: {} }), true))
   assert.equal(query, `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.WorkItemType] IN ('User Story', 'Bug') ${NEWEST_FIRST}`)
 })
 

@@ -8,6 +8,7 @@ import { fly, join, type Flight } from '../data/context'
 import type { Entities } from '../data/entities'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
 import type { SavedTables } from '../data/saved-tables'
+import { isRecord, sameApartFromTime } from '../data/values'
 import {
   failureMessage,
   joinMessages,
@@ -278,7 +279,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     const before = entry.snapshot
     const after = await untilAborted(load(org, visible.has(org) ? 'full' : 'reviews'), signal)
     await untilAborted(observe(org, entry), signal)
-    return before && sameSnapshot(before, after) ? 'unchanged' : undefined
+    return before && sameApartFromTime(before, after) ? 'unchanged' : undefined
   }
 
   async function observe(org: string, entry: OrgPrs): Promise<void> {
@@ -441,10 +442,6 @@ function capPrSnapshot(snapshot: PrSnapshot, budget = POST_BUDGET_BYTES): PrSnap
   }
 }
 
-function sameSnapshot(a: PrSnapshot, b: PrSnapshot): boolean {
-  return JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 })
-}
-
 function offMessage({ off }: FullLoad): string | undefined {
   return joinMessages(off.workItems ? PRS_WORK_ITEMS_NEED_ACCESS : undefined, off.checks ? PRS_CHECKS_NEED_ACCESS : undefined)
 }
@@ -458,10 +455,6 @@ function isSavedPrs(value: unknown, org: string): value is PrSnapshot {
     isRecord(value.autoComplete) &&
     Number.isFinite(value.updatedAt)
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function samePr(pr: PrKey, key: PrKey): boolean {

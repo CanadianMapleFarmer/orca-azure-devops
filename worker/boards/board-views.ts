@@ -1,5 +1,6 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
 import type { BoardArgs } from '../ado/board-config'
+import { sameApartFromTime } from '../data/values'
 import { failureMessage, joinMessages, LAST_BOARD } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import type { SyncState } from './sync'
@@ -37,10 +38,6 @@ const MAX_HELD_VIEWS = 4
 
 export function boardKey(org: string, teamId: string, boardId: string): string {
   return `board:${org}:${teamId}:${boardId}`
-}
-
-function sameApartFromTime(a: BoardResult, b: BoardResult): boolean {
-  return JSON.stringify({ ...a, updatedAt: 0 }) === JSON.stringify({ ...b, updatedAt: 0 })
 }
 
 export function createBoardViews(deps: BoardViewsDeps): BoardViews {

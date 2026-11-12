@@ -9,6 +9,7 @@ import { fly, join, type Flight } from '../data/context'
 import type { Entities } from '../data/entities'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
 import type { SavedTables } from '../data/saved-tables'
+import { isRecord, sameApartFromTime } from '../data/values'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -329,10 +330,11 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   async function poll(org: string, signal: AbortSignal): Promise<void | 'unchanged'> {
-    const before = entries.get(org)?.base ?? null
+    const before = entries.get(org)?.base
     try {
       await untilAborted(load(org, visible.has(org) || entries.get(org)?.restored ? 'full' : 'background'), signal)
-      return sameRuns(before, entries.get(org)?.base ?? null) ? 'unchanged' : undefined
+      const after = entries.get(org)?.base
+      return before && after && sameApartFromTime(before, after) ? 'unchanged' : undefined
     } finally {
       if (!signal.aborted && jobs.has(org)) upsertRuns(org)
     }
@@ -506,10 +508,6 @@ function mergeWatched(current: RunSummary[], read: RunSummary[]): RunSummary[] {
   return orderRuns([...byId.values()])
 }
 
-function sameRuns(before: RunsSnapshot | null, after: RunsSnapshot | null): boolean {
-  return before !== null && after !== null && JSON.stringify({ ...before, updatedAt: 0 }) === JSON.stringify({ ...after, updatedAt: 0 })
-}
-
 function capRunsSnapshot(snapshot: RunsSnapshot, budget = POST_BUDGET_BYTES): RunsSnapshot {
   const runs = snapshot.runs.map(run => (run.stages && run.stages.length > MAX_STAGE_CHIPS ? { ...run, stages: run.stages.slice(0, MAX_STAGE_CHIPS) } : run))
   const message = joinMessages(snapshot.message, RUNS_TRIMMED)
@@ -529,8 +527,4 @@ function offMessage({ off }: RunsLoad): string | undefined {
 
 function isSavedRuns(value: unknown, org: string): value is RunsSnapshot {
   return isRecord(value) && value.org === org && Array.isArray(value.runs) && value.runs.every(isRecord) && isRecord(value.counts) && Number.isFinite(value.updatedAt)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

@@ -5,6 +5,7 @@ import { byteLength, newestThatFit } from '../budget'
 import type { Entities, OrgEntities, Stamped, Table, TableName } from './entities'
 import { VALUE_BUDGET_BYTES, type Persisted } from './persist'
 import { prKey, type CheckRecord, type PrRecord } from './records'
+import { isRecord } from './values'
 
 export type Row<T> = [key: string, value: T, at: number]
 export interface SavedMeta { configs: Row<BoardConfig>[]; states: Row<TypeState[]>[]; projects: Row<NamedItem[]>[] }
@@ -145,10 +146,6 @@ function seedRows<T>(table: Table<T>, rows: unknown): void {
 function seedOne<T>(table: Table<T>, key: string, value: T, at: number): void {
   const held = table.get(key)
   if (!held || held.at < at) table.put(key, value, at)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isRow(value: unknown): value is Row<unknown> {

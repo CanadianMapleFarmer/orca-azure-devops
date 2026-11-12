@@ -22,6 +22,7 @@ import { failuresOf, getTimeline, mergeTimeline, runStages, type RawTimeline } f
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes } from '../budget'
 import { fly, join, type Flight } from '../data/context'
 import type { Entities, Table } from '../data/entities'
+import { sameApartFromTime } from '../data/values'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -239,10 +240,10 @@ export function createRunViews(deps: RunViewsDeps): RunViews {
   }
 
   function keep(held: Held, view: RunView): boolean {
-    const before = held.view && comparable(held.view)
+    const changed = !held.view || !sameApartFromTime(held.view, view)
     held.view = view
     held.at = now()
-    return comparable(view) !== before
+    return changed
   }
 
   function drop(held: Held): void {
@@ -469,10 +470,6 @@ function unlessGone<T>(request: Promise<T>): Promise<T | typeof GONE> {
     if (error instanceof AdoError && error.code === 'not_found') return GONE
     throw error
   })
-}
-
-function comparable(view: RunView): string {
-  return JSON.stringify({ ...view, updatedAt: 0 })
 }
 
 function chipsOf(stages: readonly StageView[]): StageChip[] {

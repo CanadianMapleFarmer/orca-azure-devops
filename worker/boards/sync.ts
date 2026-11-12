@@ -1,10 +1,10 @@
 import type { AdoHttp } from '../ado/http'
 import { deltaWiql, isDatePrecisionError, membershipWiql, queryIdsAt, readRevs, stillInWiql, WIQL_TOP, type IdsAt } from '../ado/workitems'
 
-export const OVERLAP_MS = 10_000
+const OVERLAP_MS = 10_000
 export const AUDIT_EVERY_MS = 15 * 60_000
-export const DEEP_AUDIT_EVERY = 4
-export const MAX_KNOWN_FOR_DELTA = 1500
+const DEEP_AUDIT_EVERY = 4
+const MAX_KNOWN_FOR_DELTA = 1500
 
 export interface SyncState { clause: string; members: number[]; watermark: string; auditedAt: number; audits: number; precision: 'time' | 'day'; seen: ReadonlyMap<number, number> }
 export interface SyncScope { org: string; projectId: string; teamId: string; clause: string }
