@@ -27,11 +27,13 @@ Run these from a clean working tree at the commit to release, and name that comm
 
    The content hash matches the one `orca plugin release-entry . --json` prints. Uncommitted files are in neither. Put the file count, the size and the content hash in the release report, labelled "at <commit>". Never write them into a file in the repository: that would change the hash.
 
-3. **A privacy scan.**
+3. **The size.** The catalog holds a version for manual review when the inspected `totalBytes` is over about 5 MiB; it held 0.3.0, at 5,415,318 B. Keep `totalBytes` under 5,000,000 and record it in the release report.
+
+4. **A privacy scan.**
    - `git grep -n -i -E '<terms>'`, with terms the user supplies at release time. The terms are never written into the repository.
    - `git grep -n -E '/Users/|/home/|~/' -- ':!docs/release-checklist.md'` for absolute local paths. Review every hit. The docs' `~/.orca-azure-devops` and `~/.azure`, and the `/Users/ada` and `/home/vsts` paths in tests and fixtures, are expected.
    - Review every GUID that `git grep -n -i -E '[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}'` finds. Only fixtures, the all-zero placeholder and the Azure DevOps application ID `499b84ac-…` may remain.
-   - The planning documents under `docs/superpowers/` and `docs/research/` name the author's employer and local paths, mostly in their Global Constraints. The user decides whether to redact them or to leave both folders out of the public repository.
+   - The planning documents that were under `docs/superpowers/` and `docs/research/` are now kept outside this repository and no longer ship. Commits up to `v0.3.0` still hold them, with the author's employer and local paths, so the history scan below lists those commits.
    - Scan the history too, because publishing pushes every commit and `git grep` sees only the checked-out files. These list the commits that added or removed a matching line:
 
      ```bash
@@ -41,13 +43,13 @@ Run these from a clean working tree at the commit to release, and name that comm
 
      Redacting or deleting a file in a new commit does not remove it from history. Review every commit listed (the expected paths from the previous bullet appear too). Whatever is not acceptable stays readable in a pushed history, so the user decides between publishing a squashed or rewritten history and accepting it.
 
-4. **Images.** The icon and screenshots meet Orca's rules, which `worker/manifest.test.ts` checks, and the screenshots show fixture data only.
+5. **Images.** The icon and screenshots meet Orca's rules, which `worker/manifest.test.ts` checks, and the screenshots show fixture data only.
 
-5. **The docs.** The settings list in [docs/reference.md](reference.md) matches the manifest, the pending live checks in [docs/development.md](development.md) are current, and the README stays a short landing page.
+6. **The docs.** The settings list in [docs/reference.md](reference.md) matches the manifest, the pending live checks in [docs/development.md](development.md) are current, and the README stays a short landing page.
 
-6. **The license.** MIT (Plan 1's call). The user confirms it.
+7. **The license.** MIT ([Plan 1](https://github.com/kloppers-labs/orca-azure-devops/blob/v0.3.0/docs/superpowers/plans/2026-11-03-plan-1-foundation.md)'s call). The user confirms it.
 
-7. **The version.** `version` is the same in `orca-plugin.json` and `package.json`.
+8. **The version.** `version` is the same in `orca-plugin.json` and `package.json`.
 
 ## Publishing
 
