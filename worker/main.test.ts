@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { mock } from 'node:test'
 import * as fs from 'node:fs/promises'
 import { request } from 'node:http'
 import * as os from 'node:os'
@@ -714,21 +715,34 @@ test('the Work view is saved on deactivate, painted from storage at the next sta
   })
 })
 
-test('deactivate returns within its 2 s budget while a saved view cannot be written', async () => {
+test('deactivate stops waiting for a saved view it cannot write after 1.5 s', async () => {
   const ado = fakeAdo()
   let unstick = () => {}
   const stuck = new Promise<null>(resolve => (unstick = () => resolve(null)))
   const host = boardsHost(BOARDS, { 'storage.set': ({ key }: { key: string }) => (key.startsWith('adoCache:') ? stuck : null) })
-  await withFetch(signedIn(ado), async () => {
-    await withWorker(worker, { host }, async w => {
-      await w.request('work.snapshot', { org: 'contoso' })
-      assert.ok(await until(() => w.host.calls.some(call => call.method === 'storage.set')), 'a saved view is being written')
+  await withMockTimers(async advance => {
+    await withFetch(signedIn(ado), async () => {
+      await withWorker(worker, { host }, async w => {
+        await advance(0)
+        await w.request('work.snapshot', { org: 'contoso' })
+        await advance(0)
+        assert.ok(w.host.calls.some(call => call.method === 'storage.set'), 'a saved view is being written')
 
-      const started = Date.now()
-      const finished = await Promise.race([worker.deactivate().then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3_000))])
-      const took = Date.now() - started
-      unstick()
-      assert.ok(finished && took < 2_000, `deactivate took ${took} ms`)
+        let finished = false
+        const deactivated = worker.deactivate().then(() => (finished = true))
+        try {
+          mock.timers.tick(1_499)
+          await drain()
+          assert.equal(finished, false, 'still waiting 1 ms before the flush budget')
+          mock.timers.tick(1)
+          await drain()
+          assert.equal(finished, true, 'gave up at 1.5 s')
+          assert.ok(w.logs.includes('Saved data: not every view was written within 1500 ms of shutting down.'))
+        } finally {
+          unstick()
+          await deactivated
+        }
+      })
     })
   })
 })

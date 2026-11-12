@@ -1,3 +1,5 @@
+import type { Clock } from './poll/scheduler'
+
 export function linkedAbort(parent: AbortSignal): { signal: AbortSignal; release(): void } {
   const child = new AbortController()
   const follow = () => child.abort(parent.reason)
@@ -13,4 +15,10 @@ export function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<
     signal.addEventListener('abort', stop, { once: true })
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop))
   })
+}
+
+export function within<T>(work: Promise<T>, ms: number, clock: Pick<Clock, 'setTimeout' | 'clearTimeout'>): Promise<T> {
+  const late = new AbortController()
+  const timer = clock.setTimeout(() => late.abort(), ms)
+  return untilAborted(work, late.signal).finally(() => clock.clearTimeout(timer))
 }

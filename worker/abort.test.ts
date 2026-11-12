@@ -1,6 +1,6 @@
 import { assert, test } from 'orca/testing'
-import { linkedAbort, untilAborted } from './abort'
-import { drain } from './test-support'
+import { linkedAbort, untilAborted, within } from './abort'
+import { drain, fakeClock } from './test-support'
 
 test('a linked signal aborts with its parent, with the same reason', () => {
   const parent = new AbortController()
@@ -49,4 +49,22 @@ test('untilAborted stops listening once the work is over', async () => {
   await untilAborted(Promise.resolve(), signal)
   await drain(1)
   assert.equal(removed, 1)
+})
+
+test('within rejects when the work is still going at its time limit on the given clock', async () => {
+  const clock = fakeClock()
+  let settled = false
+  const late = within(new Promise<void>(() => {}), 1_500, clock)
+  late.catch(() => (settled = true))
+  await clock.tick(1_499)
+  assert.equal(settled, false)
+  await clock.tick(1)
+  await assert.rejects(late)
+})
+
+test('within settles with the work when it finishes first, and clears its timer', async () => {
+  const clock = fakeClock()
+  assert.equal(await within(Promise.resolve(7), 1_500, clock), 7)
+  await assert.rejects(within(Promise.reject(new Error('boom')), 1_500, clock), /boom/)
+  assert.equal(clock.pending(), 0)
 })

@@ -7,7 +7,7 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
 import { createEntraProvider } from './auth/entra-provider'
-import { untilAborted } from './abort'
+import { within } from './abort'
 import { closeAllListeners, listenForRedirect } from './auth/loopback'
 import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
@@ -137,7 +137,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   })
   void persisted.sweep()
   flushSaved = () =>
-    untilAborted(persisted.flush(), AbortSignal.timeout(FLUSH_WITHIN_MS)).catch(() => log(`Saved data: not every view was written within ${FLUSH_WITHIN_MS} ms of shutting down.`))
+    within(persisted.flush(), FLUSH_WITHIN_MS, realClock).catch(() => log(`Saved data: not every view was written within ${FLUSH_WITHIN_MS} ms of shutting down.`))
   const savedTables = createSavedTables(entities, persisted)
   const connections = createConnections({
     store,
