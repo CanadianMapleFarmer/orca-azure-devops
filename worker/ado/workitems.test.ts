@@ -1,19 +1,25 @@
 import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
 import type { BoardConfig } from '../../src/shared/work'
-import { createAdoHttp } from './http'
+import { AdoError, createAdoHttp } from './http'
 import {
+  boardClause,
   CHILD_LINK,
   childIdsOf,
+  deltaWiql,
   hydrate,
+  isDatePrecisionError,
+  KEPT_FIELDS,
+  membershipWiql,
+  mineClause,
   parsePrRef,
-  queryBoardIds,
-  queryIds,
+  queryIdsAt,
   readFields,
+  readRevs,
+  stillInWiql,
   TASK_FIELDS,
+  toRecord,
   toSummary,
-  wiqlBoard,
-  wiqlMine,
   type RawWorkItem
 } from './workitems'
 
@@ -74,47 +80,49 @@ const SEARCH = [
 const RECENT_DONE = "([System.State] NOT IN ('Closed', 'Removed') OR [System.ChangedDate] >= @Today - 14)"
 const NEWEST_FIRST = 'ORDER BY [System.ChangedDate] DESC'
 
-test('wiqlMine excludes done states and escapes quotes', () => {
+test('the mine query excludes done states and escapes quotes', () => {
   assert.equal(
-    wiqlMine(config(), ['Closed', "Won't Fix"]),
+    membershipWiql(mineClause(['Closed', "Won't Fix"])),
     "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed', 'Won''t Fix') ORDER BY [System.ChangedDate] DESC"
   )
 })
 
-test('wiqlMine lists each done state once and drops the state clause when there are none', () => {
-  assert(wiqlMine(config(), ['Closed', 'Removed', 'Closed']).includes("NOT IN ('Closed', 'Removed')"))
+test('the mine query lists each done state once and drops the state clause when there are none', () => {
+  assert(membershipWiql(mineClause(['Closed', 'Removed', 'Closed'])).includes("NOT IN ('Closed', 'Removed')"))
   assert.equal(
-    wiqlMine(config(), []),
+    membershipWiql(mineClause([])),
     'SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.AssignedTo] = @Me ORDER BY [System.ChangedDate] DESC'
   )
 })
 
-test('wiqlBoard adds the area clause and the me filter', () => {
-  assert.equal(wiqlBoard(config(), true), `${SEARCH} AND ${RECENT_DONE} ${NEWEST_FIRST}`)
-  assert.equal(wiqlBoard(config(), false), `${SEARCH} AND [System.AssignedTo] = @Me AND ${RECENT_DONE} ${NEWEST_FIRST}`)
+test('the board query adds the area clause and the me filter', () => {
+  assert.equal(membershipWiql(boardClause(config(), true)), `${SEARCH} AND ${RECENT_DONE} ${NEWEST_FIRST}`)
+  assert.equal(membershipWiql(boardClause(config(), false)), `${SEARCH} AND [System.AssignedTo] = @Me AND ${RECENT_DONE} ${NEWEST_FIRST}`)
 })
 
-test('wiqlBoard escapes quotes in types, areas and states, and keeps one entry per done state', () => {
+test('the board query escapes quotes in types, areas and states, and keeps one entry per done state', () => {
   const cfg = config({
     requirementTypes: ["Dealer's Story"],
     areaPaths: [{ value: "Fabrikam Web\\Owner's", includeChildren: true }],
     doneStates: { "Dealer's Story": ["Won't Fix", 'Closed'], Bug: ['Closed'], Task: ['Closed'] }
   })
-  const query = wiqlBoard(cfg, true)
+  const query = membershipWiql(boardClause(cfg, true))
   assert(query.includes("[System.WorkItemType] IN ('Dealer''s Story')"))
   assert(query.includes("([System.AreaPath] UNDER 'Fabrikam Web\\Owner''s')"))
   assert(query.includes("[System.State] NOT IN ('Won''t Fix', 'Closed')"))
 })
 
-test('wiqlBoard without done states or area paths drops those clauses', () => {
-  const query = wiqlBoard(config({ areaPaths: [], doneStates: {} }), true)
+test('the board query without done states or area paths drops those clauses', () => {
+  const query = membershipWiql(boardClause(config({ areaPaths: [], doneStates: {} }), true))
   assert.equal(query, `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.WorkItemType] IN ('User Story', 'Bug') ${NEWEST_FIRST}`)
 })
 
-test('queryIds posts the query to the team-scoped endpoint and returns the ids in order', async () => {
+test('queryIdsAt posts the query to the team-scoped endpoint and returns the ids in order with asOf', async () => {
   const { http, calls } = recorder(() => fixture('wiql-board'))
-  const ids = await queryIds(http, ORG, PROJECT, TEAM, 'SELECT [System.Id] FROM WorkItems')
-  assert.deepEqual(ids, [1206, 1204, 1205])
+  assert.deepEqual(await queryIdsAt(http, ORG, PROJECT, TEAM, 'SELECT [System.Id] FROM WorkItems', false), {
+    ids: [1206, 1204, 1205],
+    asOf: '2026-11-04T08:15:30.103Z'
+  })
   assert.deepEqual(calls, [{
     url: `${ORG_URL}/${PROJECT}/${TEAM}/_apis/wit/wiql?$top=500&api-version=7.1`,
     method: 'POST',
@@ -122,24 +130,68 @@ test('queryIds posts the query to the team-scoped endpoint and returns the ids i
   }])
 })
 
-test('queryBoardIds runs the board query and returns the ids', async () => {
-  const { http, calls } = recorder(() => fixture('wiql-board'))
-  const cfg = config()
-  assert.deepEqual(await queryBoardIds(http, ORG, PROJECT, TEAM, cfg, false), [1206, 1204, 1205])
-  assert.deepEqual(calls.map(call => [call.url, call.body]), [
-    [`${ORG_URL}/${PROJECT}/${TEAM}/_apis/wit/wiql?$top=500&api-version=7.1`, { query: wiqlBoard(cfg, false) }]
-  ])
+test('queryIdsAt sends timePrecision only when asked and returns asOf', async () => {
+  const { http, calls } = recorder(() => ({ asOf: '2026-11-11T10:00:00.123Z', workItems: [{ id: 3 }, { id: 1 }] }))
+  assert.deepEqual(await queryIdsAt(http, ORG, PROJECT, TEAM, 'q', true), { ids: [3, 1], asOf: '2026-11-11T10:00:00.123Z' })
+  assert.deepEqual(await queryIdsAt(http, ORG, PROJECT, TEAM, 'q', false), { ids: [3, 1], asOf: '2026-11-11T10:00:00.123Z' })
+  const endpoint = `${ORG_URL}/${PROJECT}/${TEAM}/_apis/wit/wiql`
+  assert.deepEqual(calls.map(call => call.url), [`${endpoint}?$top=500&timePrecision=true&api-version=7.1`, `${endpoint}?$top=500&api-version=7.1`])
 })
 
-test('queryBoardIds returns no ids without a request when the board maps no work item type', async () => {
-  const { http, calls } = recorder(() => fixture('wiql-board'))
-  assert.deepEqual(await queryBoardIds(http, ORG, PROJECT, TEAM, config({ requirementTypes: [] }), true), [])
-  assert.equal(calls.length, 0)
+test('queryIdsAt returns an empty list when the query matches nothing', async () => {
+  const { http } = recorder(() => ({ queryType: 'flat', asOf: '2026-11-11T10:00:00Z', workItems: [] }))
+  assert.deepEqual(await queryIdsAt(http, ORG, PROJECT, TEAM, 'q', false), { ids: [], asOf: '2026-11-11T10:00:00Z' })
 })
 
-test('queryIds returns an empty list when the query matches nothing', async () => {
-  const { http } = recorder(() => ({ queryType: 'flat', workItems: [] }))
-  assert.deepEqual(await queryIds(http, ORG, PROJECT, TEAM, 'q'), [])
+test('queryIdsAt treats a missing or unparsable asOf as malformed', async () => {
+  for (const asOf of [undefined, 'yesterday', 42, '']) {
+    const { http } = recorder(() => ({ asOf, workItems: [{ id: 1 }] }))
+    await assert.rejects(queryIdsAt(http, ORG, PROJECT, TEAM, 'q', true), (error: unknown) => {
+      assert.ok(error instanceof AdoError, String(asOf))
+      assert.deepEqual([error.code, error.message], ['server', 'Azure DevOps returned an unexpected work item response.'], String(asOf))
+      return true
+    })
+  }
+})
+
+test('deltaWiql puts the change-date clause first, scopes the clause to the project and lists known ids outside it', () => {
+  assert.equal(
+    deltaWiql('[System.AssignedTo] = @Me', "'2026-11-11T09:59:50.000Z'", [7, 9]),
+    "SELECT [System.Id] FROM WorkItems WHERE [System.ChangedDate] >= '2026-11-11T09:59:50.000Z' AND (([System.TeamProject] = @project AND ([System.AssignedTo] = @Me)) OR [System.Id] IN (7, 9)) ORDER BY [System.ChangedDate] DESC"
+  )
+  assert.equal(
+    deltaWiql('[System.AssignedTo] = @Me', '@Today - 1', [7, 9]),
+    'SELECT [System.Id] FROM WorkItems WHERE [System.ChangedDate] >= @Today - 1 AND (([System.TeamProject] = @project AND ([System.AssignedTo] = @Me)) OR [System.Id] IN (7, 9)) ORDER BY [System.ChangedDate] DESC'
+  )
+  assert.equal(
+    deltaWiql('[System.AssignedTo] = @Me', '@Today - 1', []),
+    'SELECT [System.Id] FROM WorkItems WHERE [System.ChangedDate] >= @Today - 1 AND (([System.TeamProject] = @project AND ([System.AssignedTo] = @Me))) ORDER BY [System.ChangedDate] DESC'
+  )
+})
+
+test('stillInWiql asks which of the ids still match the clause in the project', () => {
+  assert.equal(
+    stillInWiql('[System.AssignedTo] = @Me', [2, 9]),
+    'SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND ([System.AssignedTo] = @Me) AND [System.Id] IN (2, 9)'
+  )
+})
+
+test('readRevs reads only System.Id with errorPolicy omit and leaves out the ids it could not read', async () => {
+  const { http, calls } = recorder(call => {
+    const requested = (call.body as { ids: number[] }).ids
+    return { count: requested.length, value: requested.map(id => (id === 8 ? null : { id, rev: id * 10, fields: { 'System.Id': id }, url: '' })) }
+  })
+  assert.deepEqual([...(await readRevs(http, ORG, PROJECT, [7, 8, 9]))], [[7, 70], [9, 90]])
+  assert.deepEqual(calls.map(call => call.body), [{ ids: [7, 8, 9], fields: ['System.Id'], errorPolicy: 'omit' }])
+})
+
+test('isDatePrecisionError matches only the date-precision 400', () => {
+  const precision = 'You cannot supply a time with the date when running a query using date precision.'
+  assert.equal(isDatePrecisionError(new AdoError('bad_request', 400, precision)), true)
+  assert.equal(isDatePrecisionError(new AdoError('bad_request', 400, 'TF51005: The query references a field that does not exist.')), false)
+  assert.equal(isDatePrecisionError(new AdoError('server', 500, precision)), false)
+  assert.equal(isDatePrecisionError(new Error(precision)), false)
+  assert.equal(isDatePrecisionError(precision), false)
 })
 
 function rawItem(id: number): RawWorkItem {
@@ -247,6 +299,38 @@ function batchItem(id: number): RawWorkItem {
   const item = items.find(candidate => candidate.id === id)
   return item ?? assert.fail(`no fixture item ${id}`)
 }
+
+test('toRecord keeps only the fields the views read and the child and PR links', () => {
+  const raw = batchItem(1204)
+  const otherBoard = 'WEF_8D2E3F4A5B6C4D7E9F0A1B2C3D4E5F60_Kanban.Column'
+  const child = { rel: CHILD_LINK, url: `${ORG_URL}/_apis/wit/workItems/1209`, attributes: { name: 'Child' } }
+  const wide: RawWorkItem = {
+    ...raw,
+    fields: { ...raw.fields, 'System.Description': '<p>Long text</p>', 'Microsoft.VSTS.Common.Priority': 2, [otherBoard]: 'Active', 'Custom.WEF_Kanban.Column': 'x' },
+    relations: [...(raw.relations ?? []), child]
+  }
+  const record = toRecord(wide, true)
+  assert.deepEqual(record, {
+    id: 1204,
+    rev: 9,
+    url: raw.url,
+    fields: { ...Object.fromEntries(Object.entries(raw.fields).filter(([name]) => name !== 'System.Description')), [otherBoard]: 'Active' },
+    relations: [
+      { rel: 'ArtifactLink', url: `vstfs:///Git/PullRequestId/${PROJECT}%2F${REPO}%2F321` },
+      { rel: CHILD_LINK, url: `${ORG_URL}/_apis/wit/workItems/1209` }
+    ],
+    withRelations: true
+  })
+  assert.deepEqual([...KEPT_FIELDS].sort(), [
+    'System.AreaPath', 'System.AssignedTo', 'System.ChangedDate', 'System.Id', 'System.Parent', 'System.State', 'System.TeamProject', 'System.Title', 'System.WorkItemType'
+  ])
+  assert.deepEqual(toSummary(record, config(), ORG_URL), toSummary(raw, config(), ORG_URL), 'the views read the same summary')
+  assert.deepEqual(childIdsOf(record), [1209])
+
+  const fieldsOnly = toRecord({ id: 1207, rev: 2, url: 'u', fields: { 'System.Id': 1207, 'System.Title': 'Task' } }, false)
+  assert.deepEqual(fieldsOnly, { id: 1207, rev: 2, url: 'u', fields: { 'System.Id': 1207, 'System.Title': 'Task' }, withRelations: false })
+  assert.deepEqual(toRecord({ ...raw, relations: [null, { rel: CHILD_LINK, url: 7 }] as never }, true).relations, [])
+})
 
 test('toSummary reads column, done flag, lane and parent from WEF fields', () => {
   const summary = toSummary(batchItem(1204), config(), ORG_URL)

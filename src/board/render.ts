@@ -1,6 +1,13 @@
 import { chipOf } from '../shared/chips'
 import type { WorkItemSummary } from '../shared/work'
+import { ageText } from './age'
 import { cardLabel, initials, type Lane, type ParentOption } from './layout'
+
+export function noteText(view: { stale: boolean; updatedAt: number | null; message: string | undefined; empty: boolean }, now: number, locale: string): string {
+  if (view.stale && view.updatedAt !== null) return `Updated ${ageText(view.updatedAt, now, locale)} · ${view.message || 'refreshing…'}`
+  if (view.empty) return [view.message, 'No work items match.'].filter(Boolean).join(' ')
+  return view.message ?? ''
+}
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
@@ -123,11 +130,11 @@ export function createToolbar(handlers: { everyone(value: boolean): void; parent
   bar.append(title, status, scope, parent)
   return {
     node: bar,
-    update(view: { title: string; loading: boolean; everyone: boolean; parents: ParentOption[]; parent: number | null }): void {
+    update(view: { title: string; loading: boolean; everyone: boolean | null; parents: ParentOption[]; parent: number | null }): void {
       title.textContent = view.title
       status.textContent = view.loading ? 'Loading…' : ''
-      me.setAttribute('aria-pressed', String(!view.everyone))
-      everyone.setAttribute('aria-pressed', String(view.everyone))
+      me.setAttribute('aria-pressed', String(view.everyone === false))
+      everyone.setAttribute('aria-pressed', String(view.everyone === true))
       const options = JSON.stringify(view.parents)
       if (options !== shownOptions) {
         shownOptions = options

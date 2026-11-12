@@ -60,9 +60,12 @@ export function statusBarFor(orgs: OrgStatus[], counts?: OrgCounts): StatusBarSt
   }
 }
 
-export function statusText(orgs: OrgStatus[], counts?: OrgCounts, notes: readonly string[] = []): string {
+export function statusText(orgs: OrgStatus[], counts?: OrgCounts, notes: readonly string[] = [], details?: (org: string) => string[]): string {
   if (orgs.length === 0) return ['Not connected. Open the Azure DevOps panel to connect.', ...notes].join('\n')
-  const lines = orgs.map(status => (connectedAs(status) ? `${status.org} — connected as ${connectedAs(status)}` : `${status.org} — ${detail(status)}`))
+  const lines = orgs.flatMap(status => {
+    const account = connectedAs(status)
+    return account ? [`${status.org} — connected as ${account}`, ...(details?.(status.org) ?? [])] : [`${status.org} — ${detail(status)}`]
+  })
   return [...lines, ...signalsOf(orgs, counts).map(signalLine), ...notes].join('\n')
 }
 

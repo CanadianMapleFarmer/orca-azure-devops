@@ -1,7 +1,7 @@
 import { assert, test } from 'orca/testing'
 import type { BoardsTarget, ConnectFailure, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import type { ConnectionData } from './ado/core'
-import { AdoError, type AdoRequest } from './ado/http'
+import { AdoError, type AdoRequest, type ResponseObserver } from './ado/http'
 import { entraAuthorizeUrl } from './ado/org'
 import type { AzCliProvider } from './auth/azcli'
 import { createPkce } from './auth/entra'
@@ -251,6 +251,8 @@ function harness(
     profiles?: string[]
     settings?: Record<string, unknown>
     bindError?: Error
+    observe?: ResponseObserver
+    forgotten?: (org: string) => void
   } = {}
 ) {
   const clock = { now: T0 }
@@ -307,7 +309,9 @@ function harness(
       failures.push(record(structuredClone(failure)))
     },
     now: () => clock.now,
-    log
+    log,
+    observe: seed.observe,
+    forgotten: seed.forgotten
   })
 
   const h = {
@@ -410,6 +414,14 @@ test('connect via PAT pins the identity', async () => {
 
   await h.connections.http.json(PROJECTS)
   assert.deepEqual(h.ado.requests.map(request => request.who), ['ada', 'ada'])
+})
+
+test('the observer given to connections hears the org\'s responses', async () => {
+  const heard: string[] = []
+  const h = harness({ observe: (req, status) => void heard.push(`${req.org} ${req.path} ${status}`) })
+  await h.connect({ orgInput: 'https://dev.azure.com/contoso', method: 'pat', pat: PAT_ADA })
+  await h.connections.http.json(PROJECTS)
+  assert.deepEqual(heard, ['contoso /_apis/connectionData 200', 'contoso /_apis/projects 200'])
 })
 
 test('connect via azure-cli returns signing-in then posts connected', async () => {
@@ -1140,6 +1152,26 @@ test('a remove whose credentials cannot be deleted says they will be retried whe
   await h.connections.resetInterrupted()
   assert.equal(h.az.profiles.has('contoso'), false)
   assert.deepEqual(h.storage.get('signing-in'), [])
+})
+
+test('forgotten is called on sign-out and removal, and not on an interrupted sign-in', async () => {
+  const forgotten: string[] = []
+  const h = harness({
+    orgs: [config(), config({ org: 'fabrikam', method: 'pat', pinned: ADA })],
+    signingIn: ['contoso'],
+    secrets: { 'pat:fabrikam': PAT_ADA },
+    forgotten: org => forgotten.push(org)
+  })
+  await h.connections.resetInterrupted()
+  assert.equal(h.last('contoso')?.message, INTERRUPTED)
+  assert.deepEqual(forgotten, [])
+
+  await h.connections.signOut('fabrikam')
+  assert.deepEqual(forgotten, ['fabrikam'])
+  await h.connections.remove('contoso')
+  assert.deepEqual(forgotten, ['fabrikam', 'contoso'])
+  await h.connections.remove('contoso')
+  assert.deepEqual(forgotten, ['fabrikam', 'contoso'], 'removing an unknown org forgets nothing')
 })
 
 test('update saves boards and code projects and posts', async () => {

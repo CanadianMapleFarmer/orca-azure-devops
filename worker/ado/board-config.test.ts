@@ -1,14 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { assert, test } from 'orca/testing'
-import type { BoardConfig } from '../../src/shared/work'
-import { boardConfigKey, createBoardConfigCache, listTeamBoards, loadBoardConfig, loadTypeStates } from './board-config'
+import { boardConfigKey, listTeamBoards, loadBoardConfig, loadTypeStates } from './board-config'
 import { AdoError, createAdoHttp } from './http'
 
 const ORG = 'contoso'
 const PROJECT = '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d'
 const TEAM = '6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e'
 const STORIES_BOARD = 'e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091'
-const HOUR = 60 * 60 * 1000
 
 function fixture(name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')) as Record<string, unknown>
@@ -273,61 +271,6 @@ test('listTeamBoards returns the id and name of each board', async () => {
 test('listTeamBoards rejects an empty response with a server error', async () => {
   const error = await failure(listTeamBoards(server(withRoute('boards', undefined)).http, ARGS))
   assert.equal(error.code, 'server')
-})
-
-function config(boardId: string): BoardConfig {
-  return {
-    org: ORG, projectId: PROJECT, teamId: TEAM, boardId, boardName: 'Stories', requirementTypes: [],
-    columns: [], lanes: [], fields: { column: '', columnDone: '', lane: '' }, areaPaths: [], doneStates: {}
-  }
-}
-
-test('cache returns the same config within ttl', () => {
-  let now = 1_000
-  const cache = createBoardConfigCache(() => now, 500)
-  const stored = config('a')
-  cache.set('key', stored)
-  now += 499
-  assert(cache.get('key') === stored)
-  assert.equal(cache.get('other'), undefined)
-})
-
-test('cache drops a config once its ttl has passed', () => {
-  let now = 1_000
-  const cache = createBoardConfigCache(() => now, 500)
-  cache.set('key', config('a'))
-  now += 500
-  assert.equal(cache.get('key'), undefined)
-})
-
-test('cache ttl defaults to one hour', () => {
-  let now = 0
-  const cache = createBoardConfigCache(() => now)
-  cache.set('key', config('a'))
-  now = HOUR - 1
-  assert.notEqual(cache.get('key'), undefined)
-  now = HOUR
-  assert.equal(cache.get('key'), undefined)
-})
-
-test('setting a key again restarts its ttl', () => {
-  let now = 0
-  const cache = createBoardConfigCache(() => now, 500)
-  cache.set('key', config('a'))
-  now = 400
-  const fresh = config('b')
-  cache.set('key', fresh)
-  now = 800
-  assert(cache.get('key') === fresh)
-})
-
-test('cache clear forgets everything', () => {
-  const cache = createBoardConfigCache(() => 0)
-  cache.set('a', config('a'))
-  cache.set('b', config('b'))
-  cache.clear()
-  assert.equal(cache.get('a'), undefined)
-  assert.equal(cache.get('b'), undefined)
 })
 
 test('boardConfigKey names org, project, team and board, with default when no board is chosen', () => {

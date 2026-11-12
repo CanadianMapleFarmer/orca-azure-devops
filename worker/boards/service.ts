@@ -1,21 +1,29 @@
 import { NO_BOARDS } from '../../src/shared/messages'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
 import { NO_FAMILIES, type BoardConfig, type MoveTarget, type WorkComment, type WorkFamilies, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
-import { boardConfigKey, createBoardConfigCache, loadBoardConfig, type BoardArgs } from '../ado/board-config'
+import { boardConfigKey, loadBoardConfig, type BoardArgs } from '../ado/board-config'
 import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
-import type { RawWorkItem } from '../ado/workitems'
+import { boardClause, mineClause, readFields, textOr, workItemUrl, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
-import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, UNKNOWN_COLUMN } from '../messages'
+import { fly, inLane, join, type Flight } from '../data/context'
+import type { Entities, OrgEntities } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
+import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import type { SavedTables } from '../data/saved-tables'
+import { isRecord, sameApartFromTime } from '../data/values'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
-import { boardKey, createBoardViews, type BoardChange, type BoardRef, type BoardRequest, type BoardResult } from './board-views'
+import { createBoardFilters } from './board-filters'
+import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type Synced } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
 import { createRecentWrites } from './recent'
 import {
   capBoard,
   capSnapshot,
   createItemSource,
+  doneStatesOf,
   hasTask,
   isCompleted,
   isOnBoard,
@@ -24,10 +32,14 @@ import {
   loadMine,
   movesByState,
   patchFamilies,
+  rechip,
   restate,
+  SAVED_BOARD_BYTES,
   type ItemSource,
-  type Me
+  type Me,
+  type ViewIds
 } from './snapshot'
+import { syncView, type SyncState } from './sync'
 
 export type { BoardChange, BoardRef, BoardResult }
 
@@ -39,6 +51,10 @@ export interface BoardsServiceDeps {
   post: (snapshot: WorkSnapshot) => void
   postBoard: (change: BoardChange) => void
   now: () => number
+  entities: Entities
+  persisted: Persisted
+  savedTables: SavedTables
+  log: (message: string) => void
 }
 
 export interface BoardsService {
@@ -47,30 +63,40 @@ export interface BoardsService {
   refresh(org: string): Promise<WorkSnapshot>
   details(org: string, id: number): Promise<WorkItemDetails>
   cachedItem(org: string, id: number): WorkItemSummary | null
+  itemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null>
   move(input: { org: string; id: number; rev: number; to: MoveTarget; board?: BoardRef }): Promise<WorkItemSummary>
   comment(org: string, id: number, text: string): Promise<WorkComment>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
-  board(input: BoardArgs & { everyone: boolean }): Promise<BoardResult>
+  board(input: BoardArgs & { everyone?: boolean; remember?: boolean }): Promise<BoardResult & { everyone: boolean }>
   defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
   dismissNudge(input: { org: string; itemId: number; prId: number }): Promise<{ ok: true }>
   nudgeRules(input: { org: string; teamId: string; rules?: NudgeRule[] }): Promise<{ rules: NudgeRule[] }>
   visibility(input: { surface: 'work' | 'board'; org: string; visible: boolean; board?: BoardRef }): { ok: true }
 }
 
-interface OrgWork {
+interface OrgWork extends Synced {
   snapshot: WorkSnapshot | null
   failure: unknown
-  loading: Promise<WorkSnapshot> | null
+  loading: Flight<WorkSnapshot> | null
+  restored: boolean
+  restoring?: Promise<void>
+  forceAudit: boolean
 }
+
+interface Built extends Synced { snapshot: WorkSnapshot; projected: WorkSnapshot; forced: boolean }
 
 interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
-const MINE_MS = { visibleMs: 60_000, backgroundMs: 300_000 }
+type ItemInfo = Pick<WorkItemSummary, 'type' | 'title' | 'url'>
+
+const MINE_MS = { visibleMs: 60_000, backgroundMs: null, quietMax: 2 }
+const INFO_FIELDS = ['System.WorkItemType', 'System.Title', 'System.TeamProject']
+const NO_MEMBERS: ViewIds = { members: [], stale: new Set() }
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
-  const { http, scheduler, now } = deps
-  const configs = createBoardConfigCache(now)
+  const { http, scheduler, now, entities, savedTables } = deps
   const nudges = createNudgeStore(deps.store)
+  const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
   const sources = new Map<string, ItemSource>()
   const work = new Map<string, OrgWork>()
@@ -82,36 +108,113 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     scheduler,
     now,
     load: loadBoard,
-    polls: org => connected.has(org),
+    restore: savedBoard,
+    connected: org => connected.has(org),
     changed: deps.postBoard,
     dropped: key => recent.drop(key)
   })
+  const rechipping = new Set<string>()
+  entities.watch('prs', queueRechip)
+  entities.watch('prChecks', queueRechip)
+
+  function queueRechip(org: string): void {
+    if (rechipping.size === 0) queueMicrotask(rechipQueued)
+    rechipping.add(org)
+  }
+
+  function rechipQueued(): void {
+    const orgs = [...rechipping]
+    rechipping.clear()
+    for (const org of orgs) void rechipViews(org).catch(() => {})
+  }
+
+  async function rechipViews(org: string): Promise<void> {
+    if (!sources.has(org)) return
+    const tables = entities.of(org)
+    for (const view of boardViews.of(org)) {
+      const items = rechip(view.result.items, tables)
+      if (items !== view.result.items) boardViews.update(view, capBoard({ ...view.result, items }, false))
+    }
+    await rechipWork(org, tables)
+  }
+
+  async function rechipWork(org: string, tables: OrgEntities): Promise<void> {
+    const entry = work.get(org)
+    const held = entry?.snapshot
+    if (!entry || !held?.board || (rechip(held.mine, tables) === held.mine && rechip(held.other, tables) === held.other)) return
+    const [rules, dismissed] = await Promise.all([nudges.rules(org, held.board.teamId), nudges.dismissed(org)])
+    const snapshot = entry.snapshot
+    if (work.get(org) !== entry || !snapshot?.board) return
+    const mine = rechip(snapshot.mine, tables)
+    const next = capSnapshot({ ...snapshot, mine, other: rechip(snapshot.other, tables), nudges: findNudges(snapshot.board, mine, rules, dismissed) })
+    if (JSON.stringify(next) === JSON.stringify(snapshot)) return
+    entry.snapshot = next
+    deps.post(next)
+  }
 
   async function statusOf(org: string): Promise<OrgStatus> {
     const status = (await deps.orgs()).find(item => item.org === org)
     if (!status) throw new AdoError('unauthorized', 401, NOT_CONNECTED)
+    const account = accountOf(status)
+    if (account) await savedTables.seed(org, account)
     return status
   }
 
+  function persist(status: OrgStatus, name: string, value: () => unknown): void {
+    const account = accountOf(status)
+    if (!account) return
+    deps.persisted.save(status.org, name, account, value())
+    savedTables.save(status.org, account)
+  }
+
+  function restore(status: OrgStatus): Promise<void> {
+    const account = accountOf(status)
+    if (!account || !status.boards) return Promise.resolve()
+    const entry = workOf(status.org)
+    entry.restoring ??= restoreWork(entry, status, account)
+    return entry.restoring
+  }
+
+  async function restoreWork(entry: OrgWork, status: OrgStatus, account: string): Promise<void> {
+    const saved = await deps.persisted.load(status.org, 'work', account)
+    if (work.get(status.org) !== entry || entry.snapshot || !connected.has(status.org) || !isSavedWork(saved?.value, status)) return
+    Object.assign(entry, { snapshot: { ...saved.value, stale: true, message: SHOWING_SAVED }, restored: true })
+  }
+
+  function unrestore(org: string): void {
+    const entry = work.get(org)
+    if (!entry) return
+    if (entry.restored) Object.assign(entry, { snapshot: null, restored: false })
+    entry.restoring = undefined
+  }
+
+  function revalidate(org: string): void {
+    if (polled.has(org)) void scheduler.runNow(mineKey(org))
+    else void load(org).catch(() => {})
+  }
+
+  async function savedBoard(request: BoardRequest, boardId: string): Promise<BoardResult | null> {
+    const account = accountOf(await statusOf(request.org))
+    if (!account || !connected.has(request.org)) return null
+    const saved = await deps.persisted.load(request.org, savedBoardName(request.args.teamId, boardId), account)
+    if (!saved || !connected.has(request.org) || !isSavedBoard(saved.value, boardId) || saved.value.everyone !== request.everyone) return null
+    return { ...saved.value.result, stale: true }
+  }
+
   function sourceOf(status: OrgStatus): ItemSource {
-    const source = sources.get(status.org) ?? createItemSource(http, status.org, status.url, now)
+    const source = sources.get(status.org) ?? createItemSource(http, status.org, status.url, now, entities.of(status.org))
     sources.set(status.org, source)
     return source
   }
 
   function workOf(org: string): OrgWork {
-    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null }
+    const entry = work.get(org) ?? { snapshot: null, failure: null, loading: null, sync: null, known: [], restored: false, forceAudit: false }
     work.set(org, entry)
     return entry
   }
 
-  async function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
-    const key = boardConfigKey(args)
-    const cached = configs.get(key)
-    if (cached) return cached
-    const cfg = await loadBoardConfig(withSignal(http, signal), args)
-    configs.set(key, cfg)
-    return cfg
+  function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
+    return entities.of(args.org).boardConfigs.read(boardConfigKey(args), FRESHNESS.boardConfig, scoped => loadBoardConfig(withSignal(http, scoped), args), signal)
   }
 
   async function defaultConfig(status: OrgStatus, signal?: AbortSignal): Promise<BoardConfig> {
@@ -127,15 +230,25 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     return `mine:${org}`
   }
 
-  async function build(status: OrgStatus, signal?: AbortSignal): Promise<WorkSnapshot> {
+  async function synced(source: ItemSource, cfg: BoardConfig, clause: string, held: Synced): Promise<{ ids: ViewIds; sync: SyncState }> {
+    const scope = { org: source.org, projectId: cfg.projectId, teamId: cfg.teamId, clause }
+    const result = await syncView(source.http, scope, held.sync, held.known, source.revOf, now)
+    source.forget(result.gone)
+    return { ids: result, sync: result.state }
+  }
+
+  async function build(status: OrgStatus, entry: OrgWork, signal?: AbortSignal): Promise<Built> {
     const cfg = await defaultConfig(status, signal)
     const source = sourceOf(status).withSignal(signal)
-    const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg, meOf(status)), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
+    const forced = entry.forceAudit
+    const held = sameTarget(entry.snapshot?.board, cfg) ? entry : { sync: null, known: [] }
+    const { ids, sync } = await synced(source, cfg, mineClause(doneStatesOf(cfg)), forced ? forcingAudit(held) : held)
+    const [loaded, rules, dismissed] = await Promise.all([loadMine(source, cfg, meOf(status), ids), nudges.rules(status.org, cfg.teamId), nudges.dismissed(status.org)])
     const items = await recent.overlay(mineKey(status.org), loaded.items, written => restate(source, cfg, written.raw, written.like))
     const families = await restatedRows(source, cfg, loaded.families, items.filter((item, index) => item !== loaded.items[index]))
     const mine = items.filter(item => !movesByState(item, cfg))
     const message = joinMessages(loaded.chipsOff ? CHIPS_NEED_CODE_READ : undefined, loaded.message)
-    return capSnapshot({
+    const projected: WorkSnapshot = {
       org: status.org,
       board: cfg,
       mine,
@@ -145,20 +258,22 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       updatedAt: now(),
       stale: false,
       ...(message ? { message } : {})
-    })
+    }
+    return { snapshot: capSnapshot(projected), projected, sync, known: loaded.known, forced }
   }
 
   function load(org: string, signal?: AbortSignal): Promise<WorkSnapshot> {
     const entry = workOf(org)
-    entry.loading ??= (async () => {
+    entry.loading ??= fly(async () => {
       try {
         const status = await statusOf(org)
         if (!status.boards) return noBoards(org)
-        const snapshot = await build(status, signal)
+        const { snapshot, projected, sync, known, forced } = await build(status, entry, signal)
         if (work.get(org) !== entry) return snapshot
-        entry.snapshot = snapshot
-        entry.failure = null
+        Object.assign(entry, { snapshot, sync, known, failure: null, restored: false })
+        if (forced) entry.forceAudit = false
         deps.post(snapshot)
+        persist(status, 'work', () => capSnapshot(projected, VALUE_BUDGET_BYTES))
         return snapshot
       } catch (error) {
         if (signal?.aborted) throw error
@@ -171,17 +286,35 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       } finally {
         entry.loading = null
       }
-    })()
-    return entry.loading
+    })
+    return join(entry.loading)
   }
 
-  async function loadBoard(request: BoardRequest, signal?: AbortSignal): Promise<BoardResult> {
+  async function poll(org: string, signal: AbortSignal): Promise<void | 'unchanged'> {
+    const before = work.get(org)?.snapshot
+    const after = await load(org, signal)
+    if (before && sameApartFromTime(before, after)) return 'unchanged'
+  }
+
+  async function loadBoard(request: BoardRequest & Synced, signal?: AbortSignal): Promise<BoardLoad> {
     const status = await statusOf(request.org)
     const board = await config(request.args, signal)
     const source = sourceOf(status).withSignal(signal)
-    const loaded = await loadBoardItems(source, board, request.everyone)
+    const { ids, sync } = board.requirementTypes.length === 0 ? { ids: NO_MEMBERS, sync: null } : await synced(source, board, boardClause(board, request.everyone), request)
+    const loaded = await loadBoardItems(source, board, ids)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
-    return capBoard({ board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}) }, loaded.truncated)
+    const projected: BoardResult = { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}), updatedAt: now() }
+    persist(status, savedBoardName(board.teamId, board.boardId), () => ({ result: capBoard(projected, loaded.truncated, SAVED_BOARD_BYTES), everyone: request.everyone }))
+    return { result: capBoard(projected, loaded.truncated), sync, known: loaded.known }
+  }
+
+  async function readItemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null> {
+    const status = await statusOf(org)
+    if (!status.boards) return null
+    const [raw] = await readFields(withSignal(http, signal), org, status.boards.projectId, [id], INFO_FIELDS)
+    if (!raw) return null
+    const project = textOr(raw.fields['System.TeamProject'], '') || status.boards.projectId
+    return { type: textOr(raw.fields['System.WorkItemType'], ''), title: textOr(raw.fields['System.Title'], ''), url: workItemUrl(status.url, project, id) }
   }
 
   function forget(org: string): void {
@@ -233,10 +366,11 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   async function publish(status: OrgStatus, raw: RawWorkItem, like: WorkItemSummary): Promise<void> {
     const { org } = status
     const source = sourceOf(status)
-    recent.record([mineKey(org), ...boardViews.of(org).map(view => view.key)], { raw, like })
+    const kept = source.put(raw)
+    recent.record([mineKey(org), ...boardViews.of(org).map(view => view.key)], { raw: kept, like })
     for (const view of boardViews.of(org)) {
       if (!view.result.items.some(item => item.id === raw.id)) continue
-      const item = await restate(source, view.result.board, raw, like)
+      const item = await restate(source, view.result.board, kept, like)
       boardViews.update(view, { ...view.result, items: replaced(view.result.items, item) })
     }
     const entry = work.get(org)
@@ -244,7 +378,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     if (!entry?.snapshot || !board || !holds(entry.snapshot, raw.id)) return
     const listed = hasTask(entry.snapshot.families, raw.id)
     const [item, rules, dismissed] = await Promise.all([
-      restate(source, board, raw, like),
+      restate(source, board, kept, like),
       nudges.rules(org, board.teamId),
       nudges.dismissed(org)
     ])
@@ -287,6 +421,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const org of new Set([...work.keys(), ...sources.keys()])) {
         const state = states.get(org)
         if (state === undefined || state === 'disconnected') forget(org)
+        else if (state !== 'connected') unrestore(org)
       }
       connected.clear()
       const wanted = new Map<string, BoardsTarget>()
@@ -304,24 +439,29 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       for (const [org, target] of wanted) {
         if (polled.has(org)) continue
         polled.set(org, target)
-        scheduler.upsert({ key: mineKey(org), ...MINE_MS, run: async signal => void (await load(org, signal)) })
+        scheduler.upsert({ key: mineKey(org), org, ...MINE_MS, run: signal => poll(org, signal) })
         scheduler.setVisible(mineKey(org), workVisible.has(org))
       }
+      for (const status of orgs) void restore(status)
       boardViews.syncAll()
     },
 
     async snapshot(org) {
       const status = await statusOf(org)
       if (!status.boards) return noBoards(org)
-      const current = work.get(org)?.snapshot
-      const board = current?.board
-      if (current && board?.projectId === status.boards.projectId && board.teamId === status.boards.teamId) return current
-      return load(org)
+      await restore(status)
+      const entry = work.get(org)
+      const current = entry?.snapshot
+      if (!entry || !current || !sameTarget(current.board, status.boards)) return load(org)
+      if (entry.restored) revalidate(org)
+      return current
     },
 
     async refresh(org) {
       const status = await statusOf(org)
       if (!status.boards) return noBoards(org)
+      const held = work.get(org)
+      if (held) held.forceAudit = true
       if (polled.has(org)) await scheduler.runNow(mineKey(org))
       else await load(org).catch(() => {})
       const entry = work.get(org)
@@ -337,9 +477,17 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     },
 
     cachedItem(org, id) {
-      const snapshot = work.get(org)?.snapshot
+      const servable = (held: { restored: boolean }) => !held.restored || connected.has(org)
+      const entry = work.get(org)
+      const snapshot = entry && servable(entry) ? entry.snapshot : null
       const listed = [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(item => item.id === id)
-      return listed ?? boardViews.of(org).flatMap(view => view.result.items).find(item => item.id === id) ?? null
+      return listed ?? boardViews.of(org).filter(servable).flatMap(view => view.result.items).find(item => item.id === id) ?? null
+    },
+
+    async itemInfo(org, id, signal) {
+      const held = service.cachedItem(org, id)
+      if (held) return { type: held.type, title: held.title, url: held.url }
+      return inLane('work', 'user', () => readItemInfo(org, id, signal))
     },
 
     async move({ org, id, rev, to, board }) {
@@ -365,11 +513,13 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       return change(status, cfg, id, raw.rev, () => addPullRequestLink(http, org, cfg.projectId, raw, artifactUrl))
     },
 
-    async board({ everyone, ...args }) {
+    async board({ everyone, remember, ...args }) {
       await statusOf(args.org)
-      const board = await config(args)
+      const { boardId } = await config(args)
       homes.set(`${args.org}/${args.teamId}`, args.projectId)
-      return boardViews.open(args.org, args, board.boardId, everyone)
+      const filter = everyone ?? (await filters.everyone(args.org, args.teamId, boardId))
+      if (remember === true && everyone !== undefined) await filters.remember(args.org, args.teamId, boardId, everyone).catch(() => deps.log(FILTER_NOT_SAVED))
+      return { ...(await boardViews.open(args.org, args, boardId, filter)), everyone: filter }
     },
 
     async defaultBoard(org) {
@@ -416,6 +566,39 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   return service
 }
 
+function accountOf(status: OrgStatus): string | null {
+  return status.state === 'connected' ? (status.account?.adoId ?? null) : null
+}
+
+function savedBoardName(teamId: string, boardId: string): string {
+  return `board:${teamId}:${boardId}`
+}
+
+function isSavedWork(value: unknown, status: OrgStatus): value is WorkSnapshot {
+  return (
+    isRecord(value) &&
+    value.org === status.org &&
+    isRecord(value.board) &&
+    value.board.projectId === status.boards?.projectId &&
+    value.board.teamId === status.boards?.teamId &&
+    [value.mine, value.other, value.nudges].every(Array.isArray) &&
+    isRecord(value.families) &&
+    Number.isFinite(value.updatedAt)
+  )
+}
+
+function isSavedBoard(value: unknown, boardId: string): value is { result: BoardResult; everyone: boolean } {
+  return (
+    isRecord(value) &&
+    typeof value.everyone === 'boolean' &&
+    isRecord(value.result) &&
+    isRecord(value.result.board) &&
+    value.result.board.boardId === boardId &&
+    Array.isArray(value.result.items) &&
+    Number.isFinite(value.result.updatedAt)
+  )
+}
+
 function meOf(status: OrgStatus): Me | null {
   return status.account ? { id: status.account.adoId, uniqueName: status.account.uniqueName } : null
 }
@@ -426,6 +609,14 @@ async function restatedRows(source: ItemSource, cfg: BoardConfig, families: Work
     if (hasTask(patched, item.id)) patched = patchFamilies(patched, item, await isCompleted(source, cfg, item))
   }
   return patched
+}
+
+function forcingAudit(held: Synced): Synced {
+  return { sync: held.sync && { ...held.sync, auditedAt: -Infinity }, known: held.known }
+}
+
+function sameTarget(board: BoardConfig | null | undefined, target: Pick<BoardConfig, 'projectId' | 'teamId'>): boolean {
+  return board?.projectId === target.projectId && board.teamId === target.teamId
 }
 
 function holds(snapshot: WorkSnapshot, id: number): boolean {

@@ -1,5 +1,26 @@
 import { assert, test } from 'orca/testing'
-import { focusSelectorOf } from './render'
+import { createToolbar, focusSelectorOf, noteText } from './render'
+
+const NOW = Date.parse('2026-11-11T09:00:00Z')
+const THREE_HOURS_AGO = NOW - 3 * 3600 * 1000
+const FAILED = 'TF246017: the database is unavailable. Showing the last loaded board.'
+
+test('a stale board shows its age and that it is refreshing', () => {
+  assert.equal(noteText({ stale: true, updatedAt: THREE_HOURS_AGO, message: undefined, empty: false }, NOW, 'en'), 'Updated 3 hours ago · refreshing…')
+  assert.equal(noteText({ stale: true, updatedAt: THREE_HOURS_AGO, message: undefined, empty: true }, NOW, 'en'), 'Updated 3 hours ago · refreshing…')
+})
+
+test('a stale board with a failure shows its age and the failure', () => {
+  assert.equal(noteText({ stale: true, updatedAt: THREE_HOURS_AGO, message: FAILED, empty: false }, NOW, 'en'), `Updated 3 hours ago · ${FAILED}`)
+})
+
+test("a live board shows today's note", () => {
+  assert.equal(noteText({ stale: false, updatedAt: NOW, message: undefined, empty: false }, NOW, 'en'), '')
+  assert.equal(noteText({ stale: false, updatedAt: NOW, message: 'Showing the 500 most recently changed items.', empty: false }, NOW, 'en'), 'Showing the 500 most recently changed items.')
+  assert.equal(noteText({ stale: false, updatedAt: NOW, message: undefined, empty: true }, NOW, 'en'), 'No work items match.')
+  assert.equal(noteText({ stale: false, updatedAt: NOW, message: 'Linked PR status needs Code (Read) access.', empty: true }, NOW, 'en'), 'Linked PR status needs Code (Read) access. No work items match.')
+  assert.equal(noteText({ stale: true, updatedAt: null, message: FAILED, empty: false }, NOW, 'en'), FAILED, 'a stale board of unknown age')
+})
 
 function focusedIn(found: Record<string, Record<string, string>>) {
   return { closest: (selector: string) => (selector in found ? { dataset: found[selector] } : null) }
@@ -16,4 +37,50 @@ test('focusSelectorOf finds the focused lane header again after a repaint, its i
 
 test('focusSelectorOf names nothing for other focused elements', () => {
   assert.equal(focusSelectorOf(focusedIn({})), null)
+})
+
+class FakeElement {
+  readonly attributes = new Map<string, string>()
+  readonly children: FakeElement[] = []
+  className = ''
+  textContent = ''
+  type = ''
+  value = ''
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value)
+  }
+  addEventListener(): void {}
+  append(...nodes: FakeElement[]): void {
+    this.children.push(...nodes)
+  }
+  replaceChildren(...nodes: FakeElement[]): void {
+    this.children.splice(0, this.children.length, ...nodes)
+  }
+}
+
+function withFakeDocument(run: () => void): void {
+  const saved = { document: globalThis.document, Option: globalThis.Option }
+  globalThis.document = { createElement: () => new FakeElement() } as unknown as Document
+  globalThis.Option = FakeElement as unknown as typeof Option
+  try {
+    run()
+  } finally {
+    Object.assign(globalThis, saved)
+  }
+}
+
+test("the toolbar presses neither filter until the board's filter is known", () => {
+  withFakeDocument(() => {
+    const toolbar = createToolbar({ everyone: () => {}, parent: () => {} })
+    const buttons = (toolbar.node as unknown as FakeElement).children.flatMap(node => node.children)
+    const pressed = () => Object.fromEntries(buttons.map(node => [node.textContent, node.attributes.get('aria-pressed')]))
+    const update = (everyone: boolean | null) => toolbar.update({ title: 'Stories', loading: true, everyone, parents: [], parent: null })
+
+    update(null)
+    assert.deepEqual(pressed(), { Me: 'false', Everyone: 'false' })
+    update(false)
+    assert.deepEqual(pressed(), { Me: 'true', Everyone: 'false' })
+    update(true)
+    assert.deepEqual(pressed(), { Me: 'false', Everyone: 'true' })
+  })
 })

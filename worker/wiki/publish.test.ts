@@ -8,6 +8,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import type { WikiPageRef, WikiResult } from '../../src/shared/wiki'
 import { createAdoHttp } from '../ado/http'
 import { json, ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { badRequest } from '../messages'
 import { ME } from '../prs/fake-prs'
 import { diffText } from '../reviews/diff'
@@ -74,7 +75,7 @@ function harness(dir: string) {
   })
   let now = T0
   let orgs = [status()]
-  const wiki = createWikiService({ http, orgs: async () => structuredClone(orgs), now: () => now })
+  const wiki = createWikiService({ http, orgs: async () => structuredClone(orgs), entities: createEntities(() => now) })
   wiki.onOrgs(structuredClone(orgs))
   const opened: { workspaceId: string; path: string }[] = []
   const call: HostCall = async (method, params) => {

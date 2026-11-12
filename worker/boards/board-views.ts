@@ -1,19 +1,24 @@
 import type { BoardConfig, WorkItemSummary } from '../../src/shared/work'
 import type { BoardArgs } from '../ado/board-config'
+import { sameApartFromTime } from '../data/values'
 import { failureMessage, joinMessages, LAST_BOARD } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
+import type { SyncState } from './sync'
 
 export interface BoardChange { org: string; teamId: string; boardId: string }
-export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean }
+export interface BoardResult { board: BoardConfig; items: WorkItemSummary[]; message?: string; stale?: boolean; updatedAt: number }
 export interface BoardRequest { key: string; org: string; args: BoardArgs; everyone: boolean }
-export interface BoardView extends BoardRequest { at: number; result: BoardResult }
+export interface Synced { sync: SyncState | null; known: number[] }
+export interface BoardLoad extends Synced { result: BoardResult }
+export interface BoardView extends BoardRequest, Synced { at: number; result: BoardResult; restored: boolean }
 export interface BoardRef { teamId: string; boardId: string }
 
 export interface BoardViewsDeps {
   scheduler: Scheduler
   now: () => number
-  load: (request: BoardRequest, signal?: AbortSignal) => Promise<BoardResult>
-  polls: (org: string) => boolean
+  load: (request: BoardRequest & Synced, signal?: AbortSignal) => Promise<BoardLoad>
+  restore: (request: BoardRequest, boardId: string) => Promise<BoardResult | null>
+  connected: (org: string) => boolean
   changed: (change: BoardChange) => void
   dropped: (key: string) => void
 }
@@ -28,7 +33,8 @@ export interface BoardViews {
   forget(org: string): void
 }
 
-const BOARD_MS = { visibleMs: 30_000, backgroundMs: 300_000 }
+const BOARD_MS = { visibleMs: 30_000, backgroundMs: null, quietMax: 2 }
+const MAX_HELD_VIEWS = 4
 
 export function boardKey(org: string, teamId: string, boardId: string): string {
   return `board:${org}:${teamId}:${boardId}`
@@ -39,26 +45,31 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
   const hidden = new Set<string>()
   const hiddenViews = new Set<string>()
   const generations = new Map<string, number>()
+  const opened = new Set<string>()
 
   function changed(view: BoardView): void {
     deps.changed({ org: view.org, teamId: view.result.board.teamId, boardId: view.result.board.boardId })
   }
 
-  async function reload(key: string, signal: AbortSignal): Promise<void> {
+  function isStale(view: BoardView): boolean {
+    return deps.now() - view.at >= BOARD_MS.visibleMs
+  }
+
+  async function reload(key: string, signal: AbortSignal): Promise<void | 'unchanged'> {
     const view = views.get(key)
-    if (!view || deps.now() - view.at < BOARD_MS.visibleMs) return
-    let result: BoardResult
+    if (!view || !isStale(view)) return
+    let loaded: BoardLoad
     try {
-      result = await deps.load(view, signal)
+      loaded = await deps.load(view, signal)
     } catch (error) {
       if (views.get(key) === view && !signal.aborted) failed(view, error)
       throw error
     }
     if (views.get(key) !== view) return
-    const before = JSON.stringify(view.result)
-    view.result = result
-    view.at = deps.now()
-    if (JSON.stringify(result) !== before) changed(view)
+    const unchanged = sameApartFromTime(view.result, loaded.result)
+    Object.assign(view, loaded, { at: deps.now(), restored: false })
+    if (unchanged) return 'unchanged'
+    changed(view)
   }
 
   function failed(view: BoardView, error: unknown): void {
@@ -67,15 +78,23 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     changed(view)
   }
 
+  function isHidden(view: BoardView): boolean {
+    return hidden.has(view.org) || hiddenViews.has(view.key)
+  }
+
   function sync(org: string): void {
-    const active = deps.polls(org) && !hidden.has(org)
-    for (const view of views.values()) {
+    const active = deps.connected(org)
+    for (const view of [...views.values()]) {
       if (view.org !== org) continue
-      if (!active || hiddenViews.has(view.key)) {
+      if (!active && view.restored) {
+        drop(view.key)
+        continue
+      }
+      if (!active || isHidden(view)) {
         deps.scheduler.remove(view.key)
         continue
       }
-      deps.scheduler.upsert({ key: view.key, ...BOARD_MS, run: signal => reload(view.key, signal) })
+      deps.scheduler.upsert({ key: view.key, org, ...BOARD_MS, run: signal => reload(view.key, signal) })
       deps.scheduler.setVisible(view.key, true)
     }
   }
@@ -88,8 +107,20 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     return `${generations.get(org) ?? 0}:${generations.get(key) ?? 0}`
   }
 
+  function touch(key: string): void {
+    opened.delete(key)
+    opened.add(key)
+  }
+
+  function trim(org: string, kept: string): void {
+    const held = [...opened].map(key => views.get(key)!).filter(view => view.org === org)
+    const evictable = held.filter(view => view.key !== kept && isHidden(view))
+    for (const view of evictable.slice(0, Math.max(0, held.length - MAX_HELD_VIEWS))) drop(view.key)
+  }
+
   function drop(key: string): void {
     bump(key)
+    opened.delete(key)
     if (!views.delete(key)) return
     deps.scheduler.remove(key)
     deps.dropped(key)
@@ -100,18 +131,34 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     for (const view of [...views.values()]) if (view.org === org) drop(view.key)
   }
 
+  function hold(view: BoardView): void {
+    views.set(view.key, view)
+    touch(view.key)
+    trim(view.org, view.key)
+    sync(view.org)
+  }
+
   return {
     async open(org, args, boardId, everyone) {
       const key = boardKey(org, args.teamId, boardId)
-      const cached = views.get(key)
-      if (cached && cached.everyone === everyone && deps.now() - cached.at < BOARD_MS.visibleMs) return cached.result
+      const held = views.get(key)
+      if (held && held.everyone === everyone) {
+        touch(key)
+        if (isStale(held)) void deps.scheduler.runNow(key)
+        return held.result
+      }
       const request = { key, org, args, everyone }
       const generation = generationOf(org, key)
-      const result = await deps.load(request)
-      if (generationOf(org, key) !== generation) return result
-      views.set(key, { ...request, at: deps.now(), result })
-      sync(org)
-      return result
+      const saved = held ? null : await deps.restore(request, boardId)
+      if (saved && deps.connected(org) && generationOf(org, key) === generation && !views.has(key)) {
+        hold({ ...request, result: saved, sync: null, known: [], at: Math.min(saved.updatedAt, deps.now() - BOARD_MS.visibleMs), restored: true })
+        void deps.scheduler.runNow(key)
+        return saved
+      }
+      const loaded = await deps.load({ ...request, sync: null, known: [] })
+      if (generationOf(org, key) !== generation) return loaded.result
+      hold({ ...request, ...loaded, at: deps.now(), restored: false })
+      return loaded.result
     },
 
     get: key => views.get(key),
@@ -125,18 +172,11 @@ export function createBoardViews(deps: BoardViewsDeps): BoardViews {
     },
 
     setVisible(org, visible, board) {
-      const key = board ? boardKey(org, board.teamId, board.boardId) : null
-      if (visible) {
-        if (key) hiddenViews.delete(key)
-        else hidden.delete(org)
-        sync(org)
-      } else if (key) {
-        hiddenViews.add(key)
-        drop(key)
-      } else {
-        hidden.add(org)
-        forget(org)
-      }
+      const marks = board ? hiddenViews : hidden
+      const mark = board ? boardKey(org, board.teamId, board.boardId) : org
+      if (visible) marks.delete(mark)
+      else marks.add(mark)
+      sync(org)
     },
 
     syncAll() {

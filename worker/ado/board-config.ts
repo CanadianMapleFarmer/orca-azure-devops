@@ -56,7 +56,6 @@ export interface TypeState {
 }
 
 export const DONE_CATEGORIES = new Set(['Completed', 'Removed'])
-const DEFAULT_TTL_MS = 60 * 60 * 1000
 
 export function boardConfigKey({ org, projectId, teamId, boardId }: BoardArgs): string {
   return `${org}/${projectId}/${teamId}/${boardId ?? 'default'}`
@@ -162,31 +161,4 @@ function toColumn(column: RawColumn): BoardColumn {
 
 function shape<T>(build: () => T): T {
   return shaped(build, MALFORMED.boardConfig)
-}
-
-export interface BoardConfigCache {
-  get(key: string): BoardConfig | undefined
-  set(key: string, cfg: BoardConfig): void
-  clear(): void
-}
-
-export function createBoardConfigCache(now: () => number, ttlMs = DEFAULT_TTL_MS): BoardConfigCache {
-  const entries = new Map<string, { config: BoardConfig; storedAt: number }>()
-  return {
-    get(key) {
-      const entry = entries.get(key)
-      if (!entry) return undefined
-      if (now() - entry.storedAt >= ttlMs) {
-        entries.delete(key)
-        return undefined
-      }
-      return entry.config
-    },
-    set(key, cfg) {
-      entries.set(key, { config: cfg, storedAt: now() })
-    },
-    clear() {
-      entries.clear()
-    }
-  }
 }

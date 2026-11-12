@@ -19,6 +19,7 @@ export interface RawThread {
     author?: { id: string; displayName: string }
     content?: string
     publishedDate?: string
+    lastUpdatedDate?: string
     commentType?: string
     isDeleted?: boolean
   }[]

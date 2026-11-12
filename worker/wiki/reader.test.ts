@@ -6,6 +6,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import type { WikiPage, WikiPageRef } from '../../src/shared/wiki'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { ORG, ORG_URL, PROJECT } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { ME } from '../prs/fake-prs'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
 import { listing } from './draft-test-support'
@@ -89,7 +90,7 @@ function harness(workspaces: WorkspaceEntry[], files: ReaderFs = fs) {
     authHeader: async () => 'Bearer test-credential',
     sleep: async () => {}
   })
-  const wiki = createWikiService({ http, orgs: async () => [status()], now: () => 0 })
+  const wiki = createWikiService({ http, orgs: async () => [status()], entities: createEntities(() => 0) })
   wiki.onOrgs([status()])
   const host = { focused: workspaces.length > 0 }
   const opened: { workspaceId: string; path: string }[] = []

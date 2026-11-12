@@ -4,9 +4,11 @@ import { MIN_SEARCH_CHARS, type WikiHit, type WikiLevel, type WikiNode, type Wik
 import { listProjects } from '../ado/core'
 import { cutText } from '../ado/cut-text'
 import { decode } from '../ado/html-text'
-import { AdoError, type AdoHttp } from '../ado/http'
+import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { parsedHref } from '../ado/pr-links'
 import { getPage, listWikis, pageLevel, pagePathOf, searchWiki, titleText, wikiPageUrl, type RawSearchResult, type RawWiki } from '../ado/wiki'
+import type { Entities } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
 import {
   badRequest,
   UNKNOWN_WIKI,
@@ -33,15 +35,10 @@ export interface WikiService {
 export interface WikiServiceDeps {
   http: AdoHttp
   orgs: () => Promise<OrgStatus[]>
-  now: () => number
+  entities: Entities
 }
 
-interface Listing {
-  at: number
-  wikis: WikiRef[]
-}
-
-const WIKIS_TTL_MS = 10 * 60_000
+const ALL_WIKIS = 'all'
 const MAX_WIKIS = 50
 const MAX_LEVEL_PAGES = 200
 const MAX_SEARCH_CHARS = 200
@@ -56,31 +53,15 @@ const ANCHOR_OR_QUERY = /[#?]/
 
 export function createWikiService(deps: WikiServiceDeps): WikiService {
   const loads = createOrgLoads({ http: deps.http, orgs: deps.orgs, fallback: WIKIS_LOAD_FAILED, forbidden: WIKI_NEEDS_READ })
-  const listings = new Map<string, Listing>()
 
-  function forget(org: string): void {
-    loads.forget(org)
-    listings.delete(org)
-  }
-
-  function cached(org: string): Listing | undefined {
-    const listing = listings.get(org)
-    return listing && deps.now() - listing.at < WIKIS_TTL_MS ? listing : undefined
-  }
-
-  async function readWikis({ http, signal }: OrgLoad, org: string): Promise<Listing> {
-    const [wikis, projects] = await Promise.all([listWikis(http, org), listProjects(http, org)])
-    const names = new Map(projects.map(project => [project.id, project.name]))
-    const refs = wikis.map(raw => toRef(raw, names.get(raw.projectId) ?? raw.projectId))
-    const listing = { at: deps.now(), wikis: refs.sort(byProjectThenName) }
-    if (!signal.aborted) listings.set(org, listing)
-    return listing
+  function listing({ signal }: OrgLoad, org: string, maxAgeMs: number): Promise<WikiRef[]> {
+    return deps.entities.of(org).wikis.read(ALL_WIKIS, maxAgeMs, scoped => readWikis(withSignal(deps.http, scoped), org), signal)
   }
 
   async function wikiOf(current: OrgLoad, org: string, wikiId: string): Promise<WikiRef> {
-    const known = cached(org)?.wikis.find(wiki => wiki.id === wikiId)
+    const known = deps.entities.of(org).wikis.fresh(ALL_WIKIS, FRESHNESS.wikis)?.find(wiki => wiki.id === wikiId)
     if (known) return known
-    const found = (await readWikis(current, org)).wikis.find(wiki => wiki.id === wikiId)
+    const found = (await listing(current, org, 0)).find(wiki => wiki.id === wikiId)
     if (!found) throw new AdoError('not_found', 404, UNKNOWN_WIKI)
     return found
   }
@@ -88,10 +69,10 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
   return {
     onOrgs(orgs) {
       const signedIn = new Set(orgs.filter(isSignedIn).map(status => status.org))
-      for (const org of new Set([...loads.orgs(), ...listings.keys()])) if (!signedIn.has(org)) forget(org)
+      for (const org of loads.orgs()) if (!signedIn.has(org)) loads.forget(org)
     },
 
-    wikis: org => loads.load(org, async current => (cached(org) ?? (await readWikis(current, org))).wikis.slice(0, MAX_WIKIS)),
+    wikis: org => loads.load(org, async current => (await listing(current, org, FRESHNESS.wikis)).slice(0, MAX_WIKIS)),
 
     wiki: (org, wikiId) => loads.load(org, current => wikiOf(current, org, wikiId)),
 
@@ -158,6 +139,12 @@ export function createWikiService(deps: WikiServiceDeps): WikiService {
       })
     }
   }
+}
+
+async function readWikis(http: AdoHttp, org: string): Promise<WikiRef[]> {
+  const [wikis, projects] = await Promise.all([listWikis(http, org), listProjects(http, org)])
+  const names = new Map(projects.map(project => [project.id, project.name]))
+  return wikis.map(raw => toRef(raw, names.get(raw.projectId) ?? raw.projectId)).sort(byProjectThenName)
 }
 
 function toRef(raw: RawWiki, projectName: string): WikiRef {

@@ -3,6 +3,7 @@ import type { OrgStatus } from '../../src/shared/types'
 import type { WikiPageRef } from '../../src/shared/wiki'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { fixture, json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
+import { createEntities } from '../data/entities'
 import { ME } from '../prs/fake-prs'
 import { fakeWiki, isLevel, isPage, isProjects, isSearch, isWikis } from './fake-wiki'
 import { createWikiService, type WikiService } from './service'
@@ -50,12 +51,14 @@ function harness() {
     return ado.fetch(input, init)
   }) as typeof globalThis.fetch
   const http = createAdoHttp({ fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
-  const wiki = createWikiService({ http, orgs: async () => structuredClone(orgs), now: () => now })
+  const entities = createEntities(() => now)
+  const wiki = createWikiService({ http, orgs: async () => structuredClone(orgs), entities })
   wiki.onOrgs(structuredClone(orgs))
   return {
     ado,
     urls,
     wiki,
+    entities,
     advance(ms: number) {
       now += ms
     },
@@ -467,7 +470,7 @@ test('an expired wiki list is read again once, whether or not the wiki is in it'
 })
 
 test('nothing is answered after the org signs out', async () => {
-  const { ado, wiki, setOrgs } = harness()
+  const { ado, wiki, entities, setOrgs } = harness()
   await wiki.wikis(ORG)
   const hung = ado.hang(isPage)
   const answer = wiki.page(ref(CHECKLIST)).then(
@@ -477,6 +480,7 @@ test('nothing is answered after the org signs out', async () => {
   await until(() => hung.length > 0)
   assert.equal(hung.length, 1)
   setOrgs([])
+  entities.forget(ORG)
   assert.ok(adoError('unauthorized', 401, NOT_CONNECTED)(await answer))
   assert.equal(hung[0].signal?.aborted, true)
 
@@ -541,7 +545,7 @@ test('a failed read says what Azure DevOps said, or that the wikis could not be 
     orgs: async () => {
       throw new Error('the store failed')
     },
-    now: () => T0
+    entities: createEntities(() => T0)
   })
   await assert.rejects(broken.wikis(ORG), adoError('server', 500, LOAD_FAILED))
 })

@@ -62,7 +62,7 @@ The stages come from each run's timeline. A load reads them for up to 8 runs in 
 
 ### Watching a run
 
-**Watch** works on a run that hasn't finished. A watched run is read every 30 seconds, and you get a notification when it finishes, whoever started it. Watching ends by itself at the finish. You can watch up to 20 runs per organisation, and the list is kept when Orca restarts.
+**Watch** works on a run that hasn't finished. A watched run is read every 30 seconds while the Pipelines tab is visible and every minute otherwise, and you get a notification when it finishes, whoever started it. Watching ends by itself at the finish. You can watch up to 20 runs per organisation, and the list is kept when Orca restarts.
 
 ### Approvals
 
@@ -105,7 +105,7 @@ It writes `<workspace>/.orca-ado/<org>.<buildId>.adorun` in your focused workspa
 - A toolbar with the state, **Watch**, **Rerun failed stage**, **Cancel run** and **Open in Azure DevOps**.
 - For a stage waiting for approval, the approvers, the waiting time and **Approve…** and **Reject…** work as in the Pipelines tab. To ask someone, use **Share for approval** there.
 
-The tab refreshes every 5 seconds while the run is active and every minute once it has finished. When a refresh fails, it keeps what it has and says why. When the run no longer exists, or you can't see it, it says so and stops refreshing.
+The tab refreshes every 5 seconds while a step runs, every 30 seconds while the run is queued or waits for an approval, and every minute once it has finished, and slows down while nothing changes (see [Polling](reference.md#polling)). When a refresh fails, it keeps what it has and says why. When the run no longer exists, or you can't see it, it says so and stops refreshing.
 
 ### The log
 

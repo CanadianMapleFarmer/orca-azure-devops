@@ -3,12 +3,12 @@ import type { RunView } from '../../src/shared/pipelines'
 import type { OrgStatus } from '../../src/shared/types'
 import type { RawBuild } from '../ado/builds'
 import { AdoError, createAdoHttp } from '../ado/http'
-import type { RawRecord, RawTimeline } from '../ado/timeline'
+import { mergeTimeline, type RawRecord, type RawTimeline } from '../ado/timeline'
 import { fixture, json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
-import { createScheduler } from '../poll/scheduler'
+import { createEntities } from '../data/entities'
 import { PLATFORM } from '../prs/fake-prs'
-import { fakeClock } from '../test-support'
+import { fakeClock, paced } from '../test-support'
 import {
   APPROVAL_4520,
   buildIdOf,
@@ -22,7 +22,6 @@ import {
   ME,
   type FakePipelines
 } from './fake-pipelines'
-import { createPressure } from './pressure'
 import { createRunViews } from './run-views'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
@@ -59,15 +58,17 @@ function harness() {
   const changes: { org: string; buildId: number }[] = []
   const watched = new Set<number>()
   let orgs = [status()]
-  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const { pressure, scheduler } = paced(clock)
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {}, observe: pressure.observe })
+  const entities = createEntities(clock.now)
   const views = createRunViews({
     http,
     orgs: async () => structuredClone(orgs),
-    scheduler: createScheduler(clock),
-    pressure: createPressure(clock.now),
+    scheduler,
     watched: (org, buildId) => org === ORG && watched.has(buildId),
     changed: change => changes.push(change),
-    now: clock.now
+    now: clock.now,
+    entities
   })
   views.onOrgs(structuredClone(orgs))
   return {
@@ -76,6 +77,8 @@ function harness() {
     changes,
     watched,
     views,
+    pressure,
+    entities,
     view: (buildId: number) => views.view({ org: ORG, projectId: PROJECT, buildId }),
     show: (buildId: number, visible = true) => views.setVisible({ org: ORG, visible, run: { projectId: PROJECT, buildId } }),
     setOrgs(next: OrgStatus[]) {
@@ -84,6 +87,35 @@ function harness() {
     },
     since: (count: number) => tally(ado.calls.slice(count))
   }
+}
+
+type Harness = ReturnType<typeof harness>
+
+function running(ado: FakePipelines, buildId = 4520): RawTimeline {
+  const timeline = mergeTimeline(fixture<RawTimeline>('timeline-4520'), fixture<RawTimeline>('timeline-4520-delta'))
+  ado.runs.timelines.set(buildId, timeline)
+  return timeline
+}
+
+function runningRecord(timeline: RawTimeline): RawRecord {
+  return timeline.records.find(record => record.state === 'inProgress') ?? assert.fail('nothing is running')
+}
+
+function readsAt(h: Harness, match: (call: AdoCall) => boolean): number[] {
+  const times: number[] = []
+  h.ado.on(
+    call => {
+      if (match(call)) times.push(h.clock.now() - T0)
+      return false
+    },
+    () => assert.fail('a recorder never answers')
+  )
+  return times
+}
+
+async function polls(h: Harness, count: number): Promise<void> {
+  const target = h.ado.calls.filter(isTimeline).length + count
+  while (h.ado.calls.filter(isTimeline).length < target) await h.clock.tick(1_000)
 }
 
 function tally(calls: readonly AdoCall[]) {
@@ -189,27 +221,113 @@ test('view builds stages, failures and the waiting approval', async () => {
   }
 })
 
-test('a visible active run polls every five seconds and posts viewChanged only on change', async () => {
+test('a visible running run polls at five seconds and posts viewChanged only on change', async () => {
   const h = harness()
+  running(h.ado)
   await h.view(4520)
   const opened = h.ado.calls.length
   h.show(4520)
   await h.clock.tick(0)
   assert.deepEqual(h.since(opened), NO_CALLS, 'a view read moments ago is not read again')
 
-  await h.clock.tick(5_000)
-  assert.deepEqual(h.since(opened), { builds: 1, timelines: 1, logs: 1, approvals: 1, checkSuites: 0, lines: 0, all: 4 }, 'the place of the approval is kept')
+  await h.clock.tick(4_999)
+  assert.deepEqual(h.since(opened), NO_CALLS)
+  await h.clock.tick(1)
+  assert.deepEqual(h.since(opened), { ...NO_CALLS, timelines: 1, all: 1 })
   assert.deepEqual(h.changes, [], 'nothing changed')
   const second = h.ado.calls.length
-  await h.clock.tick(4_999)
-  assert.deepEqual(h.since(second), NO_CALLS)
 
   h.ado.on(call => isLogs(call) && buildIdOf(call) === 4520, () => json(200, { count: 1, value: [{ id: 4, lineCount: 61 }] }))
-  await h.clock.tick(1)
-  assert.equal(h.since(second).builds, 1)
+  await polls(h, 1)
+  assert.deepEqual(h.since(second), { ...NO_CALLS, timelines: 1, logs: 1, all: 2 })
   assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }])
-  await h.clock.tick(5_000)
+  await polls(h, 1)
   assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }], 'the same view again posts nothing')
+})
+
+test('a running build reads its timeline every tick, its logs every second tick and the build every fourth', async () => {
+  const h = harness()
+  running(h.ado)
+  h.show(4520)
+  await h.clock.tick(0)
+  assert.deepEqual(h.since(0), { ...NO_CALLS, builds: 1, timelines: 1, logs: 1, all: 3 }, 'the first read is whole')
+  const opened = h.ado.calls.length
+
+  await polls(h, 8)
+  assert.deepEqual(h.since(opened), { ...NO_CALLS, builds: 2, timelines: 8, logs: 4, all: 14 })
+})
+
+test('the build is read at once when the timeline shows every record completed', async () => {
+  const h = harness()
+  const timeline = running(h.ado)
+  h.show(4520)
+  await h.clock.tick(0)
+  const opened = h.ado.calls.length
+  await polls(h, 1)
+  assert.deepEqual(h.since(opened), { ...NO_CALLS, timelines: 1, all: 1 }, 'a tick in the middle of a run reads the timeline alone')
+
+  for (const record of timeline.records) Object.assign(record, { state: 'completed', result: record.result ?? 'succeeded' })
+  timeline.changeId = 45
+  Object.assign(build(h.ado, 4520), { status: 'completed', result: 'succeeded', finishTime: '2026-11-05T10:01:00Z' })
+  const finishing = h.ado.calls.length
+  await polls(h, 1)
+  assert.deepEqual(h.since(finishing), { ...NO_CALLS, builds: 1, timelines: 1, logs: 1, all: 3 }, 'on the second tick, not the fourth')
+  const done = await h.view(4520)
+  assert.deepEqual([done.run.state, done.canCancel], ['succeeded', false])
+})
+
+test('a run waiting on an approval polls every 30 seconds', async () => {
+  const h = harness()
+  const reads = readsAt(h, call => isTimeline(call) && buildIdOf(call) === 4520)
+  h.show(4520)
+  await h.clock.tick(0)
+  await h.clock.tick(29_999)
+  assert.deepEqual(reads, [0])
+  await h.clock.tick(1)
+  assert.deepEqual(reads, [0, 30_000])
+  assert.equal(h.ado.calls.filter(isApprovals).length, 2, 'the approval is read with the timeline')
+  await h.clock.tick(2 * MINUTE)
+  assert.deepEqual(reads, [0, 30_000, 90_000, 150_000], 'and backs off to a minute while nothing changes')
+
+  Object.assign(build(h.ado, 4505), { status: 'notStarted', result: undefined, finishTime: undefined })
+  const queued = readsAt(h, call => isTimeline(call) && buildIdOf(call) === 4505)
+  h.show(4505)
+  await h.clock.tick(0)
+  await h.clock.tick(30_000)
+  assert.deepEqual(queued, [150_000, 180_000], 'a queued run polls every 30 seconds too')
+})
+
+test('a run whose timeline stopped changing backs off to 10 and 20 seconds, and a change brings it back to 5', async () => {
+  const h = harness()
+  const timeline = running(h.ado)
+  const reads = readsAt(h, isTimeline)
+  h.show(4520)
+  await h.clock.tick(0)
+  await h.clock.tick(70_000)
+  assert.deepEqual(reads, [0, 5_000, 15_000, 35_000, 55_000])
+
+  Object.assign(runningRecord(timeline), { name: 'Deploy to production' })
+  timeline.changeId = 45
+  await h.clock.tick(25_000)
+  assert.deepEqual(reads, [0, 5_000, 15_000, 35_000, 55_000, 75_000, 80_000, 90_000])
+  assert.equal(h.changes.length, 2)
+})
+
+test("the run view's timeline is shared with the runs list", async () => {
+  const h = harness()
+  await h.view(4520)
+  const opened = h.entities.of(ORG).timelines.get('4520') ?? assert.fail('the timeline was not shared')
+  assert.deepEqual([opened.value.changeId, opened.value.records.length, opened.at], [41, 16, T0])
+
+  h.show(4520)
+  h.ado.on(call => isTimeline(call) && call.query.get('changeId') === '41', () => json(200, fixture('timeline-4520-delta')))
+  await h.clock.tick(30_000)
+  const merged = h.entities.of(ORG).timelines.get('4520') ?? assert.fail('the timeline was dropped')
+  assert.deepEqual([merged.value.changeId, merged.value.records.length, merged.at], [44, 16, T0 + 30_000], 'the merged timeline replaces it')
+  assert.deepEqual(
+    merged.value.records.filter(record => record.type.startsWith('Checkpoint')).map(record => record.state),
+    ['completed', 'completed']
+  )
 })
 
 test('the second read sends the held changeId and merges the delta', async () => {
@@ -219,7 +337,7 @@ test('the second read sends the held changeId and merges the delta', async () =>
   assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }], 'the first view is news to the tab')
   h.ado.on(call => isTimeline(call) && call.query.get('changeId') === '41', () => json(200, fixture('timeline-4520-delta')))
 
-  await h.clock.tick(5_000)
+  await h.clock.tick(30_000)
   assert.deepEqual(changeIds(h.ado.calls), [null, '41'])
   assert.equal(h.ado.calls.filter(isApprovals).length, 1, 'no stage waits any more, so approvals are not read')
   assert.equal(h.changes.length, 2)
@@ -242,14 +360,14 @@ test('a delta that closes a parent loop with the held timeline leaves the view s
   const job = held.records.find(record => record.type === 'Job' && record.parentId !== stage.id && held.records.some(phase => phase.id === record.parentId && phase.parentId === stage.id)) ?? assert.fail('no job under the stage')
   h.ado.on(call => isTimeline(call) && call.query.get('changeId') === '41', () => json(200, { changeId: 44, records: [{ ...stage, parentId: job.id }] }))
 
-  await h.clock.tick(5_000)
+  await h.clock.tick(30_000)
   const stale = await h.view(4520)
   assert.deepEqual({ ...stale, updatedAt: good.updatedAt }, { ...good, stale: true, message: 'Azure DevOps returned an unexpected run timeline.' })
-  await h.clock.tick(5_000)
+  await h.clock.tick(30_000)
   assert.deepEqual(changeIds(h.ado.calls), [null, '41', '41'], 'the looping delta is never held')
 })
 
-test('a finished run polls the build every minute', async () => {
+test('a finished run polls the build every minute, backing off to four while nothing changes', async () => {
   const h = harness()
   h.show(4512)
   await h.clock.tick(0)
@@ -259,8 +377,15 @@ test('a finished run polls the build every minute', async () => {
   assert.deepEqual(h.since(loaded), NO_CALLS)
   await h.clock.tick(1)
   assert.deepEqual(h.since(loaded), { ...NO_CALLS, builds: 1, all: 1 })
-  await h.clock.tick(MINUTE)
+  await h.clock.tick(2 * MINUTE - 1)
+  assert.equal(h.since(loaded).builds, 1)
+  await h.clock.tick(1)
   assert.deepEqual(h.since(loaded), { ...NO_CALLS, builds: 2, all: 2 })
+  await h.clock.tick(4 * MINUTE - 1)
+  assert.equal(h.since(loaded).builds, 2)
+  await h.clock.tick(1)
+  await h.clock.tick(4 * MINUTE)
+  assert.deepEqual(h.since(loaded), { ...NO_CALLS, builds: 4, all: 4 })
   assert.equal(h.changes.length, 1)
 })
 
@@ -285,7 +410,7 @@ test('a finished run retried elsewhere resumes fast polling', async () => {
 
   const reloaded = h.ado.calls.length
   await h.clock.tick(5_000)
-  assert.deepEqual(h.since(reloaded), { builds: 1, timelines: 1, logs: 1, approvals: 0, checkSuites: 0, lines: 0, all: 3 })
+  assert.deepEqual(h.since(reloaded), { ...NO_CALLS, timelines: 1, all: 1 })
   assert.deepEqual(changeIds(h.ado.calls.slice(reloaded)), ['52'])
 })
 
@@ -296,7 +421,7 @@ test('a run that disappears stops polling and says so', async () => {
   assert.equal(h.changes.length, 1)
 
   h.ado.runs.builds.delete(4520)
-  await h.clock.tick(5_000)
+  await h.clock.tick(30_000)
   assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }, { org: ORG, buildId: 4520 }], 'the tab hears that its run changed')
   const gone = h.ado.calls.length
   await assert.rejects(h.view(4520), adoError('not_found', 404, RUN_GONE))
@@ -313,7 +438,7 @@ test('a run asked for under another project leaves the open tab polling', async 
   await h.clock.tick(0)
   await assert.rejects(h.views.view({ org: ORG, projectId: PLATFORM, buildId: 4520 }), adoError('not_found', 404, RUN_GONE))
   const asked = h.ado.calls.length
-  await h.clock.tick(5_000)
+  await h.clock.tick(30_000)
   assert.deepEqual(
     h.ado.calls.slice(asked).filter(isOneBuild).map(call => call.path),
     [`/${ORG}/${PROJECT}/_apis/build/builds/4520`]
@@ -326,8 +451,8 @@ test('nothing is posted after the org signs out', async () => {
   await h.clock.tick(0)
   assert.equal(h.changes.length, 1)
 
-  const hung = h.ado.hang(isOneBuild)
-  await h.clock.tick(5_000)
+  const hung = h.ado.hang(isTimeline)
+  await h.clock.tick(30_000)
   assert.equal(hung.length, 1, 'a poll is in flight')
   const asking = h.view(4520).then(
     () => assert.fail('the view is not answered'),
@@ -360,7 +485,7 @@ test('a hidden view stops polling', async () => {
 
   h.show(4520)
   await h.clock.tick(0)
-  assert.equal(h.since(hidden).builds, 1, 'showing it again polls again')
+  assert.equal(h.since(hidden).timelines, 1, 'showing it again polls again')
   h.views.setVisible({ org: ORG, visible: false })
   const all = h.ado.calls.length
   await h.clock.tick(10 * MINUTE)
@@ -380,21 +505,27 @@ test('hidden views are cached ten at a time and a visible one is never dropped',
   assert.equal(h.since(cached).builds, 1, 'the oldest hidden view was dropped')
 })
 
-test('pressure slows a run view to thirty seconds', async () => {
+test('a delayed org polls a running run view at forty seconds', async () => {
   const h = harness()
-  const reads: number[] = []
+  const timeline = running(h.ado)
+  h.ado.on(isTimeline, () => {
+    timeline.changeId += 1
+    runningRecord(timeline).name = `Deploy ${timeline.changeId}`
+    return json(200, structuredClone(timeline))
+  })
+  const reads = readsAt(h, isTimeline)
+  let delayed = false
   h.ado.on(
+    call => isOneBuild(call) && !delayed,
     call => {
-      if (isOneBuild(call)) reads.push(h.clock.now() - T0)
-      return isOneBuild(call) && reads.length === 1
-    },
-    call => json(200, structuredClone(build(h.ado, buildIdOf(call))), { 'x-ratelimit-delay': '2' })
+      delayed = true
+      return json(200, structuredClone(build(h.ado, buildIdOf(call))), { 'x-ratelimit-delay': '2' })
+    }
   )
   h.show(4520)
   await h.clock.tick(0)
   await h.clock.tick(5 * MINUTE + 10_000)
-  assert.deepEqual(reads.slice(0, 3), [0, 30_000, 60_000], 'slowed to thirty seconds')
-  assert.deepEqual(reads.slice(-3), [300_000, 305_000, 310_000], 'and back to five seconds once the pressure ends')
+  assert.deepEqual(reads, [0, 40_000, 80_000, 120_000, 160_000, 200_000, 240_000, 280_000, 300_000, 305_000, 310_000], 'eight times the five seconds, then five seconds from the moment the delay passes')
 })
 
 test('a run action reloads its open view in full at once', async () => {
@@ -495,13 +626,14 @@ test('a run id that is not a positive safe integer is refused everywhere', async
 
 test('a failed poll keeps the last view as stale, tells the tab once, recovers and pauses when throttled', async () => {
   const h = harness()
+  running(h.ado)
   h.show(4520)
   await h.clock.tick(0)
   const good = await h.view(4520)
   assert.deepEqual(h.changes, [{ org: ORG, buildId: 4520 }])
 
   let failing: (() => Response) | null = () => json(500, { message: OUTAGE })
-  h.ado.on(call => failing !== null && isOneBuild(call), () => failing?.() ?? assert.fail('the failure ended'))
+  h.ado.on(call => failing !== null && isTimeline(call), () => failing?.() ?? assert.fail('the failure ended'))
   await h.clock.tick(5_000)
   const stale = await h.view(4520)
   assert.deepEqual({ ...stale, updatedAt: good.updatedAt }, { ...good, stale: true, message: OUTAGE })
@@ -520,11 +652,12 @@ test('a failed poll keeps the last view as stale, tells the tab once, recovers a
   await h.clock.tick(5_000)
   const throttled = h.ado.calls.length
   assert.equal((await h.view(4520)).stale, true)
+  assert.equal(h.pressure.state(ORG).resumeAt, h.clock.now() + 90_000, 'the org is blocked for what ADO asked')
   await h.clock.tick(80_000)
-  assert.deepEqual(h.since(throttled), NO_CALLS, 'polling pauses for what ADO asked')
+  assert.deepEqual(h.since(throttled), NO_CALLS, 'polling waits out the org\'s resumeAt')
   failing = null
   await h.clock.tick(10_000)
-  assert.equal(h.since(throttled).builds, 1, 'and resumes after it')
+  assert.equal(h.since(throttled).timelines, 1, 'and resumes after it')
   assert.equal((await h.view(4520)).stale, false)
 })
 
@@ -552,8 +685,8 @@ test('disposing the run views stops every poll and posts nothing more', async ()
   await h.clock.tick(0)
   assert.equal(h.changes.length, 1)
 
-  const hung = h.ado.hang(isOneBuild)
-  await h.clock.tick(5_000)
+  const hung = h.ado.hang(isTimeline)
+  await h.clock.tick(30_000)
   assert.equal(hung.length, 1, 'a poll is in flight')
   const asking = h.view(4520).then(
     () => assert.fail('the view is not answered'),

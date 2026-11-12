@@ -23,6 +23,8 @@ Boards:
 - The board opens as an editor and `git status` stays clean.
 - Dragging a card moves it, and a split column writes Doing and Done correctly.
 - The workspace hook names the branch, and **Start an agent** launches your default agent with its prompt.
+- On the client organisation, the delta query with `timePrecision=true` is accepted and returns only the items changed since the watermark.
+- Adding a child task and linking a pull request each bump the parent's `rev` and `ChangedDate`.
 
 Pull requests and sharing:
 
@@ -88,3 +90,7 @@ Panel overhaul:
 - Open in tab on a real page with a diagram in each form, a wide table and several headings: it opens with both Mermaid forms drawn and a wide table readable, with Orca's Markdown view at its default, the Table of Contents lists the headings, a save is refused and leaves the file as it was, and pressing **Open in tab** again while the tab is open rewrites the copy and the open tab shows the new text. A page over 600 KiB opens cut, with its note.
 - Mermaid in both forms: `::: mermaid` with and without a space, a fenced `mermaid` block, a front matter block, and the diagram kinds Azure DevOps lists.
 - Stage chips on every run card.
+
+General:
+
+- On the client organisation, read **Connection status** after 10 minutes with the Work tab and a board open, and record the request totals and the `Rate limit` line with its `X-RateLimit-*` figures. Also record the `ETag seen` line, which names the endpoints that answer with an `ETag`.

@@ -7,9 +7,11 @@ import { AdoError, createAdoHttp } from '../ado/http'
 import type { RawTimeline } from '../ado/timeline'
 import { json, ORG, ORG_URL, PROJECT, type AdoCall } from '../boards/fake-ado'
 import { byteLength } from '../budget'
-import { createScheduler } from '../poll/scheduler'
+import { createEntities } from '../data/entities'
+import { cacheKey, createPersisted, VALUE_BUDGET_BYTES, type Saved } from '../data/persist'
+import { createSavedTables } from '../data/saved-tables'
 import { isRepositories, PLATFORM } from '../prs/fake-prs'
-import { drain, fakeClock, memoryStore } from '../test-support'
+import { drain, fakeClock, memoryCache, memoryStore, paced } from '../test-support'
 import {
   APPROVAL_4520,
   APPROVAL_4531,
@@ -28,13 +30,14 @@ import {
   type FakePipelines
 } from './fake-pipelines'
 import { createNotifier } from './notify'
-import { createPressure } from './pressure'
 import { createPipelinesService } from './service'
 import { createRunSignals, type RunSignals } from './signals'
 import { createWatchList } from './watched'
 
 const T0 = Date.parse('2026-11-05T10:00:00Z')
 const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const SHOWING_SAVED = 'Showing what was saved last time. Refreshing…'
 const WATCHED = `pipelines:watched:${ORG}`
 const NOT_CONNECTED = 'Connect this organization first.'
 const TRIMMED = 'Showing the newest runs only.'
@@ -64,16 +67,21 @@ function status(overrides: Partial<OrgStatus> = {}): OrgStatus {
   }
 }
 
-function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (now: () => number) => RunSignals } = {}) {
+function harness(
+  options: { store?: ReturnType<typeof memoryStore>; signals?: (now: () => number) => RunSignals; cache?: Record<string, unknown>; at?: number } = {}
+) {
   const ado = fakePipelines()
-  const clock = fakeClock(T0)
+  const clock = fakeClock(options.at ?? T0)
   const posts: RunsSnapshot[] = []
   const updates: [string, RunSummary[] | null][] = []
   const failing = { orgs: false }
   const memory = options.store ?? memoryStore()
   let orgs = [status()]
-  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
-  const scheduler = createScheduler(clock)
+  const { pressure, scheduler } = paced(clock)
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {}, observe: pressure.observe })
+  const entities = createEntities(clock.now)
+  const cache = memoryCache(options.cache)
+  const persisted = createPersisted({ port: cache.port, orgs: async () => structuredClone(orgs), now: clock.now, clock, log: () => {} })
   const service = createPipelinesService({
     http,
     orgs: async () => {
@@ -82,10 +90,12 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     },
     scheduler,
     watchList: createWatchList(memory.store),
-    pressure: createPressure(clock.now),
     signals: options.signals?.(clock.now) ?? { update: (org, runs) => updates.push([org, runs === null ? null : structuredClone([...runs])]) },
     post: snapshot => posts.push(structuredClone(snapshot)),
-    now: clock.now
+    now: clock.now,
+    entities,
+    persisted,
+    savedTables: createSavedTables(entities, persisted)
   })
   return {
     ado,
@@ -95,6 +105,9 @@ function harness(options: { store?: ReturnType<typeof memoryStore>; signals?: (n
     failing,
     service,
     scheduler,
+    pressure,
+    cache,
+    persisted,
     data: memory.data,
     setOrgs(next: OrgStatus[]) {
       orgs = next
@@ -169,7 +182,7 @@ test("a visible load reads each project's lists once and caps timelines", async 
   const before = h.ado.calls.length
   await h.clock.tick(30_000)
   const later = h.ado.calls.slice(before)
-  assert.deepEqual(tally(later), { repositories: 0, mine: 2, running: 2, approvals: 2, batches: 0, timelines: 2, checkSuites: 0, all: 8 })
+  assert.deepEqual(tally(later), { repositories: 0, mine: 1, running: 1, approvals: 1, batches: 0, timelines: 2, checkSuites: 0, all: 5 })
   assert.deepEqual(timelines(later), ACTIVE, 'only active runs are read again')
   assert.equal(h.posts.length, 2)
 
@@ -190,6 +203,84 @@ test("a visible load reads each project's lists once and caps timelines", async 
   await busy.clock.tick(30_000)
   const next = timelines(busy.ado.calls.slice(settled))
   assert.deepEqual([next.filter(active).length, next.filter(id => !active(id)).length], [8, 6], 'then the rest of the finished runs')
+})
+
+function listedProjects(calls: readonly AdoCall[]) {
+  return {
+    mine: calls.filter(isMineRuns).map(runsProjectOf).sort(),
+    running: calls.filter(isRunningRuns).map(runsProjectOf).sort(),
+    approvals: calls.filter(isApprovals).map(runsProjectOf).sort()
+  }
+}
+
+test("a visible runs tick lists only hot projects and keeps the cold projects' last runs, until the longest tick would be too late", async () => {
+  const h = harness()
+  keepMoving(h)
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const first = h.posts.at(-1)
+  addBuild(h.ado, 4800, {
+    status: 'inProgress',
+    result: undefined,
+    queueTime: iso(T0 + 10_000),
+    finishTime: undefined,
+    requestedFor: { id: GRACE, displayName: 'Grace Hopper' },
+    project: { id: PLATFORM, name: 'Fabrikam Platform' }
+  })
+
+  for (let tick = 1; tick < 6; tick += 1) {
+    const before = h.ado.calls.length
+    await h.clock.tick(30_000)
+    assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PROJECT], running: [PROJECT], approvals: [PROJECT] }, `tick ${tick}`)
+    assert.deepEqual(ids(h.posts.at(-1)?.runs), ids(first?.runs), 'the cold project keeps its last runs')
+  }
+  const before = h.ado.calls.length
+  await h.clock.tick(30_000)
+  assert.deepEqual(
+    listedProjects(h.ado.calls.slice(before)),
+    { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] },
+    'at 3 minutes, since a quiet tab can wait 2 minutes between ticks'
+  )
+  assert.ok(ids(h.posts.at(-1)?.runs).includes(4800), 'a run in a cold project appears within 5 minutes')
+})
+
+test("a hidden runs tick never counts as a read of a cold project's running list", async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  h.show(false)
+  await h.clock.tick(5 * MINUTE)
+
+  const before = h.ado.calls.length
+  h.show()
+  await h.clock.tick(0)
+  assert.deepEqual(
+    listedProjects(h.ado.calls.slice(before)),
+    { mine: [PROJECT], running: [PLATFORM, PROJECT], approvals: [PROJECT] },
+    'the hidden tick read only my runs and approvals, so the running list is still due'
+  )
+})
+
+test('Refresh lists every project', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  await h.clock.tick(30_000)
+  const every = { mine: [PLATFORM, PROJECT], running: [PLATFORM, PROJECT], approvals: [PLATFORM, PROJECT] }
+
+  let before = h.ado.calls.length
+  await h.service.refresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'Refresh')
+  before = h.ado.calls.length
+  await h.service.reloadFresh(ORG)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), every, 'a reload after an action')
+
+  before = h.ado.calls.length
+  await h.clock.tick(60_000)
+  assert.deepEqual(listedProjects(h.ado.calls.slice(before)), { mine: [PROJECT], running: [PROJECT], approvals: [PROJECT] }, 'the next tick lists hot projects only')
 })
 
 test('a background load reads my runs and approvals only and keeps the chips', async () => {
@@ -287,18 +378,17 @@ test('watching starts the watch job, a finished watched run is dropped and the j
   assert.deepEqual([h.service.isWatched(ORG, 4531), h.service.isWatched(ORG, 4520)], [true, false])
 
   const before = h.ado.calls.length
-  await h.clock.tick(30_000)
+  await h.clock.tick(60_000)
   const polls = h.ado.calls.slice(before)
   assert.deepEqual(polls.map(call => [call.query.get('buildIds'), call.path]), [
-    ['4531', `/${ORG}/${PROJECT}/_apis/build/builds`],
     ['4531', `/${ORG}/${PROJECT}/_apis/build/builds`]
-  ], 'one batch at once, then every 30 s, and nothing else')
+  ], 'none at once, since the runs list read it a moment ago, then one batch a minute later, and nothing else')
   assert.deepEqual(runOf(h.posts.at(-1), 4531).approvals, runOf(snapshot, 4531).approvals, 'the merge keeps what the batch cannot know')
   assert.deepEqual(runOf(h.posts.at(-1), 4531).stages, runOf(snapshot, 4531).stages)
   assert.equal(runOf(h.posts.at(-1), 4531).state, 'waiting')
 
-  finish(h.ado, 4531, T0 + 40_000)
-  await h.clock.tick(30_000)
+  finish(h.ado, 4531, T0 + 70_000)
+  await h.clock.tick(60_000)
   const done = h.updates.at(-2)?.[1]?.find(run => run.buildId === 4531)
   assert.deepEqual([done?.state, done?.watched], ['succeeded', true], 'the signals see the finish while it is still watched')
   assert.equal(runOf(h.posts.at(-1), 4531).watched, false, 'then it is dropped')
@@ -351,7 +441,7 @@ test('a watched run of someone else that fails is counted alike by the status ba
   assert.equal(runOf(watched, 4531).mine, false)
 
   finish(h.ado, 4531, T0 + 40_000, 'failed')
-  await h.clock.tick(30_000)
+  await h.clock.tick(60_000)
   await drain()
 
   const posted = h.posts.at(-1)
@@ -373,7 +463,7 @@ test("watching a loaded run stores the run's own project even when the caller na
   await h.service.watch({ org: ORG, projectId: PLATFORM, buildId: 4531, watched: true })
   assert.deepEqual(h.data[WATCHED], [{ projectId: PROJECT, buildId: 4531 }])
   const before = h.ado.calls.length
-  await h.clock.tick(30_000)
+  await h.clock.tick(60_000)
   assert.deepEqual([...new Set(h.ado.calls.slice(before).filter(isBuildsByIds).map(runsProjectOf))], [PROJECT], 'the watch job reads the run in its own project')
   assert.equal(h.service.isWatched(ORG, 4531), true, 'it is not dropped as gone')
 
@@ -427,11 +517,11 @@ test('the watch list survives a restart', async () => {
   assert.equal(runOf(await second.service.snapshot(ORG), 4531).watched, true)
 
   const before = second.ado.count(isBuildsByIds)
-  await second.clock.tick(30_000)
+  await second.clock.tick(60_000)
   assert.equal(second.ado.count(isBuildsByIds), before + 1, 'the watch job runs again after a restart')
 
-  finish(second.ado, 4531, T0 + 40_000)
-  await second.clock.tick(30_000)
+  finish(second.ado, 4531, T0 + 70_000)
+  await second.clock.tick(60_000)
   assert.deepEqual(store.data[WATCHED], [])
   second.scheduler.dispose()
   second.service.dispose()
@@ -442,35 +532,139 @@ test('the watch list survives a restart', async () => {
   assert.equal(third.updates.at(-1)?.[1]?.find(run => run.buildId === 4531)?.watched, false, 'a dropped run is not watched after a restart, so it cannot notify again')
 })
 
-test('pressure moves the org to the background cadence for five minutes', async () => {
-  const h = harness()
-  let pressured = true
+function timesOf(h: ReturnType<typeof harness>, match: (call: AdoCall) => boolean): number[] {
+  const times: number[] = []
   h.ado.on(
-    call => pressured && isMineRuns(call),
-    () => {
-      pressured = false
-      return json(200, { value: [] }, { 'retry-after': '1' })
-    }
+    call => {
+      if (match(call)) times.push(h.clock.now() - T0)
+      return false
+    },
+    () => json(500, {})
   )
+  return times
+}
+
+function keepMoving(h: ReturnType<typeof harness>): void {
+  let moves = 0
+  h.ado.on(
+    call => {
+      if (isRunningRuns(call)) Object.assign(h.ado.runs.builds.get(4531) ?? assert.fail('no build 4531'), { buildNumber: `20261105.4531.${(moves += 1)}` })
+      return false
+    },
+    () => json(500, {})
+  )
+}
+
+const delay = (h: ReturnType<typeof harness>) =>
+  h.pressure.observe({ org: ORG, path: '/_apis/build/builds' }, 200, new Headers({ 'X-RateLimit-Delay': '1' }))
+
+test('a delayed org polls its runs at eight times the interval until the delay passes', async () => {
+  const h = harness()
+  keepMoving(h)
+  const loads = timesOf(h, isMineRuns)
+  h.setOrgs([status()])
+  delay(h)
+  h.show()
+  await h.clock.tick(0)
+  await h.clock.tick(330_000)
+  assert.deepEqual([...new Set(loads)], [0, 240_000, 300_000, 330_000], 'every 240 s while delayed, then every 30 s from the moment the delay passes')
+})
+
+test('a delayed org polls its hidden runs again five minutes after the delay, not forty', async () => {
+  const h = harness()
+  const loads = timesOf(h, isMineRuns)
+  h.setOrgs([status()])
+  delay(h)
+  await h.clock.tick(0)
+  await h.clock.tick(15 * MINUTE)
+  assert.deepEqual([...new Set(loads)], [0, 300_000, 600_000, 900_000])
+})
+
+test('a delayed org watches its runs at eight times the interval until the delay passes', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  await h.clock.tick(100_000)
+  const batches = timesOf(h, isBuildsByIds)
+  delay(h)
+  await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  await h.clock.tick(250_000)
+  delay(h)
+  await h.clock.tick(370_000)
+  assert.deepEqual([...new Set(batches)], [100_000, 580_000, 650_000, 710_000], 'every 480 s while delayed, then every 60 s from the moment the delay passes')
+})
+
+test('a runs tick with nothing moving backs off to two minutes', async () => {
+  const h = harness()
+  const loads = timesOf(h, isRunningRuns)
   h.setOrgs([status()])
   h.show()
   await h.clock.tick(0)
-  assert.equal(h.ado.count(isMineRuns), 2)
+  await h.clock.tick(10 * MINUTE)
+  assert.deepEqual([...new Set(loads)], [0, 30_000, 90_000, 210_000, 330_000, 450_000, 570_000], 'every 30 s, then 60 s, then every 2 minutes')
 
+  loads.length = 0
+  addBuild(h.ado, 4800, { status: 'inProgress', result: undefined, queueTime: iso(T0 + 10 * MINUTE), finishTime: undefined, requestedFor: { id: ME, displayName: 'Alex Contoso' } })
+  await h.clock.tick(3 * MINUTE)
+  assert.deepEqual([...new Set(loads)], [690_000, 720_000, 780_000], 'a new run brings it back to 30 s')
+})
+
+test('a hidden runs tick never backs off past 5 minutes', async () => {
+  const h = harness()
+  const loads = timesOf(h, isMineRuns)
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  await h.clock.tick(25 * MINUTE)
+  assert.deepEqual([...new Set(loads)], [0, 5, 10, 15, 20, 25].map(minutes => minutes * MINUTE))
+})
+
+test('the watch job skips runs the runs list read in the last 30 seconds', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const batches = timesOf(h, isBuildsByIds)
   await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
   await h.clock.tick(0)
-  const batches = h.ado.count(isBuildsByIds)
-  await h.clock.tick(2 * MINUTE - 1)
-  assert.deepEqual([h.ado.count(isMineRuns), h.ado.count(isBuildsByIds)], [2, batches], 'no visible 30 s load and no 30 s watch')
-  await h.clock.tick(1)
-  assert.equal(h.ado.count(isBuildsByIds), batches + 1, 'the watch runs every 2 minutes')
+  assert.deepEqual(batches, [], 'the runs list read it a moment ago')
 
-  await h.clock.tick(3 * MINUTE - 1)
-  assert.equal(h.ado.count(isMineRuns), 2)
+  await h.clock.tick(4 * MINUTE)
+  assert.deepEqual(batches, [60_000, 120_000, 150_000, 180_000, 240_000], 'never within 30 s of the runs list reading it, at 30, 90 and 210 s')
+  assert.equal(runOf(h.posts.at(-1), 4531).watched, true)
+})
+
+test('the watch job polls every 60 seconds while hidden', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await h.clock.tick(0)
+  const batches = timesOf(h, isBuildsByIds)
+  await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true })
+  await h.clock.tick(5 * MINUTE - 1)
+  assert.deepEqual(batches, [60_000, 120_000, 180_000, 240_000], 'nothing at once, since the runs list read it a moment ago')
+})
+
+test('opening the Pipelines tab shows the last load at once and refreshes it when older than 30 seconds', async () => {
+  const h = harness()
+  const first = await h.service.snapshot(ORG)
+  await h.clock.tick(30_000 - 1)
+  const calls = h.ado.calls.length
+  assert.deepEqual(await h.service.snapshot(ORG), first)
+  await drain()
+  assert.equal(h.ado.calls.length, calls, 'a load under 30 seconds old is answered as is')
+
   await h.clock.tick(1)
-  assert.equal(h.ado.count(isMineRuns), 4, 'the next load comes 5 minutes later')
-  await h.clock.tick(30_000)
-  assert.equal(h.ado.count(isMineRuns), 6, 'and then every 30 s again')
+  const gate = h.ado.hold(() => true)
+  const answer = h.service.snapshot(ORG)
+  assert.ok(await Promise.race([answer.then(() => true), drain().then(() => false)]), 'answered before the refresh is')
+  assert.deepEqual(await answer, first, 'the last load, at once')
+  await drain()
+  assert.ok(h.ado.calls.length > calls, 'and a refresh started')
+
+  gate.release()
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.deepEqual([latest?.updatedAt, latest?.stale], [T0 + 30_000, false])
+  assert.deepEqual(await h.service.snapshot(ORG), latest)
 })
 
 test('a forbidden builds list pauses the org; a forbidden approvals list only turns approvals off', async () => {
@@ -502,6 +696,7 @@ test('a forbidden builds list pauses the org; a forbidden approvals list only tu
   assert.deepEqual(fresh.posts, [])
 
   const approvals = harness()
+  keepMoving(approvals)
   approvals.ado.on(isApprovals, () => json(403, { message: 'TF400813: not authorized.' }))
   approvals.setOrgs([status()])
   approvals.show()
@@ -511,7 +706,7 @@ test('a forbidden builds list pauses the org; a forbidden approvals list only tu
   assert.equal(runOf(snapshot, 4520).state, 'running')
   const tried = approvals.ado.count(isApprovals)
   await approvals.clock.tick(9 * MINUTE)
-  assert.equal(approvals.ado.count(isMineRuns), 38, 'runs keep loading every 30 s')
+  assert.equal(approvals.ado.count(isMineRuns), 23, 'runs keep loading every 30 s, and the quiet project every 3 minutes')
   assert.equal(approvals.ado.count(isApprovals), tried, 'approvals are not asked for 10 minutes')
   assert.equal(approvals.posts.at(-1)?.message, APPROVALS_NEED_ACCESS)
 })
@@ -600,6 +795,11 @@ test('a snapshot over the post budget is trimmed with the message', async () => 
   assert.equal(h.service.cachedRun(ORG, 4520)?.stages?.length, 15, 'the worker keeps them all')
   assert.deepEqual(snapshot.counts, { failedRuns: 1, approvals: 2 }, 'counts are taken before trimming')
   assert.deepEqual(h.posts, [snapshot])
+  await h.persisted.flush()
+  const saved = (h.cache.data[cacheKey(ORG, 'runs')] as Saved<RunsSnapshot>).value
+  assert.ok(byteLength(saved) <= VALUE_BUDGET_BYTES, `the saved copy is ${byteLength(saved)} bytes`)
+  assert.ok(saved.runs.length > 2 && saved.runs.length < snapshot.runs.length)
+  assert.equal(saved.message, TRIMMED)
 
   const small = harness()
   for (let index = 0; index < 60; index += 1) {
@@ -682,7 +882,8 @@ test('snapshot answers from memory for 30 s; refresh and becoming visible load i
   assert.equal(h.ado.count(isMineRuns), 2)
   await h.clock.tick(1)
   await h.service.snapshot(ORG)
-  assert.equal(h.ado.count(isMineRuns), 4)
+  await drain()
+  assert.equal(h.ado.count(isMineRuns), 3)
 
   h.setOrgs([status()])
   await h.clock.tick(0)
@@ -725,3 +926,121 @@ test('reloadFresh starts a full load after the one already running instead of jo
 function fixtureTimeline(ado: FakePipelines): RawTimeline {
   return structuredClone(ado.runs.timelines.get(4520) ?? assert.fail('no timeline for 4520'))
 }
+
+test('a quiet Pipelines tab keeps loading in full without rewriting its saved copy until that copy is 15 minutes old', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  h.show()
+  await h.clock.tick(0)
+  const writes = () => h.cache.writes.filter(entry => entry === cacheKey(ORG, 'runs')).length
+  const loads = h.ado.count(isMineRuns)
+
+  await h.clock.tick(14 * MINUTE)
+  assert.ok(h.ado.count(isMineRuns) >= loads + 10, 'it kept loading, backing off to every 2 minutes')
+  assert.equal(writes(), 1, 'written once, after the first load')
+  assert.deepEqual(h.cache.writes.filter((key, index) => h.cache.writes.indexOf(key) !== index), [], 'the meta and the index are written once too')
+  await h.clock.tick(2 * MINUTE)
+  assert.equal(writes(), 2)
+})
+
+async function savedRuns(): Promise<{ live: RunsSnapshot; cache: Record<string, unknown> }> {
+  const before = harness()
+  const live = await before.service.snapshot(ORG)
+  await before.persisted.flush()
+  return { live, cache: structuredClone(before.cache.data) }
+}
+
+test('saved runs whose read finishes after the org expired are not served', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const painting = h.service.snapshot(ORG)
+  h.setOrgs([status({ state: 'expired' })])
+
+  assert.equal((await rejection(painting)).message, NOT_CONNECTED)
+  await drain()
+  assert.deepEqual(h.posts, [])
+  assert.equal(h.service.cachedRun(ORG, ACTIVE[0]), null)
+})
+
+test('the Pipelines tab paints saved runs at once, stale, then live', async () => {
+  const { live, cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + 3 * HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(() => true)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(painted, { ...live, stale: true, message: SHOWING_SAVED })
+  assert.equal(painted.updatedAt, T0)
+  assert.ok(h.ado.calls.length <= 1, 'answered before the first request of the revalidation is answered')
+  assert.equal(h.posts.length, 0)
+  assert.equal(h.updates.length, 0, 'saved runs never reach the status bar or notifications')
+
+  gate.release()
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.deepEqual([latest?.stale, latest?.message, latest?.updatedAt], [false, undefined, T0 + 3 * HOUR])
+  assert.equal(h.ado.count(isRunningRuns), 2, 'the revalidation is a full load')
+  assert.deepEqual(h.updates.map(([, runs]) => ids(runs)), [ids(latest?.runs)])
+  assert.deepEqual(await h.service.snapshot(ORG), latest)
+})
+
+test('an approval in restored runs is read from Azure DevOps before it is shared', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(isMineRuns)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.deepEqual(runOf(painted, 4520).approvals.map(approval => approval.approvalId), [APPROVAL_4520])
+  Object.assign(h.ado.runs.approvals.get(APPROVAL_4520) ?? assert.fail('no approval'), { status: 'approved' })
+
+  assert.equal(await h.service.approval(ORG, { projectId: PROJECT, approvalId: APPROVAL_4520 }), null)
+  assert.ok(
+    h.ado.calls.some(call => isApprovals(call) && call.query.get('approvalIds') === APPROVAL_4520),
+    'the approval was read from Azure DevOps, not taken from the saved runs'
+  )
+  assert.equal(h.service.cachedRun(ORG, 4520), null, 'saved runs are not handed out as live')
+  gate.release()
+})
+
+test('watching a run in restored runs reads it first', async () => {
+  const { cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + HOUR })
+  h.setOrgs([status()])
+  const gate = h.ado.hold(isMineRuns)
+
+  const painted = await h.service.snapshot(ORG)
+  assert.equal(runOf(painted, 4531).state, 'waiting', 'the saved copy shows it still going')
+  finish(h.ado, 4531, T0 + 30 * MINUTE)
+
+  assert.equal((await rejection(h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4531, watched: true }))).message, ALREADY_FINISHED)
+  assert.deepEqual(h.ado.calls.filter(isBuildsByIds).map(call => call.query.get('buildIds')), ['4531'])
+  assert.deepEqual(h.data[WATCHED] ?? [], [])
+
+  const watching = await h.service.watch({ org: ORG, projectId: PROJECT, buildId: 4520, watched: true })
+  assert.deepEqual([watching.stale, runOf(watching, 4520).watched], [true, true])
+  assert.deepEqual(h.ado.calls.filter(isBuildsByIds).map(call => call.query.get('buildIds')), ['4531', '4520'])
+  await h.clock.tick(30_000)
+  assert.equal(h.updates.length, 0, 'the watch job waits for live runs instead of merging into saved ones')
+
+  gate.release()
+  await drain()
+  assert.equal(h.posts.at(-1)?.stale, false)
+  assert.ok(h.updates.length > 0)
+  assert.ok(h.updates.every(([, runs]) => runs?.find(run => run.buildId === 4531)?.state !== 'waiting'), 'the signals only ever saw live runs')
+})
+
+test('finished runs restored from storage keep their stage chips without a timeline read', async () => {
+  const { live, cache } = await savedRuns()
+  const h = harness({ cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status()])
+
+  await h.service.snapshot(ORG)
+  await drain()
+  const latest = h.posts.at(-1)
+  assert.equal(latest?.stale, false)
+  assert.deepEqual(timelines(h.ado.calls), ACTIVE, 'only active runs are read')
+  for (const id of FINISHED) assert.deepEqual(runOf(latest, id).stages, runOf(live, id).stages, `run ${id} keeps its chips`)
+  assert.equal(h.ado.count(isRepositories), 0, 'the saved code projects are still fresh')
+})

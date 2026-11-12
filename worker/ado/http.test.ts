@@ -1,4 +1,5 @@
 import { assert, test } from 'orca/testing'
+import { inLane } from '../data/context'
 import { AdoError, createAdoHttp, type AdoRequest } from './http'
 
 const AUTH = 'Bearer secret-token-value'
@@ -156,6 +157,23 @@ test('honours Retry-After then gives up after two retries', async () => {
   assert.equal(error.retryAfterMs, 2000)
 })
 
+test('a background request is not retried on a throttle, a user request still is', async () => {
+  const throttled = () => new Response('', { status: 429, headers: { 'retry-after': '1' } })
+  for (const priority of ['visible', 'hidden'] as const) {
+    const { fetch, calls } = fakeFetch(throttled(), jsonResponse({ ok: true }))
+    const waits: number[] = []
+    const http = clientFor(fetch, { sleep: async ms => void waits.push(ms) })
+    const error = await failure(inLane('pipelines', priority, () => http.json(REPOS)))
+    assert.deepEqual({ priority, code: error.code, retryAfterMs: error.retryAfterMs, calls: calls.length, waits }, { priority, code: 'rate_limited', retryAfterMs: 1000, calls: 1, waits: [] })
+  }
+
+  const { fetch, calls } = fakeFetch(throttled(), jsonResponse({ ok: true }))
+  const waits: number[] = []
+  const http = clientFor(fetch, { sleep: async ms => void waits.push(ms) })
+  const { data } = await inLane('pipelines', 'user', () => http.json<{ ok: boolean }>(REPOS))
+  assert.deepEqual({ data, calls: calls.length, waits }, { data: { ok: true }, calls: 2, waits: [1000] })
+})
+
 test('fails at once without sleeping when Retry-After is over ten seconds', async () => {
   const { fetch, calls } = fakeFetch(jsonResponse({ message: 'Slow down.' }, 429, { 'retry-after': '120' }), jsonResponse({}))
   const waits: number[] = []
@@ -198,6 +216,31 @@ test('treats 503 with Retry-After as throttling but 503 without it as a server e
   const plain = await failure(clientFor(fakeFetch(new Response('', { status: 503 })).fetch, { sleep }).json(REPOS))
   assert.equal(plain.code, 'server')
   assert.deepEqual(waits, [])
+})
+
+function listener() {
+  const heard: { org: string; path: string; status: number; retryAfter: string | null }[] = []
+  const observe = (req: AdoRequest, status: number, headers: Headers) =>
+    void heard.push({ org: req.org, path: req.path, status, retryAfter: headers.get('retry-after') })
+  return { heard, observe }
+}
+
+test('observe hears every response, including throttled ones that are retried', async () => {
+  const { fetch } = fakeFetch(new Response('', { status: 429, headers: { 'retry-after': '1' } }), jsonResponse({ ok: true }))
+  const { heard, observe } = listener()
+  await clientFor(fetch, { observe }).json(REPOS)
+  assert.deepEqual(heard, [
+    { org: 'contoso', path: '/_apis/git/repositories', status: 429, retryAfter: '1' },
+    { org: 'contoso', path: '/_apis/git/repositories', status: 200, retryAfter: null }
+  ])
+})
+
+test('observe hears an error response before it is thrown', async () => {
+  const { fetch } = fakeFetch(jsonResponse({ message: 'TF401019: no such repo.' }, 404))
+  const { heard, observe } = listener()
+  const error = await failure(clientFor(fetch, { observe }).json(REPOS))
+  assert.equal(error.code, 'not_found')
+  assert.deepEqual(heard.map(entry => entry.status), [404])
 })
 
 test('401 asks onUnauthorized once', async () => {

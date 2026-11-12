@@ -1,3 +1,4 @@
+import { currentContext } from '../data/context'
 import { orgSearchUrl, orgVsspsUrl, orgWebUrl } from './org'
 
 export type AdoErrorCode = 'unauthorized' | 'forbidden' | 'not_found' | 'conflict' | 'precondition_failed'
@@ -35,12 +36,15 @@ export interface AdoHttp {
   json<T>(req: AdoRequest): Promise<{ data: T; headers: Headers }>
 }
 
+export type ResponseObserver = (req: AdoRequest, status: number, headers: Headers) => void
+
 export interface AdoHttpDeps {
   fetch: typeof fetch
   authHeader: (org: string) => Promise<string>
   onUnauthorized?: (org: string) => Promise<boolean>
   sleep?: (ms: number) => Promise<void>
   timeoutMs?: number
+  observe?: ResponseObserver
 }
 
 const DEFAULT_API_VERSION = '7.1'
@@ -115,6 +119,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
     let previewRetried = false
     for (;;) {
       const res = await send(req, apiVersion)
+      deps.observe?.(req, res.status, res.headers)
       if (isSuccess(res)) return { data: parseSuccess<T>(res), headers: res.headers }
 
       const problem = readProblem(res.text)
@@ -136,7 +141,7 @@ export function createAdoHttp(deps: AdoHttpDeps): AdoHttp {
       if (isThrottle(res)) {
         const retryAfterMs = parseRetryAfter(res.headers)
         const waitMs = retryAfterMs ?? DEFAULT_RETRY_AFTER_MS
-        if (throttleRetries >= MAX_THROTTLE_RETRIES || waitMs > MAX_RETRY_WAIT_MS)
+        if (currentContext().lane.priority !== 'user' || throttleRetries >= MAX_THROTTLE_RETRIES || waitMs > MAX_RETRY_WAIT_MS)
           throw adoError('rate_limited', res, problem.message, retryAfterMs)
         throttleRetries += 1
         await sleep(waitMs)

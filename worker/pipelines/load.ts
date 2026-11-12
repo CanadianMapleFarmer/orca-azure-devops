@@ -6,7 +6,9 @@ import type { NamedItem } from '../ado/core'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { mapLimit } from '../ado/limit'
 import { isMalformed, malformed } from '../ado/shape'
-import { approvalPlaceOf, getTimeline, stageChips, type RawTimeline } from '../ado/timeline'
+import { approvalPlaceOf, getTimeline, mergeTimeline, stageChips, type RawTimeline } from '../ado/timeline'
+import type { OrgEntities, Stamped } from '../data/entities'
+import { createHeat } from '../data/heat'
 import { MALFORMED } from '../messages'
 
 const MINUTE = 60_000
@@ -16,8 +18,8 @@ const RUNNING_TOP = 25
 const MINE_WINDOW_MS = 7 * 24 * 60 * MINUTE
 const MAX_ACTIVE_CHIPS = 8
 const MAX_FINISHED_CHIPS = 8
-const MAX_CACHED_CHIPS = 100
 const APPROVALS_OFF_MS = 10 * MINUTE
+const SHARED_TIMELINE_MS = 5_000
 
 export interface RunsLoad {
   runs: RunSummary[]
@@ -25,10 +27,12 @@ export interface RunsLoad {
 }
 
 export interface RunSource {
-  full(me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad>
-  background(me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad>
+  full(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
+  background(me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad>
   watched(me: string, keys: RunKey[], signal?: AbortSignal): Promise<RunSummary[]>
+  unread(keys: RunKey[], withinMs: number): RunKey[]
   approval(me: string, key: { projectId: string; approvalId: string }, signal?: AbortSignal): Promise<{ run: RunSummary; approval: ApprovalSummary } | null>
+  seed(runs: RunSummary[]): void
 }
 
 interface Pending {
@@ -50,17 +54,38 @@ interface Lists {
   skipped: boolean
 }
 
+interface Approvals {
+  pending: Pending[]
+  skipped: boolean
+}
+
+type List = 'mine' | 'running' | 'approvals'
+
+interface Kept {
+  mine?: RawBuild[]
+  running?: RawBuild[]
+  approvals?: Approvals
+}
+
 type Kind = 'full' | 'background'
 
-export function createRunSource(http: AdoHttp, org: string, now: () => number): RunSource {
-  const finishedChips = new Map<string, StageChip[] | null>()
+export function createRunSource(
+  http: AdoHttp,
+  org: string,
+  now: () => number,
+  tables: Pick<OrgEntities, 'runChips' | 'builds' | 'timelines'>,
+  longestTickMs: number
+): RunSource {
+  const { runChips, builds, timelines } = tables
+  const heat = createHeat<List>(now, longestTickMs)
+  const kept = new Map<string, Kept>()
   let places = new Map<string, ApprovalPlace>()
   let lastFull = new Map<number, RunSummary>()
   let approvalsOffUntil = -Infinity
 
   const approvalsOff = () => now() < approvalsOffUntil
 
-  async function pendingIn(scoped: AdoHttp, me: string, projectId: string): Promise<Lists> {
+  async function pendingIn(scoped: AdoHttp, me: string, projectId: string): Promise<Approvals> {
     if (approvalsOff()) return withPending([])
     try {
       const listed = await listPendingApprovals(scoped, org, projectId)
@@ -74,17 +99,39 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     }
   }
 
-  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind): Promise<Lists> {
-    const reads: (() => Promise<Lists>)[] = projects.flatMap(project => [
-      async () => withBuilds(await listBuilds(scoped, org, project.id, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP })),
-      ...(kind === 'full' ? [async () => withBuilds(await listBuilds(scoped, org, project.id, { statusFilter: 'inProgress', top: RUNNING_TOP }))] : []),
-      () => pendingIn(scoped, me, project.id)
-    ])
-    const loaded = await mapLimit(reads, IN_FLIGHT, read => read())
+  function keptOf(me: string, projectId: string): Kept {
+    const key = `${me}/${projectId}`
+    const entry = kept.get(key) ?? {}
+    kept.set(key, entry)
+    return entry
+  }
+
+  function keepBuilds(raws: RawBuild[]): RawBuild[] {
+    for (const raw of raws) builds.put(String(raw.id), raw)
+    return raws
+  }
+
+  async function readInto(scoped: AdoHttp, me: string, entry: Kept, projectId: string, list: List): Promise<void> {
+    if (list === 'mine') entry.mine = keepBuilds(await listBuilds(scoped, org, projectId, { requestedFor: me, minTime: now() - MINE_WINDOW_MS, top: MINE_TOP }))
+    else if (list === 'running') entry.running = keepBuilds(await listBuilds(scoped, org, projectId, { statusFilter: 'inProgress', top: RUNNING_TOP }))
+    else entry.approvals = await pendingIn(scoped, me, projectId)
+  }
+
+  async function lists(scoped: AdoHttp, me: string, projects: NamedItem[], kind: Kind, all: boolean): Promise<Lists> {
+    const wanted: List[] = kind === 'full' ? ['mine', 'running', 'approvals'] : ['mine', 'approvals']
+    const current = new Set(projects.map(project => `${me}/${project.id}`))
+    for (const key of kept.keys()) if (!current.has(key)) kept.delete(key)
+    const reads = projects.flatMap(project => {
+      const entry = keptOf(me, project.id)
+      return wanted.filter(list => all || !entry[list] || heat.due(list, project.id)).map(list => ({ entry, projectId: project.id, list }))
+    })
+    await mapLimit(reads, IN_FLIGHT, ({ entry, projectId, list }) => readInto(scoped, me, entry, projectId, list))
+    for (const { entry, projectId, list } of reads) heat.saw(list, projectId, found(entry))
+    const held = projects.map(project => keptOf(me, project.id))
     return {
-      builds: loaded.flatMap(entry => entry.builds),
-      pending: loaded.flatMap(entry => entry.pending),
-      skipped: loaded.some(entry => entry.skipped)
+      builds: held.flatMap(entry => [...(entry.mine ?? []), ...(kind === 'full' ? (entry.running ?? []) : [])]),
+      pending: held.flatMap(entry => entry.approvals?.pending ?? []),
+      skipped: held.some(entry => entry.approvals?.skipped === true)
     }
   }
 
@@ -95,13 +142,21 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     for (const { projectId, buildId } of wanted) {
       if (!runs.has(buildId)) missing.set(projectId, (missing.get(projectId) ?? new Set()).add(buildId))
     }
-    const batches = await mapLimit([...missing], IN_FLIGHT, ([projectId, ids]) => buildsByIds(scoped, org, projectId, [...ids]))
+    const batches = await mapLimit([...missing], IN_FLIGHT, async ([projectId, ids]) => keepBuilds(await buildsByIds(scoped, org, projectId, [...ids])))
     for (const raw of batches.flat()) if (!runs.has(raw.id)) runs.set(raw.id, toRunSummary(raw, org, me))
     return runs
   }
 
+  async function timelineOf(scoped: AdoHttp, run: RunSummary): Promise<RawTimeline | null> {
+    const key = String(run.buildId)
+    const stored = timelines.get(key)
+    if (stored && (now() - stored.at < SHARED_TIMELINE_MS || finalFor(run, stored))) return stored.value
+    const answer = await getTimeline(scoped, org, run.projectId, run.buildId, stored?.value.changeId)
+    return answer || stored ? timelines.put(key, mergeTimeline(stored?.value ?? null, answer)) : null
+  }
+
   async function timelinesOf(scoped: AdoHttp, runs: RunSummary[]): Promise<Map<number, RawTimeline | null>> {
-    const read = await mapLimit(runs, IN_FLIGHT, run => getTimeline(scoped, org, run.projectId, run.buildId))
+    const read = await mapLimit(runs, IN_FLIGHT, run => timelineOf(scoped, run))
     return new Map(runs.map((run, index) => [run.buildId, read[index]]))
   }
 
@@ -126,26 +181,12 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     const ordered = orderRuns(runs)
     return {
       active: ordered.filter(isActive).slice(0, MAX_ACTIVE_CHIPS),
-      finished: ordered.filter(run => !isActive(run) && run.finishedAt !== null && !finishedChips.has(chipKey(run))).slice(0, MAX_FINISHED_CHIPS)
-    }
-  }
-
-  function rememberChips(run: RunSummary, chips: StageChip[] | null): void {
-    finishedChips.delete(chipKey(run))
-    finishedChips.set(chipKey(run), chips)
-    for (const key of finishedChips.keys()) {
-      if (finishedChips.size <= MAX_CACHED_CHIPS) break
-      finishedChips.delete(key)
+      finished: ordered.filter(run => !isActive(run) && run.finishedAt !== null && !runChips.get(chipKey(run))).slice(0, MAX_FINISHED_CHIPS)
     }
   }
 
   function cachedChips(run: RunSummary): StageChip[] | null | undefined {
-    const key = chipKey(run)
-    if (!finishedChips.has(key)) return undefined
-    const chips = finishedChips.get(key) ?? null
-    finishedChips.delete(key)
-    finishedChips.set(key, chips)
-    return chips
+    return runChips.get(chipKey(run))?.value
   }
 
   function fullChips(run: RunSummary, timelines: ReadonlyMap<number, RawTimeline | null>, active: ReadonlySet<number>): StageChip[] | null {
@@ -172,14 +213,14 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
     )
   }
 
-  async function load(kind: Kind, me: string, projects: NamedItem[], watched: RunKey[], signal?: AbortSignal): Promise<RunsLoad> {
+  async function load(kind: Kind, me: string, projects: NamedItem[], watched: RunKey[], all: boolean, signal?: AbortSignal): Promise<RunsLoad> {
     const scoped = withSignal(http, signal)
-    const { builds, pending, skipped } = await lists(scoped, me, projects, kind)
+    const { builds, pending, skipped } = await lists(scoped, me, projects, kind, all)
     const wanted = [...pending.map(({ projectId, raw }) => ({ projectId, buildId: runIdOf(raw) })), ...watched]
     const runs = await withUnlisted(scoped, me, builds, wanted)
     const targets = kind === 'full' ? chipTargets([...runs.values()]) : { active: [], finished: [] }
     const timelines = await timelinesOf(scoped, [...targets.active, ...targets.finished])
-    for (const run of targets.finished) rememberChips(run, chipsFrom(timelines.get(run.buildId)))
+    for (const run of targets.finished) runChips.put(chipKey(run), chipsFrom(timelines.get(run.buildId)))
     await placeAll(scoped, pending, runs, timelines)
     const current = new Set(pending.map(({ raw }) => placeKey(raw.id)))
     places = new Map([...places].filter(([key]) => current.has(key)))
@@ -194,13 +235,17 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
   }
 
   return {
-    full: (me, projects, watched, signal) => load('full', me, projects, watched, signal),
-    background: (me, projects, watched, signal) => load('background', me, projects, watched, signal),
+    full: (me, projects, watched, all, signal) => load('full', me, projects, watched, all, signal),
+    background: (me, projects, watched, all, signal) => load('background', me, projects, watched, all, signal),
 
     async watched(me, keys, signal) {
       const scoped = withSignal(http, signal)
       const runs = await withUnlisted(scoped, me, [], keys)
       return [...runs.values()].map(run => ({ ...run, watched: true }))
+    },
+
+    unread(keys, withinMs) {
+      return keys.filter(key => builds.fresh(String(key.buildId), withinMs) === undefined)
     },
 
     async approval(me, key, signal) {
@@ -216,12 +261,19 @@ export function createRunSource(http: AdoHttp, org: string, now: () => number): 
       if (!build) return null
       const run = toRunSummary(build, org, me)
       const known = places.get(placeKey(raw.id))
-      const timeline = known ? null : await getTimeline(scoped, org, key.projectId, run.buildId)
+      const timeline = known ? null : await timelineOf(scoped, run)
       const place = known ?? (await placeApproval(scoped, org, key.projectId, raw.id, timeline))
       places.set(placeKey(raw.id), place)
       const approval = toApprovalSummary(raw, { projectId: key.projectId, me, stage: place.stage, environment: place.environment })
       const approvals = [approval]
       return { run: { ...run, approvals, state: waitingIf(run.state, approvals), stages: chipsFrom(timeline) }, approval }
+    },
+
+    seed(runs) {
+      for (const run of runs) {
+        if (isActive(run) || run.finishedAt === null || !Array.isArray(run.stages) || runChips.get(chipKey(run))) continue
+        runChips.put(chipKey(run), run.stages)
+      }
     }
   }
 }
@@ -256,12 +308,20 @@ export function waitingIf(state: RunState, approvals: readonly ApprovalSummary[]
   return approvals.length > 0 && (state === 'queued' || state === 'running') ? 'waiting' : state
 }
 
-function withBuilds(builds: RawBuild[]): Lists {
-  return { builds, pending: [], skipped: false }
+function withPending(pending: Pending[], skipped = false): Approvals {
+  return { pending, skipped }
 }
 
-function withPending(pending: Pending[], skipped = false): Lists {
-  return { builds: [], pending, skipped }
+export function settled(timeline: RawTimeline): boolean {
+  return !timeline.records.some(record => record.state === 'pending' || record.state === 'inProgress')
+}
+
+function finalFor(run: RunSummary, stored: Stamped<RawTimeline>): boolean {
+  return !isActive(run) && run.finishedAt !== null && stored.at >= run.finishedAt && settled(stored.value)
+}
+
+function found(entry: Kept): boolean {
+  return [entry.mine, entry.running, entry.approvals?.pending].some(list => (list?.length ?? 0) > 0)
 }
 
 function readable(raw: RawApproval, projectId: string, me: string): boolean {

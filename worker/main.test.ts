@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { mock } from 'node:test'
 import * as fs from 'node:fs/promises'
 import { request } from 'node:http'
 import * as os from 'node:os'
@@ -120,6 +121,10 @@ function adoErrorWith(code: AdoError['code'], status: number, message: string): 
   }
 }
 
+function withoutMetrics(status: unknown): string {
+  return String(status).split('\n').filter(line => !line.startsWith('  ')).join('\n')
+}
+
 function orgsChanged(posts: readonly { event: string; payload?: unknown }[]): OrgStatus[][] {
   return posts.filter(post => post.event === 'orgs.changed').map(post => (post.payload as { orgs: OrgStatus[] }).orgs)
 }
@@ -220,7 +225,10 @@ test('orgs handlers connect, sign out and remove an org', async () => {
         tone: 'success',
         tooltip: 'Azure DevOps: contoso (ada@contoso.com)'
       })
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com')
+      const [first, requests, ...rest] = String(await w.command('status')).split('\n')
+      assert.equal(first, 'contoso — connected as ada@contoso.com')
+      assert.match(requests, /^ {2}Requests, last 5 min: \d+ \(.*\bconnect \d+/)
+      assert.ok(rest.every(line => !line.includes('ETag')), 'no answer carried an ETag')
       assert.equal((await w.request('orgs.list', {}))[0].state, 'connected')
       assert.equal(Object.keys(w.host.data().secrets).includes('pat:contoso'), true)
 
@@ -473,6 +481,32 @@ test('ado.projects and ado.teams list sorted names through the connected org', a
   })
 })
 
+test('the org handlers go through the governor, so identical lists in flight share one request', async () => {
+  const reads: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    reads.push(new URL(new Request(input, init).url).pathname)
+    return fakeFetch(input, init)
+  }) as typeof fetch
+  try {
+    await withConnected(async w => {
+      reads.length = 0
+      await Promise.all([
+        w.request('ado.projects', { org: 'contoso' }),
+        w.request('orgs.setBoards', { org: 'contoso', projectId: 'proj-boards', teamId: 'team-ops' }),
+        w.request('orgs.setCodeProjects', { org: 'contoso', projects: ['proj-web'] }),
+        w.request('ado.teams', { org: 'contoso', projectId: 'proj-web' }),
+        w.request('ado.teams', { org: 'contoso', projectId: 'proj-web' })
+      ])
+      assert.deepEqual(reads.filter(path => path.endsWith('/_apis/projects')), ['/contoso/_apis/projects'])
+      assert.deepEqual(reads.filter(path => path.endsWith('/proj-web/teams')), ['/contoso/_apis/projects/proj-web/teams'])
+      assert.equal(w.refusals.length, 0)
+    })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
 test('ado.projects refuses an org that is not connected', async () => {
   await withFakeFetch(async () => {
     await withWorker(worker, {}, async w => {
@@ -649,9 +683,67 @@ test('deactivate disposes the polling scheduler, aborting the "my work" load in 
   const loading = ado.hang(isWiql)
   await withFetch(signedIn(ado), async () => {
     await withWorker(worker, { host: boardsHost(BOARDS) }, async w => {
+      await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true })
       assert.ok(await until(() => loading.length === 1), 'the "my work" job is loading')
       await w.deactivate()
       assert.equal(loading[0].signal?.aborted, true)
+    })
+  })
+})
+
+test('the Work view is saved on deactivate, painted from storage at the next start, and deleted on sign-out', async () => {
+  const savedKeys = (storage: Record<string, unknown>) => Object.keys(storage).filter(key => key.startsWith('adoCache:v1:contoso:'))
+  const ado = fakeAdo()
+  const host = boardsHost(BOARDS)
+  await withFetch(signedIn(ado), async () => {
+    await withWorker(worker, { host }, async w => {
+      assert.equal((await w.request('work.snapshot', { org: 'contoso' })).stale, false)
+    })
+    assert.ok(savedKeys(host.data().storage).includes('adoCache:v1:contoso:work'))
+
+    const next = mockHost({
+      capabilities: [...CAPABILITIES, 'workspace:read', 'workspace:write'],
+      storage: host.data().storage as Record<string, JsonValue>,
+      secrets: { 'pat:contoso': PAT }
+    })
+    await withWorker(worker, { host: next }, async w => {
+      const painted = await w.request('work.snapshot', { org: 'contoso' })
+      assert.deepEqual([painted.stale, painted.message], [true, 'Showing what was saved last time. Refreshing…'])
+      await w.request('orgs.signOut', { org: 'contoso' })
+      assert.ok(await until(() => savedKeys(w.host.data().storage).length === 0), 'signing out deletes the saved views')
+    })
+    assert.deepEqual(savedKeys(next.data().storage), [], 'nothing of the signed-out org is written back on deactivate')
+  })
+})
+
+test('deactivate stops waiting for a saved view it cannot write after 1.5 s', async () => {
+  const ado = fakeAdo()
+  let unstick = () => {}
+  const stuck = new Promise<null>(resolve => (unstick = () => resolve(null)))
+  const host = boardsHost(BOARDS, { 'storage.set': ({ key }: { key: string }) => (key.startsWith('adoCache:') ? stuck : null) })
+  await withMockTimers(async advance => {
+    await withFetch(signedIn(ado), async () => {
+      await withWorker(worker, { host }, async w => {
+        await advance(0)
+        await w.request('work.snapshot', { org: 'contoso' })
+        await advance(0)
+        assert.ok(w.host.calls.some(call => call.method === 'storage.set'), 'a saved view is being written')
+
+        let finished = false
+        const deactivated = worker.deactivate().then(() => (finished = true))
+        try {
+          mock.timers.tick(1_499)
+          await drain()
+          assert.equal(finished, false, 'still waiting 1 ms before the flush budget')
+          mock.timers.tick(1)
+          await drain()
+          assert.equal(finished, true, 'gave up at 1.5 s')
+          assert.ok(w.logs.includes('Saved data: not every view was written within 1500 ms of shutting down.'))
+        } finally {
+          unstick()
+          await deactivated
+        }
+      })
     })
   })
 })
@@ -696,6 +788,7 @@ test('org changes reach the boards service: setting a boards team starts polling
   ado.on(call => call.path === `/contoso/_apis/projects/${PROJECT}/teams`, () => reply(200, { value: [{ id: TEAM, name: BOARDS.teamName }] }))
   await withFetch(signedIn(ado), async () => {
     await withWorker(worker, { host: boardsHost(null) }, async w => {
+      await w.request('ui.visibility', { surface: 'work', org: 'contoso', visible: true })
       await w.request('orgs.setBoards', { org: 'contoso', projectId: PROJECT, teamId: TEAM })
       assert.ok(await until(() => workChanged(w.posts).length > 0), 'the new job loaded and posted a snapshot')
       assert.deepEqual(workChanged(w.posts)[0].mine.map(item => item.id), [1204])
@@ -844,7 +937,7 @@ test('the status command reports review counts', async () => {
     await withWorker(worker, { host }, async w => {
       const shown = () => (host.callsOf('statusBar.update').at(-1) as { text?: string } | undefined)?.text
       assert.ok(await until(() => shown() === 'ADO · 1 to review'), 'the background run counted the pull requests to review')
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 pull request to review: contoso 1')
+      assert.equal(withoutMetrics(await w.command('status')), 'contoso — connected as ada@contoso.com\n1 pull request to review: contoso 1')
       assert.deepEqual(prsChanged(w.posts), [], 'a background run posts no snapshot')
       assert.equal(ado.count(isMineActive), 0)
 
@@ -1139,6 +1232,7 @@ test('wiki.publish answers through the handler', async () => {
         const page = ado.pages.get(ref.path)!
         const puts = () => ado.calls.filter(call => call.method === 'PUT').length
         await w.request('wiki.edit', ref)
+        assert.equal(String(await w.command('status')).split('\n').at(-1), '  ETag seen: GET /_apis/wiki/wikis/{id}/pages')
         assert.deepEqual(await w.request('wiki.publish', { key }), {
           status: 'unchanged',
           message: 'Nothing to publish yet. Save your changes in the editor first.'
@@ -1363,7 +1457,7 @@ test('the status command reports failed runs and approvals', async () => {
     const host = pipelinesHost()
     await withWorker(worker, { host }, async w => {
       assert.ok(await until(() => statusShown(host) === 'ADO · 1 failed · 2 approvals'), 'the background run counted failed runs and approvals')
-      assert.equal(await w.command('status'), 'contoso — connected as ada@contoso.com\n1 failed pipeline run: contoso 1\n2 approvals waiting: contoso 2')
+      assert.equal(withoutMetrics(await w.command('status')), 'contoso — connected as ada@contoso.com\n1 failed pipeline run: contoso 1\n2 approvals waiting: contoso 2')
       assert.deepEqual(runsChanged(w.posts), [], 'a background run posts no snapshot')
       assert.equal(ado.count(isRunningRuns), 0)
 
@@ -1405,10 +1499,11 @@ test('a rate-limit header on a pull request answer slows the Pipelines tab of th
         assert.deepEqual(await w.request('ui.visibility', { surface: 'pipelines', org: 'contoso', visible: true }), { ok: true })
         await advance(0)
         assert.ok(runsChanged(w.posts).length > 0, 'showing the Pipelines tab ran a full load')
-        await advance(40_000)
         const loads = ado.count(isRunningRuns)
-        await advance(200_000)
-        assert.equal(ado.count(isRunningRuns), loads, 'no 30 s visible load while the org is slowed')
+        await advance(230_000)
+        assert.equal(ado.count(isRunningRuns), loads, 'no 30 s visible load while the org is delayed')
+        await advance(20_000)
+        assert.ok(ado.count(isRunningRuns) > loads, 'the next one comes at eight times the interval')
         assert.equal(w.refusals.length, 0)
       })
     })

@@ -17,6 +17,7 @@ Each organisation is pinned to the account you sign in with. The panel shows `si
 - **Azure CLI:** the plugin uses its own private `az` profile in `~/.orca-azure-devops/az/<org>`, owner-only (mode 0700) on macOS and Linux. It never touches your terminal's `az` or `~/.azure`. Azure CLI keeps its tokens, refresh tokens included, in a plain file there. Sign out deletes the folder.
 - **Microsoft:** the refresh token for each organisation is kept in Orca's encrypted secrets, which needs an OS keyring; access tokens stay in memory and are renewed before they expire. Sign out deletes it. It doesn't sign you out of Microsoft in your browser.
 - **PAT:** stored in Orca's encrypted secrets for this plugin. Sign out deletes it. This needs an OS keyring for Orca's encrypted secrets, which may be unavailable on some Linux setups.
+- **Saved views:** the last view of each tab, kept in the plugin's storage for the account that saw it so the tabs show at once when Orca starts. Sign out and removing the organisation delete them (see [Saved data](reference.md#saved-data)).
 - **Teams webhook URLs:** stored in the same encrypted secrets, one per channel. The panel can't read a URL back, and it never goes into logs, settings or messages. Sign out doesn't remove channels; **Remove** in the channel manager does.
 
 ### PAT scopes

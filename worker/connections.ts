@@ -1,6 +1,6 @@
 import type { ConnectFailure, ConnectionMethod, OrgConfig, OrgState, OrgStatus, PinnedAccount } from '../src/shared/types'
 import { getConnectionData } from './ado/core'
-import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest } from './ado/http'
+import { AdoError, createAdoHttp, type AdoHttp, type AdoRequest, type ResponseObserver } from './ado/http'
 import { discoverTenant, parseOrgInput } from './ado/org'
 import { NOT_SIGNED_IN, type AzCliProvider, type AzProfiles } from './auth/azcli'
 import { EntraError, type EntraTokens } from './auth/entra'
@@ -38,6 +38,8 @@ export interface ConnectionsDeps {
   connectFailed: (failure: ConnectFailure) => void
   now: () => number
   log: (message: string) => void
+  observe?: ResponseObserver
+  forgotten?: (org: string) => void
 }
 
 const ORGS_KEY = 'orgs'
@@ -482,6 +484,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       const client = createAdoHttp({
         fetch: deps.fetch,
         authHeader,
+        observe: deps.observe,
         onUnauthorized: async org => {
           rejected = true
           refreshed = await refresh(org)
@@ -501,7 +504,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
   }
 
   async function identify(org: string, header: string, tenantId: string | null): Promise<PinnedAccount | null> {
-    const client = createAdoHttp({ fetch: deps.fetch, authHeader: async () => header })
+    const client = createAdoHttp({ fetch: deps.fetch, authHeader: async () => header, observe: deps.observe })
     return accountFromConnectionData(await getConnectionData(client, org), tenantId)
   }
 
@@ -737,6 +740,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       cfg.pinned = null
       setTransient(org, cancelled ? { state: 'disconnected', message: MESSAGES.cancelled } : null)
       await wipeCredentials(org, [cfg.method])
+      deps.forgotten?.(org)
       return statusFor(cfg)
     },
 
@@ -749,6 +753,7 @@ export function createConnections(deps: ConnectionsDeps): Connections {
       orgs = orgs.filter(item => item !== cfg)
       transient.delete(org)
       if (!(await wipeCredentials(org, [cfg.method]))) throw new Error(MESSAGES.removeWipeFailed)
+      deps.forgotten?.(org)
     },
 
     async update(org, patch) {

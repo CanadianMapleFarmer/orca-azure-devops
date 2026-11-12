@@ -13,29 +13,32 @@ import {
 import { DONE_CATEGORIES, loadTypeStates, type TypeState } from '../ado/board-config'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { stateTargets, targetsFor } from '../ado/move'
-import { loadPrChips, type PrChipCache } from '../ado/pr-links'
+import { chipOf, loadPrChips } from '../ado/pr-links'
 import { shaped } from '../ado/shape'
 import {
   childIdsOf,
   displayName,
   hydrate,
-  queryBoardIds,
-  queryIds,
+  prRefsOf,
   readFields,
   TASK_FIELDS,
   textOr,
+  toRecord,
   toSummary,
   WIQL_TOP,
-  wiqlMine,
   type PrRef,
   type RawWorkItem
 } from '../ado/workitems'
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import type { OrgEntities } from '../data/entities'
+import { FRESHNESS } from '../data/freshness'
+import { VALUE_BUDGET_BYTES } from '../data/persist'
+import { prKey, type ItemRecord } from '../data/records'
 import { joinMessages, MALFORMED, showingNewest, TASKS_NOT_LOADED } from '../messages'
 import type { BoardResult } from './board-views'
 
-const TYPE_STATES_TTL_MS = 60 * 60_000
 const CHIPS_OFF_MS = 10 * 60_000
+const NONE_STALE: ReadonlySet<number> = new Set()
 const MAX_ITEMS = 1000
 export const MAX_CHILD_READS = 1000
 export const FAMILY_BUDGET_BYTES = 64 * 1024
@@ -49,58 +52,92 @@ export interface ItemSource {
   http: AdoHttp
   org: string
   orgUrl: string
+  items(projectId: string, ids: number[], stale: ReadonlySet<number>): Promise<RawWorkItem[]>
+  fields(projectId: string, ids: number[], stale: ReadonlySet<number>): Promise<RawWorkItem[]>
+  put(raw: RawWorkItem): RawWorkItem
+  revOf(id: number): number | undefined
+  forget(ids: readonly number[]): void
   chips(refs: PrRef[]): Promise<PrChip[] | null>
   states(projectId: string, type: string): Promise<TypeState[]>
   withSignal(signal?: AbortSignal): ItemSource
 }
 
+export interface ViewIds { members: number[]; stale: ReadonlySet<number> }
+
 export interface Loaded { items: WorkItemSummary[]; chipsOff: boolean; chips: PrChip[] }
 
-export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number): ItemSource {
-  const chipCache: PrChipCache = new Map()
-  const stateCache = new Map<string, { at: number; states: TypeState[] }>()
+export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now: () => number, tables: OrgEntities): ItemSource {
+  const missingPrs = new Map<string, number>()
+  const { workItems } = tables
   let chipsOffUntil = -Infinity
-  const bound = (scoped: AdoHttp): ItemSource => ({
+  const held = (id: number) => workItems.get(String(id))?.value
+  const keep = (raw: RawWorkItem, withRelations: boolean) => workItems.put(String(raw.id), toRecord(raw, withRelations))
+
+  function settle(ids: number[], wanted: number[], fetched: RawWorkItem[], withRelations: boolean): ItemRecord[] {
+    const found = new Set(fetched.map(raw => raw.id))
+    for (const raw of fetched) keep(raw, withRelations)
+    for (const id of wanted) if (!found.has(id)) workItems.drop(String(id))
+    return ids.flatMap(id => held(id) ?? [])
+  }
+
+  const bound = (scoped: AdoHttp, signal?: AbortSignal): ItemSource => ({
     http: scoped,
     org,
     orgUrl,
+    async items(projectId, ids, stale) {
+      const wanted = ids.filter(id => stale.has(id) || !held(id)?.withRelations)
+      return settle(ids, wanted, await hydrate(scoped, org, projectId, wanted), true)
+    },
+    async fields(projectId, ids, stale) {
+      const wanted = ids.filter(id => stale.has(id) || !held(id))
+      return settle(ids, wanted, await readFields(scoped, org, projectId, wanted, TASK_FIELDS), false)
+    },
+    put: raw => keep(raw, true),
+    revOf: id => held(id)?.rev,
+    forget(ids) {
+      for (const id of ids) workItems.drop(String(id))
+    },
     async chips(refs) {
       if (now() < chipsOffUntil) return null
       try {
-        return await loadPrChips(scoped, org, refs, chipCache, now)
+        return await loadPrChips(scoped, org, refs, tables, now, missingPrs)
       } catch (error) {
         if (!(error instanceof AdoError) || error.code !== 'forbidden') throw error
         chipsOffUntil = now() + CHIPS_OFF_MS
         return null
       }
     },
-    async states(projectId, type) {
-      const key = `${projectId}/${type}`
-      const cached = stateCache.get(key)
-      if (cached && now() - cached.at < TYPE_STATES_TTL_MS) return cached.states
-      const states = await loadTypeStates(scoped, { org, projectId }, type)
-      stateCache.set(key, { at: now(), states })
-      return states
+    states(projectId, type) {
+      const load = (own: AbortSignal) => loadTypeStates(withSignal(http, own), { org, projectId }, type)
+      return tables.typeStates.read(`${projectId}/${type}`, FRESHNESS.typeStates, load, signal)
     },
-    withSignal: signal => bound(withSignal(http, signal))
+    withSignal: signal => bound(withSignal(http, signal), signal)
   })
   return bound(http)
 }
 
-export async function loadMine(source: ItemSource, cfg: BoardConfig, me: Me | null): Promise<Loaded & { families: WorkFamilies; message?: string }> {
-  const doneStates = [...new Set(Object.values(cfg.doneStates).flat())]
-  const ids = await queryIds(source.http, source.org, cfg.projectId, cfg.teamId, wiqlMine(cfg, doneStates))
-  const raws = await hydrate(source.http, source.org, cfg.projectId, ids)
+export function doneStatesOf(cfg: BoardConfig): string[] {
+  return [...new Set(Object.values(cfg.doneStates).flat())]
+}
+
+export async function loadMine(
+  source: ItemSource,
+  cfg: BoardConfig,
+  me: Me | null,
+  ids: ViewIds
+): Promise<Loaded & { families: WorkFamilies; message?: string; known: number[] }> {
+  const raws = await source.items(cfg.projectId, ids.members, ids.stale)
   const bases = raws.map(raw => toSummary(raw, cfg, source.orgUrl))
   const states = await stateMoves(source, cfg, bases)
   const open = bases.flatMap((base, index) => (isDone(base, states) ? [] : [{ base, raw: raws[index] }]))
-  const { loaded, parents } = await summarizeWithParents(source, cfg, open.map(entry => entry.base), states)
+  const { loaded, parents } = await summarizeWithParents(source, cfg, open.map(entry => entry.base), states, ids.stale)
   const taskTypes = new Set(cfg.taskTypes ?? [])
   const taskParents = new Set(open.filter(entry => taskTypes.has(entry.base.type)).flatMap(entry => entry.base.parentId ?? []))
   const dimmed = parents.filter(raw => taskParents.has(raw.id))
-  const { lists, message } = await taskLists(source, cfg, [...open.map(entry => entry.raw), ...dimmed], taskTypes, me)
+  const { lists, message, read } = await taskLists(source, cfg, [...open.map(entry => entry.raw), ...dimmed], taskTypes, me, ids.stale)
   const families = { lists, parents: dimmed.map(raw => parentOf(toSummary(raw, cfg, source.orgUrl))) }
-  return { ...loaded, families, ...(message ? { message } : {}) }
+  const known = [...new Set([...ids.members, ...parents.map(raw => raw.id), ...read])]
+  return { ...loaded, families, ...(message ? { message } : {}), known }
 }
 
 export function patchFamilies(families: WorkFamilies, item: WorkItemSummary, done: boolean): WorkFamilies {
@@ -122,15 +159,21 @@ export async function isCompleted(source: ItemSource, cfg: BoardConfig, item: { 
   return completedIn(await source.states(cfg.projectId, item.type), item.state)
 }
 
-export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, everyone: boolean): Promise<Loaded & { truncated: boolean }> {
-  const ids = await queryBoardIds(source.http, source.org, cfg.projectId, cfg.teamId, cfg, everyone)
-  return { ...(await summarize(source, cfg, await hydrateBases(source, cfg, ids), new Map())), truncated: ids.length >= WIQL_TOP }
+export async function loadBoardItems(source: ItemSource, cfg: BoardConfig, ids: ViewIds): Promise<Loaded & { truncated: boolean; known: number[] }> {
+  const raws = await source.items(cfg.projectId, ids.members, ids.stale)
+  const bases = raws.map(raw => toSummary(raw, cfg, source.orgUrl))
+  const { loaded, parents } = await summarizeWithParents(source, cfg, bases, new Map(), ids.stale)
+  const known = [...new Set([...ids.members, ...parents.map(raw => raw.id)])]
+  return { ...loaded, truncated: ids.members.length >= WIQL_TOP, known }
 }
 
 export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number): Promise<{ raw: RawWorkItem; item: WorkItemSummary; chips: PrChip[] } | null> {
   const [raw] = await hydrate(source.http, source.org, cfg.projectId, [id])
-  if (!raw) return null
-  const base = toSummary(raw, cfg, source.orgUrl)
+  if (!raw) {
+    source.forget([id])
+    return null
+  }
+  const base = toSummary(source.put(raw), cfg, source.orgUrl)
   const { items, chips } = await summarize(source, cfg, [base], await stateMoves(source, cfg, [base]))
   return { raw, item: items[0], chips }
 }
@@ -148,17 +191,17 @@ export function movesByState(item: { type: string; column: string | null }, cfg:
   return !isOnBoard(item, cfg) || item.column === null
 }
 
-export function capSnapshot(snapshot: WorkSnapshot): WorkSnapshot {
+export function capSnapshot(snapshot: WorkSnapshot, budget = POST_BUDGET_BYTES): WorkSnapshot {
   const bare = { ...snapshot, families: NO_FAMILIES }
-  const items = capItems(bare)
-  const families = fitFamilies(namedFamilies(snapshot.families, items), Math.min(FAMILY_BUDGET_BYTES, POST_BUDGET_BYTES - byteLength(items)))
+  const items = capItems(bare, budget)
+  const families = fitFamilies(namedFamilies(snapshot.families, items), Math.min(FAMILY_BUDGET_BYTES, budget - byteLength(items)))
   if (items === bare && families === snapshot.families) return snapshot
   return { ...items, families }
 }
 
-function capItems(snapshot: WorkSnapshot): WorkSnapshot {
+function capItems(snapshot: WorkSnapshot, budget: number): WorkSnapshot {
   const all = [...snapshot.mine, ...snapshot.other]
-  const kept = newestThatFit(all, POST_BUDGET_BYTES - byteLength({ ...snapshot, mine: [], other: [] }), item => item.changedAt, MAX_ITEMS)
+  const kept = newestThatFit(all, budget - byteLength({ ...snapshot, mine: [], other: [] }), item => item.changedAt, MAX_ITEMS)
   if (kept.size === all.length) return snapshot
   const ids = new Set([...kept].map(item => item.id))
   return {
@@ -209,11 +252,28 @@ function fitFamilies(families: WorkFamilies, budget: number): WorkFamilies {
   return whole ? families : { lists, parents }
 }
 
-export function capBoard(result: BoardResult, truncated: boolean): BoardResult {
+const EVERYONE_BYTES = byteLength({ everyone: false })
+export const SAVED_BOARD_BYTES = VALUE_BUDGET_BYTES - byteLength({ result: null, everyone: false })
+
+export function capBoard(result: BoardResult, truncated: boolean, budget = ANSWER_BUDGET_BYTES - EVERYONE_BYTES): BoardResult {
   const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
-  const kept = newestThatFit(result.items, ANSWER_BUDGET_BYTES - header, item => item.changedAt)
+  const kept = newestThatFit(result.items, budget - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result
   return { ...result, items: result.items.filter(item => kept.has(item)), message: joinMessages(result.message, showingNewest(kept.size)) }
+}
+
+export function rechip(items: WorkItemSummary[], tables: Pick<OrgEntities, 'workItems' | 'prs' | 'prChecks'>): WorkItemSummary[] {
+  const next = items.map(item => {
+    const record = tables.workItems.get(String(item.id))?.value
+    if (!record?.withRelations) return item
+    const keys = [...new Set(prRefsOf(record).map(prKey))]
+    const prs = foldChips(keys.flatMap(key => {
+      const pr = tables.prs.get(key)?.value
+      return pr ? [chipOf(pr, tables.prChecks.get(key)?.value)] : []
+    }))
+    return JSON.stringify(prs) === JSON.stringify(item.prs) ? item : { ...item, prs }
+  })
+  return next.every((item, index) => item === items[index]) ? items : next
 }
 
 export function foldChips(chips: PrChip[]): PrChip[] {
@@ -229,11 +289,6 @@ function chipRank(chip: PrChip): number {
   if (chip.state === 'merged') return 0
   if (chip.state === 'abandoned') return 4
   return chip.build === 'failed' ? 1 : chip.build === 'running' ? 2 : 3
-}
-
-async function hydrateBases(source: ItemSource, cfg: BoardConfig, ids: number[]): Promise<Base[]> {
-  const raws = await hydrate(source.http, source.org, cfg.projectId, ids)
-  return raws.map(raw => toSummary(raw, cfg, source.orgUrl))
 }
 
 async function stateMoves(source: ItemSource, cfg: BoardConfig, bases: Base[]): Promise<StatesByType> {
@@ -256,11 +311,17 @@ function completedIn(states: TypeState[] | undefined, name: string): boolean {
 }
 
 async function summarize(source: ItemSource, cfg: BoardConfig, bases: Base[], states: StatesByType): Promise<Loaded> {
-  return (await summarizeWithParents(source, cfg, bases, states)).loaded
+  return (await summarizeWithParents(source, cfg, bases, states, NONE_STALE)).loaded
 }
 
-async function summarizeWithParents(source: ItemSource, cfg: BoardConfig, bases: Base[], states: StatesByType): Promise<{ loaded: Loaded; parents: RawWorkItem[] }> {
-  const [parents, chips] = await Promise.all([missingParents(source, cfg, bases), source.chips(bases.flatMap(base => base.prRefs))])
+async function summarizeWithParents(
+  source: ItemSource,
+  cfg: BoardConfig,
+  bases: Base[],
+  states: StatesByType,
+  stale: ReadonlySet<number>
+): Promise<{ loaded: Loaded; parents: RawWorkItem[] }> {
+  const [parents, chips] = await Promise.all([missingParents(source, cfg, bases, stale), source.chips(bases.flatMap(base => base.prRefs))])
   const titles = new Map<number, string>([
     ...bases.map((base): [number, string] => [base.id, base.title]),
     ...parents.map((raw): [number, string] => [raw.id, textOr(raw.fields['System.Title'], '')])
@@ -283,10 +344,10 @@ function itemOf({ prRefs: _, ...base }: Base, parentTitle: string | null, prs: P
   return item
 }
 
-function missingParents(source: ItemSource, cfg: BoardConfig, bases: Base[]): Promise<RawWorkItem[]> {
+function missingParents(source: ItemSource, cfg: BoardConfig, bases: Base[], stale: ReadonlySet<number>): Promise<RawWorkItem[]> {
   const listed = new Set(bases.map(base => base.id))
   const missing = [...new Set(bases.flatMap(base => base.parentId ?? []))].filter(id => !listed.has(id))
-  return hydrate(source.http, source.org, cfg.projectId, missing)
+  return source.items(cfg.projectId, missing, stale)
 }
 
 function parentOf({ id, type, title, state, column, lane }: Base): WorkParent {
@@ -298,22 +359,23 @@ async function taskLists(
   cfg: BoardConfig,
   holders: RawWorkItem[],
   taskTypes: Set<string>,
-  me: Me | null
-): Promise<{ lists: TaskList[]; message?: string }> {
+  me: Me | null,
+  stale: ReadonlySet<number>
+): Promise<{ lists: TaskList[]; message?: string; read: number[] }> {
   const linkedFrom = new Map<number, number>()
   for (const holder of holders) {
     for (const id of childIdsOf(holder)) if (!linkedFrom.has(id)) linkedFrom.set(id, holder.id)
   }
   const ids = [...linkedFrom.keys()].slice(0, MAX_CHILD_READS)
-  if (ids.length === 0 || taskTypes.size === 0) return { lists: [] }
+  if (ids.length === 0 || taskTypes.size === 0) return { lists: [], read: [] }
   try {
-    const children = await readFields(source.http, source.org, cfg.projectId, ids, TASK_FIELDS)
+    const children = await source.fields(cfg.projectId, ids, stale)
     const types = shaped(() => [...new Set(children.map(typeOf))].filter(type => taskTypes.has(type)), MALFORMED.workItem)
     const states: StatesByType = new Map(await Promise.all(types.map(async type => [type, await source.states(cfg.projectId, type)] as const)))
-    return { lists: shaped(() => groupTasks(children, linkedFrom, states, me), MALFORMED.workItem) }
+    return { lists: shaped(() => groupTasks(children, linkedFrom, states, me), MALFORMED.workItem), read: ids }
   } catch (error) {
     if (!(error instanceof AdoError)) throw error
-    return { lists: [], message: TASKS_NOT_LOADED }
+    return { lists: [], message: TASKS_NOT_LOADED, read: ids }
   }
 }
 

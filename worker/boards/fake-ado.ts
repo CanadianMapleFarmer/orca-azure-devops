@@ -66,12 +66,32 @@ export function json(status: number, body: unknown, headers: Record<string, stri
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 }
 
-export function fakeAdo() {
+export function fakeAdo(options: { now?: () => number } = {}) {
+  const now = options.now ?? Date.now
   const items = new Map<number, RawWorkItem>()
   for (const raw of [...fixture<{ value: RawWorkItem[] }>('workitems-batch').value, ...extraItems()]) items.set(raw.id, raw)
   const calls: AdoCall[] = []
   const overrides: Override[] = []
+  const changedAt = new Map<number, number>()
   const state = { wiql: [1204, 1207, 1205, 1208], staleStatus: 412 }
+
+  function answerWiql(call: AdoCall, members: readonly number[]): Response {
+    const query: string = call.body.query
+    const listed = listedIds(query)
+    const live = members.filter(id => items.has(id))
+    let ids: number[]
+    if (isDelta(call)) {
+      const since = sinceOf(query)
+      const watched = new Set([...live, ...listed])
+      ids = [...changedAt]
+        .filter(([id, at]) => at >= since && watched.has(id) && items.has(id))
+        .sort(([, a], [, b]) => b - a)
+        .map(([id]) => id)
+    } else {
+      ids = listed.length > 0 ? live.filter(id => listed.includes(id)) : live
+    }
+    return json(200, { asOf: new Date(now()).toISOString(), workItems: ids.map(id => ({ id, url: `${ORG_URL}/_apis/wit/workItems/${id}` })) })
+  }
 
   function route(call: AdoCall): Response {
     const { method, path } = call
@@ -83,15 +103,14 @@ export function fakeAdo() {
     if (method === 'GET' && path === `${work}/teamsettings/teamfieldvalues`) return json(200, fixture('team-field-values'))
     const states = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workitemtypes/([^/]+)/states$`).exec(path)
     if (method === 'GET' && states && TYPE_STATES[states[1]]) return json(200, fixture(TYPE_STATES[states[1]]))
-    if (method === 'POST' && path === `/${ORG}/${PROJECT}/${TEAM}/_apis/wit/wiql`) {
-      return json(200, { workItems: state.wiql.map(id => ({ id, url: `${ORG_URL}/_apis/wit/workItems/${id}` })) })
-    }
+    if (method === 'POST' && path === `/${ORG}/${PROJECT}/${TEAM}/_apis/wit/wiql`) return answerWiql(call, state.wiql)
     if (method === 'POST' && path === `/${ORG}/${PROJECT}/_apis/wit/workitemsbatch`) {
       const ids = call.body.ids as number[]
       const fields = call.body.fields as string[] | undefined
       const answer = (raw: RawWorkItem) => (fields ? onlyFields(raw, fields) : structuredClone(raw))
       return json(200, { count: ids.length, value: ids.map(id => (items.has(id) ? answer(items.get(id)!) : null)) })
     }
+    if (isActiveList(call) && path === `/${ORG}/${PROJECT}/_apis/git/pullrequests`) return json(200, { value: openPullRequests() })
     const pr = new RegExp(`^/${ORG}/${PROJECT}/_apis/git/pullrequests/(\\d+)$`).exec(path)
     if (method === 'GET' && pr && PULL_REQUESTS[Number(pr[1])]) return json(200, fixture(PULL_REQUESTS[Number(pr[1])]))
     if (method === 'GET' && path === `/${ORG}/${PROJECT}/_apis/policy/evaluations`) return json(200, fixture('policy-evaluations'))
@@ -117,6 +136,7 @@ export function fakeAdo() {
       if (op.op === 'add' && op.path === '/relations/-') raw.relations = [...(raw.relations ?? []), op.value]
     }
     raw.rev += 1
+    changedAt.set(id, now())
     return json(200, raw)
   }
 
@@ -145,6 +165,23 @@ export function fakeAdo() {
     calls,
     items,
     state,
+    answerWiql,
+    change(id: number, patch: { rev?: number; fields?: Record<string, unknown> } = {}): void {
+      const raw = items.get(id)
+      if (!raw) throw new Error(`the fake holds no work item ${id}`)
+      Object.assign(raw.fields, patch.fields)
+      raw.rev = patch.rev ?? raw.rev + 1
+      changedAt.set(id, now())
+    },
+    setMembers(ids: number[]): void {
+      const before = new Set(state.wiql)
+      const after = new Set(ids)
+      for (const id of new Set([...before, ...after])) if (before.has(id) !== after.has(id)) changedAt.set(id, now())
+      state.wiql = [...ids]
+    },
+    remove(id: number): void {
+      items.delete(id)
+    },
     on(match: (call: AdoCall) => boolean, respond: (call: AdoCall) => Response | Promise<Response>): void {
       overrides.unshift({ match, respond })
     },
@@ -196,15 +233,37 @@ export function addChildren(ado: FakeAdo, parentId: number, children: RawWorkIte
   }
 }
 
+function openPullRequests(): { status: string }[] {
+  return Object.values(PULL_REQUESTS)
+    .map(name => fixture<{ status: string }>(name))
+    .filter(pr => pr.status === 'active')
+}
+
 function onlyFields(raw: RawWorkItem, names: string[]): RawWorkItem {
   const all: Record<string, unknown> = { 'System.Id': raw.id, ...raw.fields }
   const fields = Object.fromEntries(names.filter(name => all[name] !== undefined).map(name => [name, structuredClone(all[name])]))
   return { id: raw.id, rev: raw.rev, fields, url: raw.url }
 }
 
+function listedIds(query: string): number[] {
+  const match = /\[System\.Id\] IN \(([^)]*)\)/.exec(query)
+  return match ? match[1].split(',').map(Number) : []
+}
+
+function sinceOf(query: string): number {
+  const literal = /\[System\.ChangedDate\] >= '([^']+)'/.exec(query)
+  return literal ? Date.parse(literal[1]) : -Infinity
+}
+
 export const isWiql = (call: AdoCall) => call.method === 'POST' && call.path.endsWith('/_apis/wit/wiql')
+export const isDelta = (call: AdoCall) => isWiql(call) && call.body.query.includes('WHERE [System.ChangedDate] >=')
+export const isStillIn = (call: AdoCall) => isWiql(call) && !isDelta(call) && call.body.query.includes('[System.Id] IN')
 export const isBatch = (call: AdoCall) => call.path.endsWith('/_apis/wit/workitemsbatch')
-export const isFieldsBatch = (call: AdoCall) => isBatch(call) && Array.isArray(call.body?.fields)
+export const isHydrate = (call: AdoCall) => isBatch(call) && call.body?.$expand === 'relations'
+export const isRevRead = (call: AdoCall) => isBatch(call) && Array.isArray(call.body?.fields) && call.body.fields.join() === 'System.Id'
+export const isFieldsBatch = (call: AdoCall) => isBatch(call) && Array.isArray(call.body?.fields) && !isRevRead(call)
 export const isPatch = (call: AdoCall) => call.method === 'PATCH'
 export const isPullRequest = (call: AdoCall) => /\/_apis\/git\/pullrequests\/\d+$/.test(call.path)
+export const isActiveList = (call: AdoCall) =>
+  call.method === 'GET' && call.path.endsWith('/_apis/git/pullrequests') && call.query.get('searchCriteria.status') === 'active'
 export const isTypeStates = (type: string) => (call: AdoCall) => call.path.endsWith(`/_apis/wit/workitemtypes/${type}/states`)

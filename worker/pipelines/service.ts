@@ -5,6 +5,11 @@ import { linkedAbort, untilAborted } from '../abort'
 import { cachedCodeProjects, type CodeProjects } from '../ado/code-projects'
 import { AdoError, type AdoHttp } from '../ado/http'
 import { byteLength, newestThatFit, POST_BUDGET_BYTES } from '../budget'
+import { fly, join, type Flight } from '../data/context'
+import type { Entities } from '../data/entities'
+import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import type { SavedTables } from '../data/saved-tables'
+import { isRecord, sameApartFromTime } from '../data/values'
 import {
   APPROVAL_ENVIRONMENTS_UNREAD,
   APPROVALS_NEED_ACCESS,
@@ -16,12 +21,12 @@ import {
   RUN_GONE,
   RUNS_LOAD_FAILED,
   RUNS_NEED_BUILD_READ,
-  RUNS_TRIMMED
+  RUNS_TRIMMED,
+  SHOWING_SAVED
 } from '../messages'
 import { isSignedIn, loadFailure, notConnected, signedInStatus, type SignedInStatus } from '../org-status'
-import type { Scheduler } from '../poll/scheduler'
+import { longestVisibleMs, NOTIFY_CAP_MS, type Scheduler } from '../poll/scheduler'
 import { carriedChips, createRunSource, waitingIf, type RunSource, type RunsLoad } from './load'
-import type { Pressure } from './pressure'
 import type { RunSignals } from './signals'
 import type { WatchList } from './watched'
 
@@ -30,10 +35,12 @@ export interface PipelinesServiceDeps {
   orgs: () => Promise<OrgStatus[]>
   scheduler: Scheduler
   watchList: WatchList
-  pressure: Pressure
   signals: RunSignals
   post: (snapshot: RunsSnapshot) => void
   now: () => number
+  entities: Entities
+  persisted: Persisted
+  savedTables: SavedTables
 }
 
 export interface PipelinesService {
@@ -61,16 +68,18 @@ interface OrgRuns {
   fullAt: number | null
   fullLoads: number
   failure: AdoError | null
-  loading: { kind: Kind; promise: Promise<RunsSnapshot> } | null
-  watching: Promise<void> | null
+  loading: { kind: Kind; all: boolean; flight: Flight<RunsSnapshot> } | null
+  readAll: boolean
+  watching: Flight<void> | null
   pausedUntil: number
   watched: RunKey[]
+  restored: boolean
+  restoring?: Promise<RunsSnapshot | null>
 }
 
-const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000 }
-const RUNS_SLOWED_MS = { visibleMs: 300_000, backgroundMs: 300_000 }
-const WATCH_MS = { visibleMs: 30_000, backgroundMs: 30_000 }
-const WATCH_SLOWED_MS = { visibleMs: 120_000, backgroundMs: 120_000 }
+const RUNS_MS = { visibleMs: 30_000, backgroundMs: 300_000, quietMax: 4, quietCapMs: NOTIFY_CAP_MS }
+const WATCH_MS = { visibleMs: 30_000, backgroundMs: 60_000 }
+const WATCH_SKIP_MS = 30_000
 const FRESH_MS = 30_000
 const FORBIDDEN_PAUSE_MS = 10 * 60_000
 const MAX_RUNS = 100
@@ -82,27 +91,30 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   const visible = new Set<string>()
   let disposed = false
 
-  function statusOf(org: string): Promise<SignedInStatus> {
-    return signedInStatus(deps.orgs, org, RUNS_LOAD_FAILED, () => disposed)
+  async function statusOf(org: string): Promise<SignedInStatus> {
+    const status = await signedInStatus(deps.orgs, org, RUNS_LOAD_FAILED, () => disposed)
+    await deps.savedTables.seed(org, status.account.adoId)
+    return status
   }
 
   function entryOf(org: string): OrgRuns {
     const existing = entries.get(org)
     if (existing) return existing
-    const http = deps.pressure.wrap(deps.http, org)
     const entry: OrgRuns = {
       controller: new AbortController(),
-      source: createRunSource(http, org, now),
-      projects: cachedCodeProjects(http, org, now),
+      source: createRunSource(deps.http, org, now, deps.entities.of(org), longestVisibleMs(RUNS_MS)),
+      projects: cachedCodeProjects(deps.http, org, deps.entities.of(org).projects),
       base: null,
       snapshot: null,
       fullAt: null,
       fullLoads: 0,
       failure: null,
       loading: null,
+      readAll: false,
       watching: null,
       pausedUntil: -Infinity,
-      watched: []
+      watched: [],
+      restored: false
     }
     entries.set(org, entry)
     return entry
@@ -111,6 +123,10 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function forget(org: string): void {
     entries.get(org)?.controller.abort()
     entries.delete(org)
+  }
+
+  function connected(org: string): boolean {
+    return jobs.has(org)
   }
 
   function runsKey(org: string): string {
@@ -122,12 +138,13 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   function upsertRuns(org: string): void {
-    scheduler.upsert({ key: runsKey(org), ...(deps.pressure.slowed(org) ? RUNS_SLOWED_MS : RUNS_MS), run: signal => poll(org, signal) })
+    scheduler.upsert({ key: runsKey(org), org, ...RUNS_MS, run: signal => poll(org, signal) })
   }
 
   function syncWatchJob(org: string): void {
     if (jobs.has(org) && (entries.get(org)?.watched.length ?? 0) > 0) {
-      scheduler.upsert({ key: watchKey(org), ...(deps.pressure.slowed(org) ? WATCH_SLOWED_MS : WATCH_MS), run: signal => pollWatched(org, signal) })
+      scheduler.upsert({ key: watchKey(org), org, ...WATCH_MS, run: signal => pollWatched(org, signal) })
+      scheduler.setVisible(watchKey(org), visible.has(org))
     } else {
       scheduler.remove(watchKey(org))
     }
@@ -137,17 +154,40 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     return entry !== undefined && entry.snapshot !== null && entry.fullAt !== null && now() - entry.fullAt < FRESH_MS
   }
 
+  function painted(entry: OrgRuns): boolean {
+    return entry.fullAt !== null || entry.restored
+  }
+
   function lastFull(org: string): RunsSnapshot | null {
     const entry = entries.get(org)
-    return entry && entry.fullAt !== null ? entry.snapshot : null
+    return entry && painted(entry) ? entry.snapshot : null
   }
 
   function publish(entry: OrgRuns, base: RunsSnapshot): RunsSnapshot {
     const snapshot = capRunsSnapshot(base)
     entry.base = base
     entry.snapshot = snapshot
-    if (entry.fullAt !== null) deps.post(snapshot)
+    if (painted(entry)) deps.post(snapshot)
     return snapshot
+  }
+
+  function restore(org: string, status: SignedInStatus): Promise<RunsSnapshot | null> {
+    const entry = entryOf(org)
+    if (painted(entry)) return Promise.resolve(null)
+    entry.restoring ??= restoreFrom(org, entry, status.account.adoId)
+    return entry.restoring
+  }
+
+  async function restoreFrom(org: string, entry: OrgRuns, account: string): Promise<RunsSnapshot | null> {
+    const saved = await deps.persisted.load(org, 'runs', account)
+    if (entries.get(org) !== entry || !connected(org) || painted(entry) || !isSavedRuns(saved?.value, org)) return null
+    entry.source.seed(saved.value.runs)
+    entry.restored = true
+    const restored = { ...saved.value, stale: true, message: SHOWING_SAVED }
+    entry.base = restored
+    entry.snapshot = capRunsSnapshot(restored)
+    void loadInFull(org)
+    return entry.snapshot
   }
 
   function compose(org: string, me: string, runs: RunSummary[], message?: string): RunsSnapshot {
@@ -186,32 +226,34 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
   function load(org: string, kind: Kind): Promise<RunsSnapshot> {
     const entry = entryOf(org)
+    const all = kind === 'full' && entry.readAll
     const current = entry.loading
-    if (current && (current.kind === 'full' || kind === 'background')) return current.promise
-    const loading = { kind, promise: run() }
+    if (current && (current.kind === 'full' || kind === 'background') && (current.all || !all)) return join(current.flight)
+    if (all) entry.readAll = false
+    const loading = { kind, all, flight: fly(run) }
     entry.loading = loading
-    return loading.promise
+    return join(loading.flight)
 
     async function run(): Promise<RunsSnapshot> {
-      await current?.promise.catch(() => {})
+      if (current) await join(current.flight).catch(() => {})
       try {
-        return await attempt(org, entry, kind)
+        return await attempt(org, entry, kind, all)
       } finally {
         if (entry.loading === loading) entry.loading = null
       }
     }
   }
 
-  async function attempt(org: string, entry: OrgRuns, kind: Kind): Promise<RunsSnapshot> {
+  async function attempt(org: string, entry: OrgRuns, kind: Kind, all: boolean): Promise<RunsSnapshot> {
     const link = linkedAbort(entry.controller.signal)
     try {
-      return await attemptWith(org, entry, kind, link.signal)
+      return await attemptWith(org, entry, kind, all, link.signal)
     } finally {
       link.release()
     }
   }
 
-  async function attemptWith(org: string, entry: OrgRuns, kind: Kind, signal: AbortSignal): Promise<RunsSnapshot> {
+  async function attemptWith(org: string, entry: OrgRuns, kind: Kind, all: boolean, signal: AbortSignal): Promise<RunsSnapshot> {
     if (signal.aborted) throw notConnected()
     if (now() < entry.pausedUntil) {
       const last = lastFull(org)
@@ -224,12 +266,15 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const projects = await entry.projects(status.codeProjects, signal)
       const watched = await deps.watchList.list(org)
       entry.watched = watched
-      const loaded = kind === 'full' ? await entry.source.full(me, projects, watched, signal) : await entry.source.background(me, projects, watched, signal)
+      const loaded = kind === 'full' ? await entry.source.full(me, projects, watched, all, signal) : await entry.source.background(me, projects, watched, false, signal)
       signal.throwIfAborted()
-      if (kind === 'full') entry.fullAt = now()
+      if (kind === 'full') Object.assign(entry, { fullAt: now(), restored: false })
       entry.failure = null
       const runs = await settle(org, entry, loaded.runs, watched, loaded.runs, signal)
-      return publish(entry, compose(org, me, runs, offMessage(loaded)))
+      const base = compose(org, me, runs, offMessage(loaded))
+      if (kind === 'full') deps.persisted.save(org, 'runs', me, capRunsSnapshot(base, VALUE_BUDGET_BYTES))
+      deps.savedTables.save(org, me)
+      return publish(entry, base)
     } catch (error) {
       if (signal.aborted) throw notConnected()
       throw fail(entry, error)
@@ -241,12 +286,14 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   function watchLoad(org: string): Promise<void> {
     const entry = entries.get(org)
     if (!entry) return Promise.resolve()
-    if (entry.watching) return entry.watching
-    const watching = watchOnce(org, entry).finally(() => {
-      if (entry.watching === watching) entry.watching = null
-    })
+    if (entry.watching) return join(entry.watching)
+    const watching = fly(() =>
+      watchOnce(org, entry).finally(() => {
+        if (entry.watching === watching) entry.watching = null
+      })
+    )
     entry.watching = watching
-    return watching
+    return join(watching)
   }
 
   async function watchOnce(org: string, entry: OrgRuns): Promise<void> {
@@ -254,16 +301,17 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const { signal } = link
     try {
       const base = entry.base
-      if (!base || now() < entry.pausedUntil) return
+      if (!base || entry.restored || now() < entry.pausedUntil) return
       const status = await statusOf(org)
       const keys = await deps.watchList.list(org)
       entry.watched = keys
-      if (keys.length === 0) return
+      const due = entry.source.unread(keys, WATCH_SKIP_MS)
+      if (due.length === 0) return
       const me = status.account.adoId
-      const read = await entry.source.watched(me, keys, signal)
+      const read = await entry.source.watched(me, due, signal)
       signal.throwIfAborted()
       const latest = entry.base ?? base
-      const runs = await settle(org, entry, mergeWatched(latest.runs, read), keys, read, signal)
+      const runs = await settle(org, entry, mergeWatched(latest.runs, read), due, read, signal)
       const merged = compose(org, me, runs, latest.message)
       publish(entry, latest.stale ? { ...merged, stale: true } : merged)
     } catch (error) {
@@ -278,12 +326,15 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const entry = entryOf(org)
     const loads = entry.fullLoads
     await scheduler.runNow(runsKey(org))
-    if (entry.fullLoads === loads && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
+    if ((entry.fullLoads === loads || entry.readAll) && !entry.controller.signal.aborted) await load(org, 'full').catch(() => {})
   }
 
-  async function poll(org: string, signal: AbortSignal): Promise<void> {
+  async function poll(org: string, signal: AbortSignal): Promise<void | 'unchanged'> {
+    const before = entries.get(org)?.base
     try {
-      await untilAborted(load(org, visible.has(org) ? 'full' : 'background'), signal)
+      await untilAborted(load(org, visible.has(org) || entries.get(org)?.restored ? 'full' : 'background'), signal)
+      const after = entries.get(org)?.base
+      return before && after && sameApartFromTime(before, after) ? 'unchanged' : undefined
     } finally {
       if (!signal.aborted && jobs.has(org)) upsertRuns(org)
     }
@@ -312,7 +363,9 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   function cachedRun(org: string, buildId: number): RunSummary | null {
-    return entries.get(org)?.base?.runs.find(run => run.buildId === buildId) ?? null
+    const entry = entries.get(org)
+    if (!entry || entry.restored) return null
+    return entry.base?.runs.find(run => run.buildId === buildId) ?? null
   }
 
   function isWatched(org: string, buildId: number): boolean {
@@ -320,9 +373,15 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
   }
 
   async function snapshot(org: string): Promise<RunsSnapshot> {
-    await statusOf(org)
+    const status = await statusOf(org)
     const entry = entries.get(org)
-    if (fresh(entry)) return entry.snapshot
+    const last = lastFull(org)
+    if (last) {
+      if (!fresh(entry)) void loadInFull(org)
+      return last
+    }
+    const restored = await restore(org, status)
+    if (restored && connected(org)) return restored
     try {
       return await load(org, 'full')
     } catch (error) {
@@ -357,6 +416,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
     async refresh(org) {
       await statusOf(org)
+      entryOf(org).readAll = true
       await loadInFull(org)
       const last = lastFull(org)
       if (last) return last
@@ -366,7 +426,9 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
 
     async reloadFresh(org) {
       await statusOf(org)
-      await entryOf(org).loading?.promise.catch(() => {})
+      const entry = entryOf(org)
+      entry.readAll = true
+      if (entry.loading) await join(entry.loading.flight).catch(() => {})
       return load(org, 'full')
     },
 
@@ -391,6 +453,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       if (shown) visible.add(org)
       else visible.delete(org)
       scheduler.setVisible(runsKey(org), shown)
+      scheduler.setVisible(watchKey(org), shown)
       if (becameVisible && jobs.has(org) && !fresh(entries.get(org))) void loadInFull(org)
       return { ok: true }
     },
@@ -402,7 +465,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
       const status = await statusOf(org)
       const entry = entryOf(org)
       const wanted = key.approvalId.toLowerCase()
-      for (const run of entry.base?.runs ?? []) {
+      for (const run of entry.restored ? [] : (entry.base?.runs ?? [])) {
         const approval = run.approvals.find(item => item.projectId === key.projectId && item.approvalId.toLowerCase() === wanted)
         if (approval) return { run, approval }
       }
@@ -445,11 +508,11 @@ function mergeWatched(current: RunSummary[], read: RunSummary[]): RunSummary[] {
   return orderRuns([...byId.values()])
 }
 
-function capRunsSnapshot(snapshot: RunsSnapshot): RunsSnapshot {
+function capRunsSnapshot(snapshot: RunsSnapshot, budget = POST_BUDGET_BYTES): RunsSnapshot {
   const runs = snapshot.runs.map(run => (run.stages && run.stages.length > MAX_STAGE_CHIPS ? { ...run, stages: run.stages.slice(0, MAX_STAGE_CHIPS) } : run))
   const message = joinMessages(snapshot.message, RUNS_TRIMMED)
-  const budget = POST_BUDGET_BYTES - byteLength({ ...snapshot, runs: [], message })
-  const kept = newestThatFit(runs, budget, run => (isActive(run) ? Infinity : run.queuedAt), MAX_RUNS)
+  const room = budget - byteLength({ ...snapshot, runs: [], message })
+  const kept = newestThatFit(runs, room, run => (isActive(run) ? Infinity : run.queuedAt), MAX_RUNS)
   if (kept.size === runs.length) return { ...snapshot, runs }
   return { ...snapshot, runs: runs.filter(run => kept.has(run)), message }
 }
@@ -460,4 +523,8 @@ function offMessage({ off }: RunsLoad): string | undefined {
     off.skippedApprovals ? APPROVALS_UNREADABLE : undefined,
     off.environments ? APPROVAL_ENVIRONMENTS_UNREAD : undefined
   )
+}
+
+function isSavedRuns(value: unknown, org: string): value is RunsSnapshot {
+  return isRecord(value) && value.org === org && Array.isArray(value.runs) && value.runs.every(isRecord) && isRecord(value.counts) && Number.isFinite(value.updatedAt)
 }
