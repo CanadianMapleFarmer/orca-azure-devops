@@ -481,15 +481,18 @@ Today `BoardResult` has no `updatedAt`, and the board editor ignores `stale` (`b
 
 ## 6. Data flows
 
+**Posting.** Work, PRs and Pipelines post their snapshot after every successful check, changed or not. The panel's "Updated ‹time›" then means the last successful check, which is an honest freshness signal, and a post every minute or few is far below Orca's post limits. A check whose snapshot equals the last one apart from `updatedAt` still resolves `'unchanged'`, so the quiet back-off applies. Boards and run views post only when their JSON changed, apart from `updatedAt`.
+
 ### Work tab
 ```
 start ─► work.snapshot ─► memory? ─no─► persisted (connected, account ok)? ─yes─► paint stale "Updated 3 h ago" + run mine now
                              │yes                                └no─► first tick (audit) then paint
 tick (60 s visible, idle hidden; visible lane)
-  └─► sync: delta WIQL ──empty──► 'unchanged' (1 request)
+  └─► sync: delta WIQL ──empty──► no more reads (1 request)
                  └ids─► membership re-check (if members changed) ─► items(stale) ─► parents/children via items()/fields()
   └─► chips: store (prs/prChecks) ─► sweep/evaluations only when due
-  └─► project ─► overlay recent writes ─► cap ─► post work.changed ─► persist (≤1/min)
+  └─► project ─► overlay recent writes ─► cap ─► post work.changed (every check) ─► persist (≤1/min)
+                                                  └─► 'unchanged' if equal apart from updatedAt
 move ─► PATCH ─► reload 1 item ─► store.put (rev rule) + recent.record ─► publish to every holder
 ```
 
@@ -499,6 +502,7 @@ open/visible ─► work.board (filter: given, or remembered) ─► held view? 
                       └no─► persisted (filter matches)? ─yes─► return stale ("Updated ‹age› · refreshing…") + run job now
                                └no─► first tick
 tick (30 s visible; hidden: job removed, view kept) ─► same sync + project as Work, board clause
+                                                    ─► post work.boardChanged only if changed
 store.prs/prChecks change ─► re-chip affected items ─► post work.boardChanged if changed
 ```
 
@@ -506,7 +510,8 @@ store.prs/prChecks change ─► re-chip affected items ─► post work.boardCh
 ```
 prs:tick ─► heat per list: hot projects (+ cold every 3 min) ─► lists ─► prs table (feeds chips)
           ─► enrichment via prWorkItems/prChecks rule (≤8 evaluation reads/tick)
-          ─► compose ─► 'unchanged' (≤5 min) or post prs.changed ─► persist
+          ─► compose ─► post prs.changed (every check) ─► persist
+          ─► 'unchanged' if equal apart from updatedAt (back-off ≤5 min)
 observe ─► threads for PRs whose per-PR interval is due ─► notifier
 panel prs.snapshot ─► last full (even if stale) at once ─► revalidate if >60 s
 ```
@@ -515,9 +520,11 @@ panel prs.snapshot ─► last full (even if stale) at once ─► revalidate if
 ```
 runs:tick ─► heat ─► builds/approvals lists ─► builds table
           ─► timelines: active runs with stored changeId (skip if run view fresh) ─► runChips for finished
-          ─► compose ─► 'unchanged' (≤5 min) or post runs.changed ─► persist
+          ─► compose ─► post runs.changed (every check) ─► persist
+          ─► 'unchanged' if equal apart from updatedAt (back-off ≤5 min)
 watch:tick ─► builds not read in last 30 s ─► buildsByIds
 runview:tick ─► timeline(changeId) every tick · logs every 2nd or on a changeId move · build every 4th ─► timelines table
+             ─► post the run view only if changed
 ```
 
 ## 7. Before and after (requests per 5 minutes, one org)
@@ -540,18 +547,36 @@ The assumptions are those of the inventory. *Quiet* means nobody changes anythin
 
 **Sessions**
 
-| Session | Before | After |
-| --- | ---: | ---: |
-| Sidebar on Work, board and run tab visible | ~477 | ~135–200 |
-| Sidebar on PRs | ~594 | ~155–235 |
-| Sidebar on Pipelines | ~763 | ~160–295 |
-| Worker start | ~560 in the first minute | ~25–40 (persisted paint, then audits, sweep, ≤8 evaluations a tick) |
-| Hourly | +~370 | 0 (terminal chips are final) |
+| Session | Before | After | Measured |
+| --- | ---: | ---: | ---: |
+| Sidebar on Work, board and run tab visible | ~477 | ~135–200 | 45.5 quiet, 79 busy |
+| Sidebar on PRs | ~594 | ~155–235 | — |
+| Sidebar on Pipelines | ~763 | ~160–295 | — |
+| Worker start | ~560 in the first minute | ~25–40 (persisted paint, then audits, sweep, ≤8 evaluations a tick) | 43 cold, 44 warm |
+| Hourly | +~370 | 0 (terminal chips are final) | — |
 
 - **The live run view now dominates.** It is the user's foreground focus. The pressure factor still slows it when ADO pushes back.
 - **The hidden PRs and Pipelines polls barely shrink.** That is the price of item 5 in section 10: every project is still read every 5 minutes so notifications stay within about 5 minutes.
 - **The busy board's remaining cost is real change.** That is 2–3 requests per change tick, plus evaluations for running PR builds. Remembering each board's filter (5.10) removes most of it for anyone who works on *Me*. The lever left after that is a 4-minute instead of 2-minute check for running PR builds.
 - **TSTUs fall further than requests.** The quiet-tick delta query has a change-date clause first and returns nothing. It replaces a 500-row WIQL plus up to 3 full-field `workitemsbatch` reads every tick. The metrics' `X-RateLimit-Cost` sum will show the real figure.
+
+**Measured**
+
+The final review ran the real worker on mocked timers against one fake of boards, PRs and Pipelines. The session was the first row above: sidebar on Work, the team board open, a run tab with a step running, and the PRs and Pipelines tabs hidden. Requests per 5 minutes, averaged over 10 minutes:
+
+| Surface | After, quiet | Measured, quiet | After, busy | Measured, busy |
+| --- | ---: | ---: | ---: | ---: |
+| Work tab, visible | 3 | 2.5 | 9 | 13.5 |
+| Team board, visible | 12 | 5 | 38 | 22 |
+| PRs, hidden | 16 | 8 | 20 | 5.5 |
+| Pipelines, hidden | 20 | 4 | 20 | 4 |
+| Watch | 0–5 | 0 | 0–5 | 0 |
+| Run view, step running | 80 | 26 | 105 | 34 |
+| **Session** | **~135–200** | **45.5** | | **79** |
+
+- **Start-up**, first minute: 43 from cold with nothing saved, and 44 on a warm restart with the PRs and Pipelines tabs also opened. Seven of the warm 44 re-read PR work-item links, because `prWorkItems` is not persisted.
+- **Assumptions.** The numbers were taken at `1657867`, before the fixes for the final review's findings. The fixture has 2 code projects. No PR validation builds or policy evaluations were exercised, so the busy board and PRs figures leave out evaluation reads.
+- **Busy** here means 1 board change a minute, 2 changes to the user's items in the 10 minutes, and the run's `changeId` moving every 10 s. The fake answers Work and the board with the same members, so board changes land on the Work tab too. That is why its busy figure is above the estimate.
 
 ## 8. Migration strategy
 
