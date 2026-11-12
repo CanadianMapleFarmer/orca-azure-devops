@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "azure-devops",
   "name": "Azure DevOps",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Unofficial. Azure DevOps work items, boards, pipelines, pull requests and wikis in the Orca sidebar.",
   "icon": "assets/icon.png",
   "cover": {
