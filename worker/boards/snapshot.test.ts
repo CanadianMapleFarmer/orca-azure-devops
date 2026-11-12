@@ -3,10 +3,13 @@ import { NO_FAMILIES, type BoardConfig, type PrChip, type TaskList, type WorkFam
 import { loadBoardConfig } from '../ado/board-config'
 import { createAdoHttp } from '../ado/http'
 import { toRecord, type RawWorkItem } from '../ado/workitems'
-import { byteLength, POST_BUDGET_BYTES } from '../budget'
+import { ANSWER_BUDGET_BYTES, byteLength, itemBytes, POST_BUDGET_BYTES } from '../budget'
 import { createEntities } from '../data/entities'
+import { VALUE_BUDGET_BYTES } from '../data/persist'
+import { showingNewest } from '../messages'
+import type { BoardResult } from './board-views'
 import { addChildren, fakeAdo, fixture, isBatch, isHydrate, ORG, ORG_URL, PROJECT, TEAM, WEF } from './fake-ado'
-import { capBoard, capSnapshot, createItemSource, FAMILY_BUDGET_BYTES, foldChips, loadBoardItems, loadMine, patchFamilies } from './snapshot'
+import { capBoard, capSnapshot, createItemSource, FAMILY_BUDGET_BYTES, foldChips, loadBoardItems, loadMine, patchFamilies, SAVED_BOARD_BYTES } from './snapshot'
 
 function tiny(id: number, changedAt: number): WorkItemSummary {
   return { id, changedAt } as WorkItemSummary
@@ -167,6 +170,37 @@ test('capBoard keeps the newest items that fit in 900 KiB, in their order, and s
   const newest = [...items].sort((a, b) => b.changedAt - a.changedAt).slice(0, count)
   assert.deepEqual(capped.items, items.filter(item => newest.includes(item)))
   assert.equal(capped.message, `Linked PR status needs Code (Read) access. Showing the ${count} most recently changed items.`)
+})
+
+function fillingTo(budget: number): BoardResult {
+  const room = budget - byteLength({ board: BOARD, items: [], updatedAt: 0, message: showingNewest(400) })
+  const each = Math.floor(room / 300)
+  const items = Array.from({ length: 400 }, (_, index) => {
+    const bare = { id: 1000 + index, changedAt: 100_000 - index, title: '' }
+    const bytes = each + (index === 0 ? room % 300 : 0)
+    return { ...bare, title: 'x'.repeat(bytes - itemBytes(bare)) } as WorkItemSummary
+  })
+  return { board: BOARD, items, updatedAt: 0 }
+}
+
+test('a board answer that fills the answer budget to the byte still fits with its everyone flag', () => {
+  const board = fillingTo(ANSWER_BUDGET_BYTES)
+  assert.equal(byteLength(capBoard(board, false, ANSWER_BUDGET_BYTES)), ANSWER_BUDGET_BYTES - 1, 'the newest 300 items fill the budget')
+
+  for (const everyone of [false, true]) {
+    const answer = { ...capBoard(board, false), everyone }
+    assert.ok(byteLength(answer) <= ANSWER_BUDGET_BYTES, `${byteLength(answer)} bytes`)
+  }
+})
+
+test('a saved board that fills the value budget to the byte still fits with its everyone flag', () => {
+  const board = fillingTo(VALUE_BUDGET_BYTES)
+  assert.equal(byteLength(capBoard(board, false, VALUE_BUDGET_BYTES)), VALUE_BUDGET_BYTES - 1, 'the newest 300 items fill the budget')
+
+  for (const everyone of [false, true]) {
+    const saved = { result: capBoard(board, false, SAVED_BOARD_BYTES), everyone }
+    assert.ok(byteLength(saved) <= VALUE_BUDGET_BYTES, `${byteLength(saved)} bytes`)
+  }
 })
 
 test('capBoard says how many are shown when the query hit its 500-item limit', () => {

@@ -32,6 +32,7 @@ import {
 import { ANSWER_BUDGET_BYTES, byteLength, itemBytes, newestThatFit, POST_BUDGET_BYTES } from '../budget'
 import type { OrgEntities } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
+import { VALUE_BUDGET_BYTES } from '../data/persist'
 import { prKey, type ItemRecord } from '../data/records'
 import { joinMessages, MALFORMED, showingNewest, TASKS_NOT_LOADED } from '../messages'
 import type { BoardResult } from './board-views'
@@ -251,7 +252,10 @@ function fitFamilies(families: WorkFamilies, budget: number): WorkFamilies {
   return whole ? families : { lists, parents }
 }
 
-export function capBoard(result: BoardResult, truncated: boolean, budget = ANSWER_BUDGET_BYTES): BoardResult {
+const EVERYONE_BYTES = byteLength({ everyone: false })
+export const SAVED_BOARD_BYTES = VALUE_BUDGET_BYTES - byteLength({ result: null, everyone: false })
+
+export function capBoard(result: BoardResult, truncated: boolean, budget = ANSWER_BUDGET_BYTES - EVERYONE_BYTES): BoardResult {
   const header = byteLength({ ...result, items: [], message: joinMessages(result.message, showingNewest(result.items.length)) })
   const kept = newestThatFit(result.items, budget - header, item => item.changedAt)
   if (!truncated && kept.size === result.items.length) return result

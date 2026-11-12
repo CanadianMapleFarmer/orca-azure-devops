@@ -33,6 +33,7 @@ import {
   patchFamilies,
   rechip,
   restate,
+  SAVED_BOARD_BYTES,
   type ItemSource,
   type Me,
   type ViewIds
@@ -302,7 +303,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const loaded = await loadBoardItems(source, board, ids)
     const items = await recent.overlay(request.key, loaded.items, written => restate(source, board, written.raw, written.like))
     const projected: BoardResult = { board, items, ...(loaded.chipsOff ? { message: CHIPS_NEED_CODE_READ } : {}), updatedAt: now() }
-    persist(status, savedBoardName(board.teamId, board.boardId), () => ({ result: capBoard(projected, loaded.truncated, VALUE_BUDGET_BYTES), everyone: request.everyone }))
+    persist(status, savedBoardName(board.teamId, board.boardId), () => ({ result: capBoard(projected, loaded.truncated, SAVED_BOARD_BYTES), everyone: request.everyone }))
     return { result: capBoard(projected, loaded.truncated), sync, known: loaded.known }
   }
 
