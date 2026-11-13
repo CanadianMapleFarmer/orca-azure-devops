@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "azure-devops",
   "name": "Azure DevOps",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Unofficial. Azure DevOps in Orca: a board you can work in, one-click agents, and work items, pull requests, pipelines and wikis.",
   "icon": "assets/icon.png",
   "cover": {
