@@ -1,6 +1,5 @@
 import { assert, test } from 'orca/testing'
-import type { WorkItemSummary } from '../../src/shared/work'
-import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from './details'
+import { addComment, addPullRequestLink, bodyOf, linkedIds, linkRows, readComments, resolvePullRequest } from './details'
 import { AdoError, createAdoHttp, type AdoHttp } from './http'
 import type { RawWorkItem } from './workitems'
 
@@ -9,6 +8,7 @@ const PROJECT = '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d'
 const OTHER_PROJECT = '9d8c7b6a-4444-4d5e-8f6a-3b4c5d6e7f80'
 const REPO = '7c8d9e0f-3333-4c4d-9e5f-2a3b4c5d6e7f'
 const BASE = `https://dev.azure.com/${ORG}`
+const HOME = 'Fabrikam Web'
 const ITEM_URL = `${BASE}/Fabrikam%20Web/_workitems/edit/42`
 const COMMENTS_URL = `${BASE}/${PROJECT}/_apis/wit/workItems/42/comments`
 const SUFFIX = '… open in Azure DevOps for the rest'
@@ -48,27 +48,6 @@ async function rejection(promise: Promise<unknown>): Promise<AdoError> {
   return assert.fail('expected the call to fail')
 }
 
-function summary(): WorkItemSummary {
-  return {
-    org: ORG,
-    id: 42,
-    rev: 7,
-    type: 'User Story',
-    title: 'Add the export button',
-    state: 'Active',
-    column: 'Active',
-    columnDone: false,
-    lane: null,
-    assignedTo: null,
-    parentId: null,
-    parentTitle: null,
-    changedAt: 0,
-    url: ITEM_URL,
-    prs: [],
-    targets: { columns: [], states: [] }
-  }
-}
-
 function raw(fields: Record<string, unknown> = {}, relations?: RawWorkItem['relations']): RawWorkItem {
   return {
     id: 42,
@@ -77,6 +56,10 @@ function raw(fields: Record<string, unknown> = {}, relations?: RawWorkItem['rela
     fields: { 'System.TeamProject': 'Fabrikam Web', ...fields },
     relations
   }
+}
+
+function linked(id: number, title: string, project = 'Fabrikam Web'): RawWorkItem {
+  return { id, rev: 1, url: '', fields: { 'System.Title': title, 'System.TeamProject': project } }
 }
 
 function itemLink(rel: string, id: number) {
@@ -95,48 +78,40 @@ function comment(id: number, html: string, author: string | null, createdDate: s
   return { id, text: html, createdBy: author === null ? undefined : { displayName: author }, createdDate }
 }
 
-function detailsServer(opts: { comments?: unknown[]; titles?: Record<number, { title: string; project?: string }> } = {}) {
-  return adoServer(call => {
-    if (call.url.includes('/comments')) return reply(200, { comments: opts.comments ?? [], totalCount: (opts.comments ?? []).length })
-    const value = (call.body.ids as number[]).flatMap(id => {
-      const found = opts.titles?.[id]
-      return found ? [{ id, rev: 1, url: '', fields: { 'System.Title': found.title, 'System.TeamProject': found.project ?? 'Fabrikam Web' } }] : []
-    })
-    return reply(200, { count: value.length, value })
-  })
+function commentServer(comments: unknown[] = []) {
+  return adoServer(() => reply(200, { comments, totalCount: comments.length }))
 }
 
-test('details convert description and acceptance criteria', async () => {
-  const { http } = detailsServer()
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({
+test('bodyOf converts description and acceptance criteria', () => {
+  const body = bodyOf(raw({
     'System.Description': '<div>Let users <b>export</b> the grid.</div><ul><li>CSV</li><li>XLSX</li></ul><img src="https://cdn.contoso.test/mock.png">',
     'Microsoft.VSTS.Common.AcceptanceCriteria': '<ol><li>Header row</li><li>UTF-8</li></ol>'
-  }))
-  assert.deepEqual(details.item, summary())
-  assert.equal(details.descriptionMd, `Let users **export** the grid.\n\n- CSV\n- XLSX\n\n[image](${ITEM_URL})`)
-  assert.equal(details.acceptanceMd, '1. Header row\n2. UTF-8')
-  assert.deepEqual(details.comments, [])
-  assert.deepEqual(details.links, [])
+  }), ITEM_URL)
+  assert.equal(body.descriptionMd, `Let users **export** the grid.\n\n- CSV\n- XLSX\n\n[image](${ITEM_URL})`)
+  assert.equal(body.acceptanceMd, '1. Header row\n2. UTF-8')
 })
 
-test('missing or non-text description fields become empty Markdown', async () => {
-  const { http } = detailsServer()
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({ 'System.Description': 12, 'Microsoft.VSTS.Common.AcceptanceCriteria': null }))
-  assert.equal(details.descriptionMd, '')
-  assert.equal(details.acceptanceMd, '')
+test('missing or non-text description fields become empty Markdown', () => {
+  const body = bodyOf(raw({ 'System.Description': 12, 'Microsoft.VSTS.Common.AcceptanceCriteria': null }), ITEM_URL)
+  assert.equal(body.descriptionMd, '')
+  assert.equal(body.acceptanceMd, '')
 })
 
-test('description and acceptance criteria are each capped at 30000 characters', async () => {
-  const { http } = detailsServer()
+test('description and acceptance criteria are each capped at 30000 characters', () => {
   const huge = '<p>0123456789</p>'.repeat(5000)
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({
-    'System.Description': huge,
-    'Microsoft.VSTS.Common.AcceptanceCriteria': huge
-  }))
-  for (const markdown of [details.descriptionMd, details.acceptanceMd]) {
+  const body = bodyOf(raw({ 'System.Description': huge, 'Microsoft.VSTS.Common.AcceptanceCriteria': huge }), ITEM_URL)
+  for (const markdown of [body.descriptionMd, body.acceptanceMd]) {
     assert.ok(markdown.endsWith(SUFFIX))
     assert.ok(markdown.length <= 30_000 + SUFFIX.length + 2)
     assert.ok(markdown.length > 29_000)
+  }
+})
+
+test("bodyOf reads the assignee's display and unique names", () => {
+  const grace = { displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example', id: 'b2c3d4e5-6666-4b7c-9d8e-0f1a2b3c4d5e' }
+  assert.deepEqual(bodyOf(raw({ 'System.AssignedTo': grace }), ITEM_URL).assignee, { displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example' })
+  for (const assignedTo of [undefined, 'Grace Hopper', { displayName: 'Grace Hopper' }, { uniqueName: 'grace@contoso.example' }, { displayName: '', uniqueName: 'grace@contoso.example' }]) {
+    assert.equal(bodyOf(raw({ 'System.AssignedTo': assignedTo }), ITEM_URL).assignee, null, JSON.stringify(assignedTo))
   }
 })
 
@@ -146,53 +121,38 @@ test('comments are newest first, capped and converted', async () => {
     comment(102, `<p>${'long '.repeat(2000)}</p>`.repeat(3), null, '2026-11-02T08:00:00.5Z'),
     comment(101, '<script>steal()</script>First!', 'Grace Hopper', '2026-11-01T07:15:00Z')
   ]
-  const { http, calls } = detailsServer({ comments })
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw())
-  const request = calls.find(call => call.url.includes('/comments'))
-  assert.equal(request?.method, 'GET')
-  assert.equal(request?.url, `${COMMENTS_URL}?$top=50&order=desc&api-version=7.1-preview.4`)
-  assert.deepEqual(details.comments.map(entry => entry.id), [103, 102, 101])
-  assert.deepEqual(details.comments.map(entry => entry.author), ['Ada Lovelace', 'Unknown', 'Grace Hopper'])
-  assert.deepEqual(details.comments.map(entry => entry.createdAt), [Date.parse('2026-11-03T09:30:00Z'), Date.parse('2026-11-02T08:00:00.5Z'), Date.parse('2026-11-01T07:15:00Z')])
-  assert.equal(details.comments[0].textMd, 'Looks *good*\nship it')
-  assert.equal(details.comments[2].textMd, 'First!')
-  assert.ok(details.comments[1].textMd.endsWith(SUFFIX))
-  assert.ok(details.comments[1].textMd.length <= 4000 + SUFFIX.length + 2)
-  assert.ok(details.comments[1].textMd.length > 3500)
+  const { http, calls } = commentServer(comments)
+  const read = await readComments(http, ORG, PROJECT, 42, ITEM_URL)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].method, 'GET')
+  assert.equal(calls[0].url, `${COMMENTS_URL}?$top=50&order=desc&api-version=7.1-preview.4`)
+  assert.deepEqual(read.map(entry => entry.id), [103, 102, 101])
+  assert.deepEqual(read.map(entry => entry.author), ['Ada Lovelace', 'Unknown', 'Grace Hopper'])
+  assert.deepEqual(read.map(entry => entry.createdAt), [Date.parse('2026-11-03T09:30:00Z'), Date.parse('2026-11-02T08:00:00.5Z'), Date.parse('2026-11-01T07:15:00Z')])
+  assert.equal(read[0].textMd, 'Looks *good*\nship it')
+  assert.equal(read[2].textMd, 'First!')
+  assert.ok(read[1].textMd.endsWith(SUFFIX))
+  assert.ok(read[1].textMd.length <= 4000 + SUFFIX.length + 2)
+  assert.ok(read[1].textMd.length > 3500)
 })
 
 test('at most 50 comments are returned', async () => {
   const comments = Array.from({ length: 60 }, (_, index) => comment(1000 - index, 'text', 'Ada', '2026-11-01T00:00:00Z'))
-  const { http } = detailsServer({ comments })
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw())
-  assert.equal(details.comments.length, 50)
-  assert.equal(details.comments[0].id, 1000)
+  const read = await readComments(commentServer(comments).http, ORG, PROJECT, 42, ITEM_URL)
+  assert.equal(read.length, 50)
+  assert.equal(read[0].id, 1000)
 })
 
 test('a malformed comment response is reported as such', async () => {
   for (const comments of [{ comments: 'nope' }, { comments: [null] }, { comments: [{ text: 'no id' }] }]) {
     const { http } = adoServer(() => reply(200, comments))
-    const error = await rejection(loadDetails(http, ORG, PROJECT, summary(), raw()))
+    const error = await rejection(readComments(http, ORG, PROJECT, 42, ITEM_URL))
     assert.equal(error.code, 'server')
     assert.equal(error.message, 'Azure DevOps returned an unexpected comment response.')
   }
 })
 
-test('comments and related titles load in parallel', async () => {
-  let release: () => void = () => {}
-  const gate = new Promise<void>(resolve => (release = resolve))
-  const { http, calls } = adoServer(async call => {
-    await gate
-    return call.url.includes('/comments') ? reply(200, { comments: [] }) : reply(200, { value: [] })
-  })
-  const pending = loadDetails(http, ORG, PROJECT, summary(), raw({}, [itemLink(PARENT, 3)]))
-  await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(calls.length, 2)
-  release()
-  await pending
-})
-
-test('links list parent, children, related and pull requests with titles from one batch call', async () => {
+test('links list parent, children, related and pull requests, titled from the linked records', () => {
   const relations = [
     itemLink(RELATED, 7),
     itemLink(CHILD, 11),
@@ -203,19 +163,16 @@ test('links list parent, children, related and pull requests with titles from on
     { rel: 'ArtifactLink', url: 'vstfs:///Git/Commit/abc%2fdef%2f0123', attributes: { name: 'Fixed in Commit' } },
     { rel: 'Hyperlink', url: 'https://example.com/spec' }
   ]
-  const { http, calls } = detailsServer({
-    titles: {
-      3: { title: 'Reporting epic' },
-      11: { title: 'Wire up the endpoint' },
-      7: { title: 'Billing export', project: 'Contoso Ops' }
-    }
-  })
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, relations))
-  const batches = calls.filter(call => call.url.includes('/workitemsbatch'))
-  assert.equal(batches.length, 1)
-  assert.equal(batches[0].url, `${BASE}/${PROJECT}/_apis/wit/workitemsbatch?api-version=7.1`)
-  assert.deepEqual(batches[0].body.ids, [3, 11, 12, 7])
-  assert.deepEqual(details.links, [
+  const item = raw({}, relations)
+  assert.deepEqual(linkedIds(item), [
+    { kind: 'parent', id: 3 },
+    { kind: 'child', id: 11 },
+    { kind: 'child', id: 12 },
+    { kind: 'related', id: 7 },
+    { kind: 'related', id: 3 }
+  ])
+  const records = [linked(3, 'Reporting epic'), linked(11, 'Wire up the endpoint'), linked(7, 'Billing export', 'Contoso Ops')]
+  assert.deepEqual(linkRows(ORG, item, records, [], HOME), [
     { kind: 'parent', title: 'Reporting epic', url: `${BASE}/Fabrikam%20Web/_workitems/edit/3` },
     { kind: 'child', title: 'Wire up the endpoint', url: `${BASE}/Fabrikam%20Web/_workitems/edit/11` },
     { kind: 'child', title: '#12', url: `${BASE}/Fabrikam%20Web/_workitems/edit/12` },
@@ -225,37 +182,29 @@ test('links list parent, children, related and pull requests with titles from on
   ])
 })
 
-test('no linked work items means no batch call', async () => {
-  const { http, calls } = detailsServer()
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [prLink(PROJECT, REPO, 8)]))
-  assert.equal(calls.filter(call => call.url.includes('/workitemsbatch')).length, 0)
-  assert.deepEqual(details.links, [{ kind: 'pr', title: 'Pull request 8', url: `${BASE}/${PROJECT}/_git/${REPO}/pullrequest/8` }])
+test('an item with no linked work items lists only its pull requests', () => {
+  const item = raw({}, [prLink(PROJECT, REPO, 8)])
+  assert.deepEqual(linkedIds(item), [])
+  assert.deepEqual(linkRows(ORG, item, [], [], HOME), [{ kind: 'pr', title: 'Pull request 8', url: `${BASE}/${PROJECT}/_git/${REPO}/pullrequest/8` }])
 })
 
-test('a pull request link shows the state of the pull request when it is known', async () => {
-  const { http } = detailsServer()
+test('a pull request link shows the state of the pull request when it is known', () => {
   const merged = { prId: 8, repoId: REPO, projectId: PROJECT, target: 'main', state: 'merged' as const, build: 'none' as const, url: '' }
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [prLink(PROJECT, REPO, 8), prLink(PROJECT, REPO, 9)]), [merged])
-  assert.deepEqual(details.links.map(link => link.title), ['Pull request 8 (merged)', 'Pull request 9'])
+  const rows = linkRows(ORG, raw({}, [prLink(PROJECT, REPO, 8), prLink(PROJECT, REPO, 9)]), [], [merged], HOME)
+  assert.deepEqual(rows.map(link => link.title), ['Pull request 8 (merged)', 'Pull request 9'])
 })
 
-test('titles are requested for at most 50 linked items and the rest show their ids', async () => {
-  const relations = Array.from({ length: 60 }, (_, index) => itemLink(CHILD, 100 + index))
-  const titles = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [100 + index, { title: `Task ${index}` }]))
-  const { http, calls } = detailsServer({ titles })
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, relations))
-  const [batch] = calls.filter(call => call.url.includes('/workitemsbatch'))
-  assert.equal(batch.body.ids.length, 50)
-  assert.equal(details.links.length, 60)
-  assert.equal(details.links[49].title, 'Task 49')
-  assert.equal(details.links[50].title, '#150')
+test('linked items without a record show their ids in the home project', () => {
+  const rows = linkRows(ORG, raw({}, [itemLink(PARENT, 3), itemLink(CHILD, 11)]), [], [], 'Contoso Ops')
+  assert.deepEqual(rows, [
+    { kind: 'parent', title: '#3', url: `${BASE}/Contoso%20Ops/_workitems/edit/3` },
+    { kind: 'child', title: '#11', url: `${BASE}/Contoso%20Ops/_workitems/edit/11` }
+  ])
 })
 
-test('a pull request link that cannot be resolved keeps the relation url', async () => {
+test('a pull request link that cannot be resolved keeps the relation url', () => {
   const unresolvable = { rel: 'ArtifactLink', url: 'vstfs:///Git/PullRequestId/not-a-reference' }
-  const { http } = detailsServer()
-  const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [unresolvable]))
-  assert.deepEqual(details.links, [{ kind: 'pr', title: 'Pull request', url: unresolvable.url }])
+  assert.deepEqual(linkRows(ORG, raw({}, [unresolvable]), [], [], HOME), [{ kind: 'pr', title: 'Pull request', url: unresolvable.url }])
 })
 
 test('addComment escapes HTML and refuses empty text', async () => {
@@ -427,23 +376,6 @@ test('linkPr surfaces a pull request that cannot be read or is malformed', async
     assert.equal(error.message, 'Azure DevOps returned an unexpected pull request response.')
     assert.equal(calls.length, 1)
   }
-})
-
-test('a failing link-title lookup shows ids, but throttling still fails the details', async () => {
-  for (const status of [500, 403, 404]) {
-    const { http } = adoServer(call => (call.url.includes('/comments') ? reply(200, { comments: [] }) : reply(status, { message: 'nope' })))
-    const details = await loadDetails(http, ORG, PROJECT, summary(), raw({}, [itemLink(PARENT, 3), itemLink(CHILD, 11)]))
-    assert.deepEqual(details.links.map(link => link.title), ['#3', '#11'], String(status))
-    assert.equal(details.links[0].url, `${BASE}/Fabrikam%20Web/_workitems/edit/3`)
-  }
-
-  const throttled = adoServer(call =>
-    call.url.includes('/comments')
-      ? reply(200, { comments: [] })
-      : new Response(JSON.stringify({ message: 'slow down' }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '60' } })
-  )
-  const error = await rejection(loadDetails(throttled.http, ORG, PROJECT, summary(), raw({}, [itemLink(PARENT, 3)])))
-  assert.equal(error.code, 'rate_limited')
 })
 
 test('linkPr returns the hydrated item rev when the pull request is already linked', async () => {

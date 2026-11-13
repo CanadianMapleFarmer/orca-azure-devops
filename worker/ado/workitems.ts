@@ -19,6 +19,7 @@ const BATCH_SIZE = 200
 export const PR_ARTIFACT_PREFIX = 'vstfs:///Git/PullRequestId/'
 export const CHILD_LINK = 'System.LinkTypes.Hierarchy-Forward'
 export const TASK_FIELDS: readonly string[] = ['System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.AssignedTo', 'System.Parent']
+export const LINKED_FIELDS: readonly string[] = [...TASK_FIELDS, 'System.TeamProject']
 export const KEPT_FIELDS: ReadonlySet<string> = new Set([
   'System.Id',
   'System.TeamProject',
@@ -28,7 +29,8 @@ export const KEPT_FIELDS: ReadonlySet<string> = new Set([
   'System.AssignedTo',
   'System.Parent',
   'System.ChangedDate',
-  'System.AreaPath'
+  'System.AreaPath',
+  'System.IterationPath'
 ])
 const REV_FIELDS: readonly string[] = ['System.Id']
 const KANBAN_FIELD = /^WEF_[0-9A-Fa-f]+_Kanban\./

@@ -16,7 +16,7 @@ import {
   WIKI_READ_ONLY
 } from '../messages'
 import { TAB_FOLDER, writeTabFile } from '../tab-files'
-import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
+import { focusedWorkspace, isLocalWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import { assertInside, baseName, draftName, sameFile, theirsName, type DraftFs } from './draft-files'
 import { MAX_PUBLISH_BYTES } from './publish'
 import type { WikiService } from './service'
@@ -156,7 +156,7 @@ export function createDrafts(deps: DraftsDeps): Drafts {
     }
 
     const workspace = await focusedWorkspace(deps.call, listed)
-    if (!workspace || workspace.hostId !== null) return refused(NO_LOCAL_WORKSPACE_WIKI)
+    if (!workspace || !isLocalWorkspace(workspace)) return refused(NO_LOCAL_WORKSPACE_WIKI)
     const page = await deps.wiki.fresh(ref)
     if (!page) return refused(WIKI_PAGE_GONE)
     if (Buffer.byteLength(page.content) > MAX_PUBLISH_BYTES) return refused(WIKI_PAGE_TOO_LARGE)

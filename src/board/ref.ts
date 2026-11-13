@@ -1,5 +1,9 @@
 export interface BoardRef { org: string; projectId: string; teamId: string; boardId: string }
 
+export function boardFileText(ref: BoardRef): string {
+  return `${JSON.stringify({ org: ref.org, projectId: ref.projectId, teamId: ref.teamId, boardId: ref.boardId }, null, 2)}\n`
+}
+
 export function parseBoardRef(text: string): BoardRef | null {
   let value: unknown
   try {

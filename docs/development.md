@@ -14,6 +14,23 @@ orca plugin validate .
 
 To load the plugin for development, run `orca plugin dev watch .`. Orca asks for your approval first.
 
+### Why the plugin runs Orca's CLI to start workspaces and agents
+
+No host call creates a worktree, and the plugin `agent.launch` of Orca 1.4.256 starts the agent but drops its prompt ([stablyai/orca#41107](https://github.com/stablyai/orca/issues/41107)). So **Start a workspace and agent** and **Start an agent** open a terminal with `terminal.create` and run `orca worktree create` or `orca agent launch` in it, which create the worktree, start the agent and submit the prompt in one command.
+
+Orca types that command into its terminal shell: a single line raw, a multi-line one as a bracketed paste to bash and zsh and line by line to any other shell. So the command is always one short line, and work item text never becomes shell syntax. The CLI can't read the prompt from a file, so the worker writes the prompt and the worktree selector to `0600` files in `~/.orca-azure-devops/starts` (a `0700` folder), and the command reads them: `ado_prompt=$(command cat ~/.orca-azure-devops/starts/<id>.prompt) && orca … --prompt "$ado_prompt" … && exit`. A missing or unreadable file stops it before the CLI runs. The branch and the agent are plain words. A clone line also reads the clone address, the folder and the repository selector from start files, and types `GIT_ALLOW_PROTOCOL=https:ssh command git clone -- "$ado_url" "$ado_folder"` before `orca repo add` and `orca worktree create` (see [Clone from Azure DevOps](work.md#clone-from-azure-devops)); with the default template it is about 780 bytes at worst. A shell without `$(…)`, such as tcsh, refuses the line before anything runs. The command stays far below the 1,024 bytes a macOS tty keeps when Orca types it before the shell is ready, and the plugin refuses one over 1,000 bytes. A prompt over 100,000 bytes is replaced by the item's link and a pointer to it. The files go once the workspace is ready, when the terminal is refused or fails, and after two minutes in any case. The worker sweeps files older than two minutes when it starts, on every start, and again two minutes later while any remain; the sweep stops unless the folder is a real folder of the user's, and deletes only regular files with the plugin's exact names. Only the agent the command started counts as working: an observe-only `agent.prompt.before` handler ties the terminal whose launch prompt names the item. Windows and shells other than bash and zsh are turned off with a message. That check reads only `$SHELL`, and Orca's own Default shell setting can differ, so the one-line command, not the check, is what keeps every shell safe.
+
+`python3 scripts/typed-command-check.py` types Orca's exact bytes for the commands the plugin builds into interactive bash, zsh, sh, dash, ksh, tcsh and csh through a pty, plus fish, pwsh and nu from Homebrew when they are installed. Each hostile prompt goes into four commands: a workspace start, an agent launch, a clone line, and the add-only line for a folder that is already a clone, whose folder and clone address hold quotes, `$(…)`, backticks and a leading `-`. Stand-in `orca` and `git` programs record the arguments they get, and the `git` one records `GIT_ALLOW_PROTOCOL` too. It writes the start files into a temporary home, types once the shell is ready and once before it is, and once more with the files gone. For bash and zsh it also types while a slow rc file runs, next to a 1,100-byte control line that the tty cuts off, which shows why the command must stay short. It checks that each shell either hands the programs the exact values or refuses the line, that a missing file stops the command, and that no item text runs. When git is installed, it also types a clone line into every shell that runs the line, with the real git and an address file holding a `file://` address, a local path or an `ext::` command, and checks that git refuses each one, makes no folder and runs nothing after it. A control run first clones the `file://` address and the local path with git alone, without `GIT_ALLOW_PROTOCOL`, so the refusals prove something. The clone cases make a full run take about twice as long as the workspace and agent cases alone. Run it after changing `worker/workspace/command.ts`.
+
+### Checked live
+
+Checked by hand in Orca for 0.4.0:
+
+- The board's panel: a card opens its details beside the board.
+- The repo picker lists the local repositories in Orca.
+- **Start a workspace and agent** in a repository already in Orca creates the worktree and starts the agent.
+- **+ → Azure DevOps board** remembers the board picked in its dialog: coming back to the tab opens the board, not the dialog.
+
 ### Live checks still pending
 
 The tests use fixtures and fakes. These haven't been checked against a real organisation, Teams, Microsoft Entra or Orca's own interface yet.
@@ -21,10 +38,50 @@ The tests use fixtures and fakes. These haven't been checked against a real orga
 Boards:
 
 - The board opens as an editor and `git status` stays clean.
+- **+ → Azure DevOps board**: Orca marks the file unsaved after a pick. Also whether Orca echoes the written text back through `onDidChange`.
 - Dragging a card moves it, and a split column writes Doing and Done correctly.
-- The workspace hook names the branch, and **Start an agent** launches your default agent with its prompt.
 - On the client organisation, the delta query with `timePrecision=true` is accepted and returns only the items changed since the watermark.
 - Adding a child task and linking a pull request each bump the parent's `rev` and `ChangedDate`.
+- Add a task from a named board: it appears under the story in Azure Boards, with the story's area and iteration, and on the sprint's taskboard when the story is in a sprint.
+- Open a Feature on a Features board: its stories show read-only under **Children**, with no checkboxes and no add form.
+- Reassign to a person whose display name another person shares, and unassign. Reassigning to a guest or a deleted identity shows Azure DevOps's message under **Assigned to**.
+- Tick and untick a task in a Scrum project (To Do → Done → In Progress) and an Agile one (New → Closed → Active). Focus stays on the row's checkbox afterwards.
+- As a Stakeholder: add and tick a task; reassigning shows Azure DevOps's message.
+- The board's panel at 360 px and 1440 px in both themes: click from card to card, drag the open card and another card, Esc in the panel with focus returning to the card, the narrow sheet's `inert`, and links opening through `openExternal` while a middle-click does nothing.
+- Type a comment while a teammate changes the story: the text, focus and caret stay.
+- Comment, move, reassign and search for a person from the panel: each reaches Azure DevOps. Also where focus goes when the control you used is turned off while its change is sent.
+- Start a workspace and agent from the board's panel, with a known repository and with the list: the footer says when the workspace is ready and when the agent works.
+
+Starting workspaces and agents, in a throwaway repository with an Azure DevOps remote, after installing a dev build:
+
+- Orca's approval lists `terminal:send` and no longer `agent:launch`, and the buttons are on with zsh on macOS, so the worker sees `$SHELL`.
+- With Orca's Default shell set to `/bin/bash` (3.2 on macOS) the command runs, and with `/bin/tcsh` the terminal shows tcsh's error and nothing else runs.
+- On Linux: the buttons are on with bash, and the start files are written and removed.
+- A login shell whose rc files take longer than 15 seconds: the command runs once the shell is ready.
+- `~/.orca-azure-devops/starts` is empty two minutes after a start, and after a worker restart.
+- Close and reopen an item's details while its workspace is being created, then press Start: the details say the workspace is still being created. Also press Start in two Orca windows at once: one terminal opens.
+- **Start a workspace and agent** gives the agent the item's prompt and closes the `ADO #<id>` terminal. Does `--activate` show the new worktree with the agent's tab selected?
+- The installed plugin's `workspace.create.after` fires for the worktree the CLI made: the details switch to **Start an agent** and **Open workspace**, also for `<branch>-2` when the branch exists.
+- Orca fires `agent.prompt.before` for the launch prompt of an agent the CLI started, and `agent.status.changed` names its terminal, so the details say `<agent> is working on it.` Without that, they show the neutral 60-second message instead.
+- Another agent busy in the item's workspace during Start an agent doesn't make the details say it is working, and the start files stay until the two minutes are up.
+- **Start an agent** in the linked workspace: the prompt arrives, and `--focus` selects the agent's tab.
+- A failing command, with Default agent set to an agent Orca doesn't know: the terminal stays open with Orca's message, and after 60 seconds the neutral message's **Show it** opens its workspace.
+- A description too long for one command: the agent gets the link and the short prompt, and the details say so.
+- Several repositories in Orca: the list's order, the last choice for the board's team as `(last used)`, and **Change repo**. After an upgrade, a repository chosen for a project by an earlier version shows as `(last used)`.
+- A pending **Check out in Orca**, then **Start a workspace and agent**: the arm is cancelled and the new workspace keeps the item's branch. Also press **Check out in Orca** while the item's command runs: does `workspace.create.before` carry the item's branch, so the arm leaves the new worktree alone?
+- Pressing Start twice: the second press is off until the workspace is ready.
+- A worktree created by hand on the item's branch is linked when the details next open.
+
+The repo picker and Clone from Azure DevOps, in a throwaway project:
+
+- An item in a project with no repositories: the repository of a linked pull request in another project ranks first, and Start creates the workspace there.
+- Clone into an empty **Folder for new clones**: the line clones, adds the repository, creates the worktree without setup, starts the agent and closes the terminal, the details say the branch is open, and the setup note shows.
+- `orca worktree create --repo path:<folder>` finds a repository just added with `orca repo add --path`.
+- Where Orca shows a repository's setup steps, so the setup note and the Work guide can name it.
+- A clone that needs a credential prompt, and an organisation whose remotes are all SSH.
+- A clone that takes longer than 2 minutes links within 10, and its agent's `<agent> is working on it.` shows.
+- `orca repo add --path` on a folder Orca already has.
+- The pty harness on bash, zsh, sh, dash and ksh (runs), tcsh and csh (refuses), and fish, pwsh and nu (runs or refuses).
 
 Pull requests and sharing:
 
@@ -93,4 +150,5 @@ Panel overhaul:
 
 General:
 
+- Orca 1.4.258 reports every local workspace with `hostId: "local"`, not `null`, and the plugin counts both as local. On a new Orca, check that a local workspace still opens a board, a run's file, a checkout and a wiki tab, and that an SSH workspace is still refused.
 - On the client organisation, read **Connection status** after 10 minutes with the Work tab and a board open, and record the request totals and the `Rate limit` line with its `X-RateLimit-*` figures. Also record the `ETag seen` line, which names the endpoints that answer with an `ETag`.

@@ -5,7 +5,7 @@ import { fakeClock } from '../test-support'
 import { branchFor, createArm } from './arm'
 
 const ITEM = { id: 1204, title: 'Add vehicle search filters' }
-const ARMED = { org: 'contoso', itemId: 1204, branch: 'feature/1204-add-vehicle-search-filters' }
+const ARMED = { org: 'contoso', branch: 'feature/1204-add-vehicle-search-filters', base: 'origin/feature/1204-add-vehicle-search-filters', prId: 4100 }
 const T0 = Date.parse('2026-11-04T09:00:00Z')
 const MINUTE = 60_000
 
@@ -80,7 +80,6 @@ test('a disarmed branch is not taken, so the next worktree creation passes throu
   arm.arm(ARMED)
   arm.disarm()
   assert.equal(arm.take(), null)
-  assert.equal(arm.claim(ARMED.branch), null)
 })
 
 test('arming again replaces the previous arm', () => {
@@ -88,7 +87,7 @@ test('arming again replaces the previous arm', () => {
   const arm = createArm(time.now)
   arm.arm(ARMED)
   time.advance(MINUTE)
-  const later = { org: 'contoso', itemId: 1205, branch: 'feature/1205-fix-pagination-offset' }
+  const later = { org: 'contoso', branch: 'feature/1205-fix-pagination-offset', base: 'origin/feature/1205-fix-pagination-offset', prId: 4101 }
   assert.equal(arm.arm(later), T0 + 11 * MINUTE)
   assert.deepEqual(arm.take(), later)
   assert.equal(arm.take(), null)
@@ -107,37 +106,8 @@ test('an arm older than ten minutes is not taken', () => {
   assert.equal(arm.take(), null)
 })
 
-test('claim hands back the taken arm once, for its branch or a prefixed one, within 30 seconds', () => {
-  const time = clock()
-  const arm = createArm(time.now)
-  assert.equal(arm.claim(ARMED.branch), null, 'nothing taken')
-
-  arm.arm(ARMED)
-  arm.take()
-  assert.equal(arm.claim('feature/1205-fix-pagination-offset'), null, 'another branch')
-  assert.equal(arm.claim(`orca/${ARMED.branch}`)?.itemId, 1204, 'a prefix Orca added')
-  assert.equal(arm.claim(ARMED.branch), null, 'once')
-
-  arm.arm(ARMED)
-  arm.take()
-  time.advance(30_000)
-  assert.equal(arm.claim(ARMED.branch)?.itemId, 1204, 'at 30 seconds')
-
-  arm.arm(ARMED)
-  arm.take()
-  time.advance(30_001)
-  assert.equal(arm.claim(ARMED.branch), null, 'after 30 seconds')
-})
-
-test('an arm that was never taken cannot be claimed', () => {
-  const time = clock()
-  const arm = createArm(time.now)
-  arm.arm(ARMED)
-  assert.equal(arm.claim(ARMED.branch), null)
-})
-
 const PR_ARMED = { org: 'contoso', branch: 'hotfix/1211-login-redirect', base: 'origin/hotfix/1211-login-redirect', prId: 4110 }
-const ITEM_ARM = { org: 'contoso', itemId: 1204 }
+const FIRST_ARM = { org: 'contoso', prId: 4100 }
 const PR_ARM = { org: 'contoso', prId: 4110 }
 
 function watched() {
@@ -157,7 +127,7 @@ test('every change of the arm is reported with its identity only: armed, replace
   arm.arm(ARMED)
   arm.disarm()
   arm.disarm()
-  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null, ITEM_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, PR_ARM, null, FIRST_ARM, null])
 })
 
 test('an arm that expires is reported once by the scheduler, which keeps no timer afterwards', async () => {
@@ -165,13 +135,13 @@ test('an arm that expires is reported once by the scheduler, which keeps no time
   arm.arm(ARMED)
   await time.tick(0)
   await time.tick(10 * MINUTE - 1)
-  assert.deepEqual(changes, [ITEM_ARM], 'still armed a millisecond before it expires')
+  assert.deepEqual(changes, [FIRST_ARM], 'still armed a millisecond before it expires')
   await time.tick(1)
-  assert.deepEqual(changes, [ITEM_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, null])
   assert.equal(time.pending(), 0)
   assert.equal(arm.take(), null)
   await time.tick(60 * MINUTE)
-  assert.deepEqual(changes, [ITEM_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, null])
 })
 
 test('arming again restarts the ten minutes, and a taken or disarmed arm leaves no timer', async () => {
@@ -180,9 +150,9 @@ test('arming again restarts the ten minutes, and a taken or disarmed arm leaves 
   await time.tick(5 * MINUTE)
   arm.arm(PR_ARMED)
   await time.tick(10 * MINUTE - 1)
-  assert.deepEqual(changes, [ITEM_ARM, PR_ARM])
+  assert.deepEqual(changes, [FIRST_ARM, PR_ARM])
   await time.tick(1)
-  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, PR_ARM, null])
 
   arm.arm(ARMED)
   arm.take()
@@ -191,23 +161,23 @@ test('arming again restarts the ten minutes, and a taken or disarmed arm leaves 
   arm.disarm()
   assert.equal(time.pending(), 0, 'disarmed')
   await time.tick(60 * MINUTE)
-  assert.deepEqual(changes, [ITEM_ARM, PR_ARM, null, ITEM_ARM, null, ITEM_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, PR_ARM, null, FIRST_ARM, null, FIRST_ARM, null])
 })
 
 test('disarming with an identity disarms only that arm', () => {
   const { changes, arm } = watched()
   arm.arm(ARMED)
   arm.disarm(PR_ARM)
-  arm.disarm({ org: 'fabrikam', itemId: 1204 })
-  arm.disarm({ org: 'contoso', itemId: 1205 })
-  assert.deepEqual(changes, [ITEM_ARM], 'another arm is left alone')
-  arm.disarm(ITEM_ARM)
-  assert.deepEqual(changes, [ITEM_ARM, null])
+  arm.disarm({ org: 'fabrikam', prId: 4100 })
+  arm.disarm({ org: 'contoso', prId: 4101 })
+  assert.deepEqual(changes, [FIRST_ARM], 'another arm is left alone')
+  arm.disarm(FIRST_ARM)
+  assert.deepEqual(changes, [FIRST_ARM, null])
   assert.equal(arm.take(), null)
 
   arm.arm(PR_ARMED)
-  arm.disarm(ITEM_ARM)
+  arm.disarm(FIRST_ARM)
   arm.disarm({ org: 'contoso', prId: 4111 })
   arm.disarm(PR_ARM)
-  assert.deepEqual(changes, [ITEM_ARM, null, PR_ARM, null])
+  assert.deepEqual(changes, [FIRST_ARM, null, PR_ARM, null])
 })

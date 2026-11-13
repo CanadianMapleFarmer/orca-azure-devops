@@ -2,10 +2,12 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import { carriesContext, itemLink, type ContextCache, type ItemInfo } from './agents'
 import type { Arm } from './arm'
 import type { LinkStore } from './links'
+import type { PendingLinks } from './pending'
 
 export interface WorkspaceHookDeps {
   arm: Arm
   links: LinkStore
+  pending: PendingLinks
   context: ContextCache
   itemInfo: (org: string, itemId: number, signal: AbortSignal) => Promise<ItemInfo | null>
   timeout: (ms: number) => AbortSignal
@@ -16,16 +18,17 @@ const ITEM_INFO_TIMEOUT_MS = 1_000
 
 export function registerWorkspaceHooks(orca: OrcaWorkerApi, deps: WorkspaceHookDeps): void {
   orca.hooks.on('workspace.create.before', (event, next) => {
-    if (event.kind !== 'worktree') return
+    if (event.kind !== 'worktree' || (event.branch !== undefined && deps.pending.awaits(event.branch))) return
     const armed = deps.arm.take()
     if (!armed) return
-    return next({ ...event, branch: armed.branch, name: armed.branch, ...('base' in armed ? { base: armed.base } : {}) })
+    return next({ ...event, branch: armed.branch, name: armed.branch, base: armed.base })
   })
 
   orca.hooks.on('workspace.create.after', event => {
-    const armed = deps.arm.claim(event.branch)
-    if (!armed) return
-    deps.links.link(event.workspaceId, { org: armed.org, itemId: armed.itemId }).catch(() => orca.log(`could not save the link for workspace ${event.workspaceId}`))
+    const ref = deps.pending.claim(event.branch)
+    if (!ref) return
+    deps.links.link(event.workspaceId, ref).catch(() => orca.log(`could not save the link for workspace ${event.workspaceId}`))
+    orca.panels.post('work.workspaceReady', { ...ref, workspaceId: event.workspaceId, branch: event.branch })
   })
 
   orca.hooks.on('agent.launch.before', event => {

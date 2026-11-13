@@ -1,3 +1,5 @@
+import type { PrChecks } from './prs'
+
 export type StateCategory = 'Proposed' | 'InProgress' | 'Resolved' | 'Completed' | 'Removed'
 
 export interface BoardColumn {
@@ -56,12 +58,45 @@ export interface WorkItemSummary {
 
 export interface WorkComment { id: number; author: string; createdAt: number; textMd: string }
 
+export interface Assignee { displayName: string; uniqueName: string }
+
+export interface DetailTask {
+  id: number
+  rev: number
+  type: string
+  title: string
+  state: string
+  done: boolean
+  assignedTo: string | null
+  doneState: string | null
+  openState: string | null
+  url: string
+}
+
+export interface DetailPr {
+  prId: number
+  title: string | null
+  target: string | null
+  state: PrChip['state'] | null
+  build: PrChecks['build'] | null
+  policies: PrChecks['policies'] | null
+  url: string
+}
+
 export interface WorkItemDetails {
   item: WorkItemSummary
   descriptionMd: string
   acceptanceMd: string
+  assignee: Assignee | null
   comments: WorkComment[]
   links: { kind: string; title: string; url: string }[]
+  tasks: DetailTask[]
+  moreTasks: number
+  tasksRead: boolean
+  prs: DetailPr[]
+  taskTypes: string[]
+  taskType: string | null
+  readAt: number
 }
 
 export const MAX_NUDGE_RULES = 20
@@ -92,9 +127,40 @@ export interface WorkSnapshot {
   message?: string
 }
 
-export type ArmIdentity = { org: string; itemId: number } | { org: string; prId: number }
+export type ArmIdentity = { org: string; prId: number }
 
 export function sameArm(a: ArmIdentity | null, b: ArmIdentity | null): boolean {
-  if (a === null || b === null || a.org !== b.org) return false
-  return 'itemId' in a ? 'itemId' in b && a.itemId === b.itemId : 'prId' in b && a.prId === b.prId
+  return a !== null && b !== null && a.org === b.org && a.prId === b.prId
 }
+
+export interface WorkspaceRef { id: string; name: string }
+
+export interface ItemWorkspace { workspace: WorkspaceRef | null; unsupported: string | null }
+
+export type RepoSource = 'pr' | 'last' | 'org' | 'other'
+
+export interface StartRepo { key: string; name: string; detail: string; source: RepoSource }
+
+export interface CloneTarget { projectId: string; repoId: string }
+
+export interface StartRepos {
+  repos: StartRepo[]
+  selected: string | null
+  clone: { folder: string } | { problem: string }
+}
+
+export type RepoPick = { kind: 'orca'; key: string } | ({ kind: 'clone' } & CloneTarget)
+
+export interface CloneProject { id: string; name: string; repos: { id: string; name: string }[] }
+
+export interface CloneTargets { projects: CloneProject[]; readAt: number; more: number }
+
+export type StartRefused = { status: 'refused'; message: string; tone: 'warning' | 'danger' }
+
+export type StartWorkResult =
+  | { status: 'sent'; branch: string; repo: string; agent: string; workspace: WorkspaceRef; shortened: boolean; clone: { folder: string; fresh: boolean; setupSkipped: boolean } | null }
+  | { status: 'linked'; branch: string; workspace: WorkspaceRef }
+  | { status: 'choose-repo'; repos: StartRepos; message: string | null }
+  | StartRefused
+
+export type StartAgentResult = { status: 'sent'; agent: string; workspace: WorkspaceRef; shortened: boolean } | StartRefused

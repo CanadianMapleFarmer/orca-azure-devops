@@ -4,10 +4,10 @@ import { fakeAdo, fixture, json, ORG, ORG_URL, PROJECT, REPO, type AdoCall } fro
 import { MALFORMED } from '../messages'
 import { AdoError, createAdoHttp } from './http'
 import {
-  codeProjects,
   deletesSourceBranch,
   getPullRequest,
   listPullRequests,
+  listRepositories,
   pullRequestWorkItems,
   toPrRecord,
   toPrSummary,
@@ -18,6 +18,7 @@ import {
 
 const WEB_URL = `${ORG_URL}/Fabrikam%20Web/_git/web-app`
 const PLATFORM = '2b3c4d5e-7777-4f8a-9b0c-1d2e3f4a5b6c'
+const TOOLS = '0a1b2c3d-3333-4f8a-9b9c-6d7e8f9a0b12'
 const ALEX = '9d1c2b3a-4444-4e5f-8a6b-7c8d9e0f1a2b'
 const GRACE = 'a1b2c3d4-5555-4a6b-8c7d-9e0f1a2b3c4d'
 const DENNIS = 'b2c3d4e5-5555-4b7c-9d8e-0f1a2b3c4d5e'
@@ -27,7 +28,6 @@ const DAY = 24 * 60 * 60 * 1000
 
 const isPullRequests = (call: AdoCall) => call.path === `/${ORG}/${PROJECT}/_apis/git/pullrequests`
 const isRepositories = (call: AdoCall) => call.path === `/${ORG}/_apis/git/repositories`
-const isProjects = (call: AdoCall) => call.path === `/${ORG}/_apis/projects`
 
 function setup() {
   const ado = fakeAdo()
@@ -148,13 +148,19 @@ test('toPrRecord reads the source commit and a reviewer signature', () => {
     target: 'develop',
     sourceCommit: 'b263ed8cb23de78f9aec393aca76a99736d25e5e',
     reviewers: `${GRACE}:10,${DENNIS}:-5,${TEAM}:0`,
-    url: `${WEB_URL}/pullrequest/4101`
+    url: `${WEB_URL}/pullrequest/4101`,
+    title: 'Add vehicle search filters'
   })
   const bare = toPrRecord({ ...raw, status: 'abandoned', lastMergeSourceCommit: undefined, reviewers: undefined }, ORG)
   assert.deepEqual([bare.status, bare.sourceCommit, bare.reviewers], ['abandoned', null, ''])
   const unnamed = mine(0)
   delete unnamed.repository.webUrl
   assert.equal(toPrRecord(unnamed, ORG).url, `${ORG_URL}/${PROJECT}/_git/${REPO}/pullrequest/4101`)
+})
+
+test("toPrRecord keeps the pull request's title", () => {
+  assert.equal(toPrRecord({ ...mine(0), title: 'Fix pagination offset' }, ORG).title, 'Fix pagination offset')
+  assert.equal('title' in toPrRecord({ ...mine(0), title: undefined as unknown as string }, ORG), false)
 })
 
 test('toReviewer maps a group and treats a missing vote as 0', () => {
@@ -250,40 +256,19 @@ test('pullRequestWorkItems returns numeric ids', async () => {
   assert.deepEqual(await pullRequestWorkItems(http, ORG, key), [1204, 1207])
 })
 
-test('codeProjects lists projects that hold repositories and falls back to every project when the org-wide list is refused', async () => {
+test('listRepositories reads every repository with its project, whether it offers ssh, and whether it is disabled', async () => {
   const { ado, http } = setup()
-  ado.on(isRepositories, () => json(200, fixture('repositories')))
-  assert.deepEqual(await codeProjects(http, ORG, 'all'), [
-    { id: PLATFORM, name: 'Fabrikam Platform' },
-    { id: PROJECT, name: 'Fabrikam Web' }
+  const [webApp, api, infra] = fixture('repositories').value
+  const tools = { ...infra, id: TOOLS, name: 'tools', sshUrl: null, isDisabled: true }
+  ado.on(isRepositories, () => json(200, { count: 4, value: [webApp, { ...api, sshUrl: undefined }, { ...infra, isInMaintenance: true }, tools] }))
+
+  assert.deepEqual(await listRepositories(http, ORG), [
+    { id: REPO, name: 'web-app', projectId: PROJECT, projectName: 'Fabrikam Web', ssh: true, disabled: false },
+    { id: api.id, name: 'api', projectId: PROJECT, projectName: 'Fabrikam Web', ssh: false, disabled: false },
+    { id: infra.id, name: 'infra', projectId: PLATFORM, projectName: 'Fabrikam Platform', ssh: true, disabled: true },
+    { id: TOOLS, name: 'tools', projectId: PLATFORM, projectName: 'Fabrikam Platform', ssh: false, disabled: true }
   ])
-  assert.equal(ado.count(isRepositories), 1)
-  assert.equal(ado.count(isProjects), 0)
-
-  const everyProject = [
-    { id: PROJECT, name: 'Fabrikam Web' },
-    { id: PLATFORM, name: 'Fabrikam Platform' },
-    { id: 'e5f6a7b8-8888-4a9b-8c0d-2e3f4a5b6c7d', name: 'Contoso Mobile' }
-  ]
-  ado.on(isProjects, () => json(200, { count: 3, value: everyProject }))
-  for (const status of [404, 400]) {
-    ado.on(isRepositories, () => json(status, { message: 'refused' }))
-    assert.deepEqual(await codeProjects(http, ORG, 'all'), [everyProject[2], everyProject[1], everyProject[0]])
-  }
-})
-
-test('codeProjects does not hide other failures behind the fallback', async () => {
-  const { ado, http } = setup()
-  ado.on(isRepositories, () => json(403, { message: 'no access' }))
-  assert.equal((await failure(codeProjects(http, ORG, 'all'))).code, 'forbidden')
-  assert.equal(ado.count(isProjects), 0)
-})
-
-test('codeProjects returns a chosen list as given without a request', async () => {
-  const { ado, http } = setup()
-  const chosen = [{ id: PROJECT, name: 'Fabrikam Web' }]
-  assert.equal(await codeProjects(http, ORG, chosen), chosen)
-  assert.equal(ado.calls.length, 0)
+  assert.deepEqual(ado.calls.map(call => `${call.method} ${call.path}`), [`GET /${ORG}/_apis/git/repositories`])
 })
 
 test('malformed responses become the fixed error', async () => {
@@ -300,7 +285,7 @@ test('malformed responses become the fixed error', async () => {
   assert(isFixedError(await failure(pullRequestWorkItems(http, ORG, key))))
 
   ado.on(isRepositories, () => json(200, { count: 1, value: [{ id: 'r', name: 'web-app' }] }))
-  assert(isFixedError(await failure(codeProjects(http, ORG, 'all'))))
+  assert(isFixedError(await failure(listRepositories(http, ORG))))
 
   for (const raw of [
     { ...mine(0), sourceRefName: undefined },

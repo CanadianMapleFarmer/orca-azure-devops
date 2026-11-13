@@ -8,7 +8,10 @@ export const FRESHNESS = {
   checksIdle: 1_800_000,
   prWorkItems: 600_000,
   prWorkItemsClosed: 3_600_000,
-  boardView: 30_000
+  boardView: 30_000,
+  itemDetails: 300_000,
+  itemComments: 120_000,
+  teamMembers: 3_600_000
 } as const
 
 export const MAX_ENTRIES = {
@@ -22,5 +25,9 @@ export const MAX_ENTRIES = {
   boardConfigs: 20,
   typeStates: 100,
   projects: 4,
-  wikis: 1
+  codeRepos: 1,
+  wikis: 1,
+  itemDetails: 50,
+  comments: 50,
+  teamMembers: 20
 } as const

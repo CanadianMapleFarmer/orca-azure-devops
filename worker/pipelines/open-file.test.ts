@@ -6,7 +6,7 @@ import type { RunSummary } from '../../src/shared/pipelines'
 import type { RunCommand, RunResult } from '../sys/run'
 import type { HostCall, WorkspaceEntry } from '../workspace/focused'
 import type { AdoRemote } from '../workspace/remotes'
-import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './open-file'
+import { adoRemotes, fileInside, gitHasHead, gitRemoteSets, gitRemotes, gitTopLevel, openRunFile, type OpenFileDeps } from './open-file'
 
 const WEB = { remote: 'origin', org: 'contoso', project: 'Fabrikam Web', repo: 'web-app' }
 const API = { remote: 'origin', org: 'contoso', project: 'Fabrikam Web', repo: 'api' }
@@ -364,19 +364,21 @@ test('with git, a focused workspace of another repository is never searched', as
   })
 })
 
-test('a remote that names no project matches a run of any project in its organization', async () => {
+test('a remote that names no project matches only the project named after its repository', async () => {
   await withTempDir(async base => {
     await write(base, 'src/Api/Program.cs')
     const web = workspace('ws-web', base, 'main')
     const { call, opened } = host([web], web)
     const noProject = { remote: 'origin', org: 'Contoso', project: '', repo: 'WEB-APP' }
-    const request = { run: runOf(), path: `${AGENT}/src/Api/Program.cs`, line: 1 }
+    const request = { run: runOf({ projectName: 'web-app' }), path: `${AGENT}/src/Api/Program.cs`, line: 1 }
 
     assert.deepEqual(await openRunFile(depsOf(call, { [base]: [noProject] }).deps, request), { opened: true, path: 'src/Api/Program.cs', line: 1 })
     assert.deepEqual(opened(), [{ workspaceId: 'ws-web', path: 'src/Api/Program.cs' }])
 
-    const otherOrg = { opened: false, message: 'Open a local workspace of web-app first.' }
-    assert.deepEqual(await openRunFile(depsOf(call, { [base]: [{ ...noProject, org: 'fabrikam' }] }).deps, request), otherOrg)
+    const missing = { opened: false, message: 'Open a local workspace of web-app first.' }
+    const otherProject = { ...request, run: runOf() }
+    assert.deepEqual(await openRunFile(depsOf(call, { [base]: [noProject] }).deps, otherProject), missing)
+    assert.deepEqual(await openRunFile(depsOf(call, { [base]: [{ ...noProject, org: 'fabrikam' }] }).deps, request), missing)
     assert.equal(opened().length, 1)
   })
 })
@@ -433,6 +435,29 @@ test('a run without an Azure Repos repository uses the focused local workspace o
     const remoteFocus = host([remote], remote)
     assert.deepEqual(await openRunFile(depsFor(remoteFocus.call), request), noFocus)
     for (const answered of [lacking, unfocused, remoteFocus]) assert.deepEqual(answered.opened(), [])
+  })
+})
+
+test('openRunFile counts a workspace on Orca\'s "local" host as local and refuses an SSH host, with or without a repository', async () => {
+  await withTempDir(async base => {
+    await write(base, 'src/app.ts')
+    const cases: [RunSummary['repository'], string][] = [
+      [runOf().repository, 'Open a local workspace of web-app first.'],
+      [null, 'Open a local workspace first.']
+    ]
+    for (const [repository, message] of cases) {
+      const request = { run: runOf({ repository }), path: `${AGENT}/src/app.ts`, line: 1 }
+      for (const hostId of [null, 'local']) {
+        const web = workspace('ws-web', base, 'main', hostId)
+        const h = host([web], web)
+        assert.deepEqual(await openRunFile(depsOf(h.call, { [base]: [WEB] }).deps, request), { opened: true, path: 'src/app.ts', line: 1 }, String(hostId))
+        assert.deepEqual(h.opened(), [{ workspaceId: 'ws-web', path: 'src/app.ts' }])
+      }
+      const ssh = workspace('ws-web', base, 'main', 'ssh-1')
+      const remote = host([ssh], ssh)
+      assert.deepEqual(await openRunFile(depsOf(remote.call, { [base]: [WEB] }).deps, request), { opened: false, message })
+      assert.deepEqual(remote.opened(), [])
+    }
   })
 })
 
@@ -509,4 +534,66 @@ test('gitRemotes gives no remotes without git or outside a repository, and lets 
   await assert.rejects(flaky('/slow'), /git timed out after 5000ms/)
   await assert.rejects(flaky('/slow'), /git timed out after 5000ms/)
   assert.equal(failing.calls.length, 2, 'a failure is not cached')
+})
+
+const GITHUB = { remote: 'github', key: 'git:github.com/contoso/web-app', name: 'web-app', host: 'github.com' }
+
+test('gitRemoteSets runs git once per folder per 10 minutes, and fresh reads again', async () => {
+  const git = fakeGit({ '/a': { code: 0, stdout: REMOTE_V, stderr: '' }, '/b': { code: 0, stdout: 'origin\tgit@github.com:contoso/web-app.git (fetch)\n', stderr: '' } })
+  let now = 1_000
+  const sets = gitRemoteSets(git.run, '/usr/bin/git', () => now)
+  const remotes = adoRemotes(sets)
+  assert.deepEqual(await sets('/a'), { ado: [WEB], other: GITHUB })
+  assert.deepEqual(await remotes('/a'), [WEB])
+  assert.deepEqual(await sets('/b'), { ado: [], other: { ...GITHUB, remote: 'origin' } })
+  assert.deepEqual(git.calls, [
+    { file: '/usr/bin/git', args: ['-C', '/a', 'remote', '-v'], opts: { timeoutMs: 5_000 } },
+    { file: '/usr/bin/git', args: ['-C', '/b', 'remote', '-v'], opts: { timeoutMs: 5_000 } }
+  ])
+
+  now += 10 * MINUTE - 1
+  assert.deepEqual(await sets('/a'), { ado: [WEB], other: GITHUB })
+  assert.equal(git.calls.length, 2, 'still fresh')
+  assert.deepEqual(await sets('/a', { fresh: true }), { ado: [WEB], other: GITHUB })
+  assert.equal(git.calls.length, 3, 'fresh reads again')
+  now += 1
+  await sets('/a')
+  assert.equal(git.calls.length, 3, 'the fresh read restarted the ten minutes')
+  await sets('/b')
+  assert.deepEqual(git.calls.map(call => call.args[1]), ['/a', '/b', '/a', '/b'])
+
+  const unused = fakeGit({})
+  assert.deepEqual(await gitRemoteSets(unused.run, null, Date.now)('/a'), { ado: [], other: null })
+  assert.deepEqual(await gitRemoteSets(unused.run, null, Date.now)('/a', { fresh: true }), { ado: [], other: null })
+  assert.deepEqual(unused.calls, [])
+
+  const failing = fakeGit({ '/slow': new Error('git timed out after 5000ms') })
+  const flaky = gitRemoteSets(failing.run, '/usr/bin/git', () => 0)
+  await assert.rejects(flaky('/slow'), /git timed out after 5000ms/)
+  await assert.rejects(flaky('/slow'), /git timed out after 5000ms/)
+  assert.equal(failing.calls.length, 2, 'a failure is not cached')
+})
+
+test("gitTopLevel answers git's toplevel, and gitHasHead whether HEAD resolves; both answer no when git fails or isn't found", async () => {
+  const git = fakeGit({
+    '/repos/web-app': { code: 0, stdout: '/private/repos/web-app\n', stderr: '' },
+    '/slow': new Error('git timed out after 5000ms')
+  })
+  const topLevel = gitTopLevel(git.run, '/usr/bin/git')
+  const hasHead = gitHasHead(git.run, '/usr/bin/git')
+  assert.equal(await topLevel('/repos/web-app'), '/private/repos/web-app')
+  assert.equal(await hasHead('/repos/web-app'), true)
+  assert.deepEqual(git.calls, [
+    { file: '/usr/bin/git', args: ['-C', '/repos/web-app', 'rev-parse', '--show-toplevel'], opts: { timeoutMs: 5_000 } },
+    { file: '/usr/bin/git', args: ['-C', '/repos/web-app', 'rev-parse', '--verify', '--quiet', 'HEAD'], opts: { timeoutMs: 5_000 } }
+  ])
+  for (const folder of ['/folder', '/slow']) {
+    assert.equal(await topLevel(folder), null, folder)
+    assert.equal(await hasHead(folder), false, folder)
+  }
+
+  const unused = fakeGit({})
+  assert.equal(await gitTopLevel(unused.run, null)('/repos/web-app'), null)
+  assert.equal(await gitHasHead(unused.run, null)('/repos/web-app'), false)
+  assert.deepEqual(unused.calls, [])
 })

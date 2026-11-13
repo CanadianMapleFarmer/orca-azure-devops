@@ -1,7 +1,9 @@
 import { assert, test } from 'orca/testing'
 import type { OrgStatus, PinnedAccount } from '../../src/shared/types'
-import { NO_FAMILIES, type TaskList, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
-import { loadBoardConfig } from '../ado/board-config'
+import { NO_FAMILIES, type Assignee, type BoardConfig, type TaskList, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
+import { assignPatch } from '../ado/assign'
+import { boardConfigKey, loadBoardConfig } from '../ado/board-config'
+import { createTaskPatch } from '../ado/create-task'
 import { AdoError, createAdoHttp } from '../ado/http'
 import { CHILD_LINK, TASK_FIELDS, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
@@ -2423,4 +2425,685 @@ test('a cold start of a board with 400 linked PRs costs under 15 requests when P
   assert.deepEqual(new Set(live.items.flatMap(entry => entry.prs.map(chip => chip.state))), new Set(['merged', 'open']))
   assert.equal(h.ado.count(isPullRequest), 0)
   assert.ok(h.ado.calls.length < 15, `${h.ado.calls.length} requests: ${h.ado.calls.map(call => call.path).join(', ')}`)
+})
+
+const GONE = "That work item no longer exists, or you can't see it."
+const isHydrateOf = (id: number) => (call: AdoCall) => isHydrate(call) && call.body.ids.includes(id)
+const isCommentsGet = (id: number) => (call: AdoCall) => call.method === 'GET' && call.path.endsWith(`/workItems/${id}/comments`)
+const isPrRead = (call: AdoCall) => call.path.includes('/_apis/git/pullrequests')
+const isPolicyRead = (call: AdoCall) => call.path.endsWith('/_apis/policy/evaluations')
+
+function childTask(id: number, state: string): RawWorkItem {
+  return {
+    id,
+    rev: 1,
+    url: `${ORG_URL}/${PROJECT}/_apis/wit/workItems/${id}`,
+    fields: {
+      'System.TeamProject': 'Fabrikam Web',
+      'System.WorkItemType': 'Task',
+      'System.Title': `Task ${id}`,
+      'System.State': state,
+      'System.Parent': 1204,
+      'System.ChangedDate': '2026-11-02T10:00:00Z'
+    }
+  }
+}
+
+async function openedBoard(h: ReturnType<typeof harness>, options: { hidden?: boolean } = {}): Promise<BoardResult> {
+  boardIds(h, [1204, 1205])
+  addChildren(h.ado, 1204, [childTask(5001, 'Active'), childTask(5002, 'Closed'), childTask(5003, 'Removed')])
+  const view = await h.service.board({ ...STORIES_BOARD, everyone: true })
+  if (options.hidden !== false) h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  return view
+}
+
+function detailReads(h: ReturnType<typeof harness>, id = 1204): number[] {
+  return [h.ado.count(isHydrateOf(id)), h.ado.count(isFieldsBatch), h.ado.count(isCommentsGet(id))]
+}
+
+function plus(counts: number[], added: number[]): number[] {
+  return counts.map((count, index) => count + added[index])
+}
+
+test('opening an item reads it, its linked items and its comments: 3 requests', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const calls = h.ado.calls.length
+
+  const details = await h.service.details(ORG, 1204)
+  const sent = h.ado.calls.slice(calls)
+  const count = (match: (call: AdoCall) => boolean) => sent.filter(match).length
+  assert.deepEqual([count(isHydrateOf(1204)), count(isFieldsBatch), count(isCommentsGet(1204))], [1, 1, 1])
+  assert.ok(count(isTypeStates('Task')) <= 1)
+  assert.deepEqual([count(isPrRead), count(isPolicyRead)], [0, 0])
+  assert.deepEqual(sent.find(isFieldsBatch)?.body.ids, [1100, 5001, 5002, 5003])
+  assert.deepEqual(details.links.map(link => [link.kind, link.title]), [
+    ['parent', 'Vehicle search'],
+    ['child', 'Task 5001'],
+    ['child', 'Task 5002'],
+    ['child', 'Task 5003'],
+    ['pr', 'Pull request 321 (merged)']
+  ])
+  assert.equal(details.readAt, h.clock.now())
+})
+
+test('reopening within 2 minutes costs nothing', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const first = await h.service.details(ORG, 1204)
+  const reads = detailReads(h)
+
+  await h.clock.tick(MINUTE)
+  const again = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), reads)
+  assert.equal(again.readAt, first.readAt)
+  assert.deepEqual(again, first)
+})
+
+test('reopening after 2 minutes reads only the comments', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const first = await h.service.details(ORG, 1204)
+  const reads = detailReads(h)
+
+  await h.clock.tick(2 * MINUTE)
+  const again = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), plus(reads, [0, 0, 1]))
+  assert.equal(again.readAt, first.readAt)
+})
+
+test('reopening after 5 minutes reads it all again', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const reads = detailReads(h)
+
+  await h.clock.tick(5 * MINUTE)
+  const again = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), plus(reads, [1, 1, 1]))
+  assert.equal(again.readAt, h.clock.now())
+})
+
+test('a newer rev in the store makes the next open read the item again', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await openedBoard(h, { hidden: false })
+  await h.service.details(ORG, 1204)
+  h.ado.change(1204, { fields: { 'System.Title': 'Add vehicle search filters v2' } })
+
+  await h.clock.tick(30_000)
+  assert.equal(h.entities.of(ORG).workItems.get('1204')?.value.rev, 10, "the board's delta tick stored the new rev")
+  const hydrates = h.ado.count(isHydrateOf(1204))
+  const details = await h.service.details(ORG, 1204)
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1)
+  assert.deepEqual([details.item.rev, details.item.title], [10, 'Add vehicle search filters v2'])
+})
+
+test('fresh reads everything again at once', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const reads = detailReads(h)
+
+  await h.service.details(ORG, 1204, { fresh: true })
+  assert.deepEqual(detailReads(h), plus(reads, [1, 1, 1]))
+})
+
+test('the sidebar and the board share one read', async () => {
+  const h = harness()
+  const view = await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const reads = detailReads(h)
+
+  const onBoard = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual(onBoard.item.targets.columns, view.items.find(entry => entry.id === 1204)?.targets.columns)
+})
+
+test("the item uses the requested board's config when the board doesn't hold it", async () => {
+  const h = harness()
+  const view = await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  h.setOrgs([])
+  h.setOrgs([status()])
+  assert.equal(h.service.cachedItem(ORG, 1204), null, 'no board view holds the item')
+  const reads = detailReads(h)
+
+  const details = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(detailReads(h), reads)
+  const card = view.items.find(entry => entry.id === 1204)
+  assert.deepEqual(details.item.targets.columns, card?.targets.columns)
+  assert.deepEqual([details.item.rev, details.item.parentTitle, details.item.prs], [card?.rev, card?.parentTitle, card?.prs])
+})
+
+test("details list the item's tasks with their done and open states", async () => {
+  const h = harness()
+  await openedBoard(h)
+  const details = await h.service.details(ORG, 1204)
+  const row = (id: number, state: string, done: boolean) => ({
+    id,
+    rev: 1,
+    type: 'Task',
+    title: `Task ${id}`,
+    state,
+    done,
+    assignedTo: null,
+    doneState: 'Closed',
+    openState: 'Active',
+    url: `${ORG_URL}/Fabrikam%20Web/_workitems/edit/${id}`
+  })
+  assert.deepEqual(details.tasks, [row(5001, 'Active', false), row(5002, 'Closed', true)])
+  assert.deepEqual([details.moreTasks, details.tasksRead], [0, true])
+})
+
+test('details name the task types of the board and the type a new task gets', async () => {
+  const h = harness()
+  const story = await h.service.details(ORG, 1204)
+  assert.deepEqual([story.taskTypes, story.taskType], [['Task'], 'Task'])
+  const task = await h.service.details(ORG, 1207)
+  assert.deepEqual([task.taskTypes, task.taskType], [['Task'], null])
+})
+
+test('details give each linked pull request its title, target and checks from the store', async () => {
+  const h = harness()
+  linkPullRequests(h, 1204, { 402: { status: 'active', target: 'dev' } })
+  await openedBoard(h)
+  const checks = h.entities.of(ORG).prChecks.get(`${PROJECT}/${REPO}/402`)?.value
+  assert.ok(checks, 'the board read the checks')
+  const calls = h.ado.calls.length
+
+  const details = await h.service.details(ORG, 1204)
+  assert.deepEqual(
+    details.prs.map(pr => [pr.prId, pr.title, pr.target, pr.state, pr.build, pr.policies]),
+    [
+      [402, 'Fix pagination offset', 'dev', 'open', checks.build, checks.policies],
+      [321, 'Add vehicle search filters', 'release/2026.11', 'merged', 'none', null]
+    ]
+  )
+  assert.deepEqual(details.prs.map(pr => pr.url), [402, 321].map(prId => details.item.prs.find(chip => chip.prId === prId)?.url))
+  assert.deepEqual(h.ado.calls.slice(calls).filter(call => isPrRead(call) || isPolicyRead(call)), [])
+})
+
+test("a failed linked read answers without task rows and isn't served as fresh", async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.on(isFieldsBatch, () => json(500, { message: 'TF246017: Azure DevOps Services is unavailable.' }))
+
+  const failed = await h.service.details(ORG, 1204)
+  assert.deepEqual([failed.tasks, failed.moreTasks, failed.tasksRead], [[], 0, false])
+  assert.deepEqual(failed.links.map(link => link.title).slice(0, 4), ['#1100', '#5001', '#5002', '#5003'])
+  assert.equal(failed.readAt, h.clock.now())
+  const hydrates = h.ado.count(isHydrateOf(1204))
+
+  await h.service.details(ORG, 1204)
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1)
+})
+
+test('a failed type-states read does the same', async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.on(isTypeStates('Task'), () => json(500, { message: 'TF246017: Azure DevOps Services is unavailable.' }))
+
+  const failed = await h.service.details(ORG, 1204)
+  assert.deepEqual([failed.tasks, failed.moreTasks, failed.tasksRead], [[], 0, false])
+  assert.equal(failed.links[1].title, 'Task 5001')
+  const hydrates = h.ado.count(isHydrateOf(1204))
+
+  await h.service.details(ORG, 1204)
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1)
+})
+
+test('a throttled linked read fails the details', async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.on(isFieldsBatch, () => json(429, { message: 'slow down' }, { 'retry-after': '60' }))
+  const error = await rejection(h.service.details(ORG, 1204))
+  assert.equal(error.code, 'rate_limited')
+  assert.equal(h.entities.of(ORG).itemDetails.get('1204'), undefined)
+})
+
+test('a comment joins the cached comments, so the next open sends no comments read', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const added = await h.service.comment(ORG, 1204, 'Ready for review')
+  const gets = h.ado.count(isCommentsGet(1204))
+
+  const details = await h.service.details(ORG, 1204)
+  assert.equal(h.ado.count(isCommentsGet(1204)), gets)
+  assert.deepEqual(details.comments, [added])
+})
+
+test('a comment or a move keeps the cached description and acceptance criteria', async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.change(1204, { fields: { 'System.Description': '<p>Filter by <b>make</b>.</p>', 'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>Filters persist</li></ul>' } })
+  const opened = await h.service.details(ORG, 1204)
+  assert.deepEqual([opened.descriptionMd, opened.acceptanceMd], ['Filter by **make**.', '- Filters persist'])
+
+  await h.service.comment(ORG, 1204, 'Ready for review')
+  let reads = detailReads(h)
+  const commented = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual([commented.descriptionMd, commented.acceptanceMd], ['Filter by **make**.', '- Filters persist'])
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: commented.item.rev, to: { column: 'Resolved' } })
+  reads = detailReads(h)
+  const after = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual([after.descriptionMd, after.acceptanceMd, after.item.rev, after.item.column], ['Filter by **make**.', '- Filters persist', moved.rev, 'Resolved'])
+})
+
+test('a linked pull request drops the cached entry', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  await h.service.linkPr({ org: ORG, id: 1204, rev: 9, prUrl: PR_322 })
+  assert.equal(h.entities.of(ORG).itemDetails.get('1204'), undefined)
+  const hydrates = h.ado.count(isHydrateOf(1204))
+
+  const details = await h.service.details(ORG, 1204)
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1)
+  assert.deepEqual(details.prs.map(pr => pr.prId), [322, 321])
+})
+
+test("a slow read can't overwrite a newer write", async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const hydrates = h.ado.count(isHydrateOf(1204))
+  const held = h.ado.hold(isHydrateOf(1204))
+  const slow = h.service.details(ORG, 1204, { fresh: true })
+  await drain()
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1, 'the fresh read is held')
+
+  const moved = await h.service.move({ org: ORG, id: 1204, rev: 9, to: { column: 'Resolved' } })
+  held.release()
+  const details = await slow
+  assert.deepEqual([details.item.rev, details.item.column], [moved.rev, 'Resolved'])
+  assert.equal(h.entities.of(ORG).itemDetails.get('1204')?.value.rev, moved.rev)
+})
+
+test("a comment posted while a comments read runs isn't erased when that read lands", async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const gets = h.ado.count(isCommentsGet(1204))
+  const held = h.ado.hold(isCommentsGet(1204))
+  const slow = h.service.details(ORG, 1204, { fresh: true })
+  await drain()
+  assert.equal(h.ado.count(isCommentsGet(1204)), gets + 1, 'the comments read is held')
+
+  const added = await h.service.comment(ORG, 1204, 'Ready for review')
+  held.release()
+  assert.deepEqual((await slow).comments, [added])
+  const reads = detailReads(h)
+  const again = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual(again.comments, [added])
+  assert.deepEqual(h.entities.of(ORG).comments.get('1204')?.value, [added])
+})
+
+test('a comment posted after the comments read landed is in that details answer', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const held = h.ado.hold(isHydrateOf(1204))
+  const slow = h.service.details(ORG, 1204, { fresh: true })
+  await drain()
+  const posting = h.service.comment(ORG, 1204, 'Ready for review')
+  await drain()
+  held.release()
+  const [details, added] = await Promise.all([slow, posting])
+  assert.deepEqual(details.comments, [added])
+})
+
+test("a newest comment deleted in Azure DevOps goes on Refresh when you didn't post it here", async () => {
+  const h = harness()
+  await openedBoard(h)
+  const raw = (id: number) => ({ id, text: `<p>Comment ${id}</p>`, createdBy: { displayName: 'Grace Hopper' }, createdDate: '2026-11-04T09:00:00Z' })
+  let listed = [raw(12), raw(11)]
+  h.ado.on(isCommentsGet(1204), () => json(200, { totalCount: listed.length, comments: listed }))
+  assert.deepEqual((await h.service.details(ORG, 1204)).comments.map(entry => entry.id), [12, 11])
+
+  listed = [raw(11)]
+  assert.deepEqual((await h.service.details(ORG, 1204, { fresh: true })).comments.map(entry => entry.id), [11])
+  assert.deepEqual(h.entities.of(ORG).comments.get('1204')?.value.map(entry => entry.id), [11])
+})
+
+test('a comment you posted is kept through reads that lack it for 2 minutes, then goes', async () => {
+  const h = harness()
+  await openedBoard(h)
+  await h.service.details(ORG, 1204)
+  const added = await h.service.comment(ORG, 1204, 'Ready for review')
+  assert.deepEqual((await h.service.details(ORG, 1204, { fresh: true })).comments, [added])
+
+  await h.clock.tick(2 * MINUTE - 1)
+  assert.deepEqual((await h.service.details(ORG, 1204, { fresh: true })).comments, [added])
+  await h.clock.tick(1)
+  assert.deepEqual((await h.service.details(ORG, 1204, { fresh: true })).comments, [])
+  assert.deepEqual(h.entities.of(ORG).comments.get('1204')?.value, [])
+})
+
+test('the start flow reads details without comments', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const details = await h.service.details(ORG, 1204, { comments: false })
+  assert.equal(h.ado.count(isCommentsGet(1204)), 0)
+  assert.deepEqual(details.comments, [])
+  assert.equal(details.descriptionMd, '')
+})
+
+test('a gone item answers GONE and is not cached', async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.remove(1205)
+  const error = await rejection(h.service.details(ORG, 1205))
+  assert.deepEqual([error.code, error.message], ['not_found', GONE])
+  assert.equal(h.entities.of(ORG).itemDetails.get('1205'), undefined)
+  const hydrates = h.ado.count(isHydrateOf(1205))
+
+  await rejection(h.service.details(ORG, 1205))
+  assert.equal(h.ado.count(isHydrateOf(1205)), hydrates + 1)
+})
+
+const GRACE: Assignee = { displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example' }
+const isMembersGet = (call: AdoCall) => call.method === 'GET' && call.path === `/${ORG}/_apis/projects/${PROJECT}/teams/${TEAM}/members`
+
+test('assigning patches System.AssignedTo after the rev test and publishes the item', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const counts = () => [h.ado.count(isPatch), h.ado.count(isHydrateOf(1204))]
+  const before = counts()
+  const posts = h.boardPosts.length
+
+  const assigned = await h.service.assign({ org: ORG, id: 1204, rev: 9, to: GRACE, board: STORIES_REF })
+  assert.deepEqual(h.ado.calls.filter(isPatch).at(-1)?.body, assignPatch(9, GRACE))
+  assert.deepEqual(counts(), plus(before, [1, 1]))
+  assert.deepEqual([assigned.rev, assigned.assignedTo], [10, 'Grace Hopper'])
+  assert.deepEqual(h.boardPosts.slice(posts), [{ org: ORG, teamId: TEAM, boardId: STORIES }])
+  const card = (await h.service.board({ ...STORIES_BOARD, everyone: true })).items.find(entry => entry.id === 1204)
+  assert.deepEqual(card, assigned)
+})
+
+test('unassigning sends an empty value', async () => {
+  const h = harness()
+  await openedBoard(h)
+  const unassigned = await h.service.assign({ org: ORG, id: 1204, rev: 9, to: null })
+  assert.deepEqual(h.ado.calls.filter(isPatch).at(-1)?.body, assignPatch(9, null))
+  assert.equal(unassigned.assignedTo, null)
+  assert.equal(h.ado.items.get(1204)?.fields['System.AssignedTo'], undefined)
+})
+
+test('a stale rev refreshes the item and answers CONFLICT', async () => {
+  const h = harness()
+  await openedBoard(h)
+  h.ado.change(1204)
+  const hydrates = h.ado.count(isHydrateOf(1204))
+
+  const error = await rejection(h.service.assign({ org: ORG, id: 1204, rev: 9, to: GRACE }))
+  assert.deepEqual([error.code, error.message], ['conflict', CONFLICT])
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1)
+  assert.deepEqual(h.ado.items.get(1204)?.fields['System.AssignedTo'], ALEX_IDENTITY)
+  const card = (await h.service.board({ ...STORIES_BOARD, everyone: true })).items.find(entry => entry.id === 1204)
+  assert.deepEqual([card?.rev, card?.assignedTo], [10, 'Alex Contoso'])
+})
+
+test('an assignment survives a board tick that reads the older rev', async () => {
+  const h = harness()
+  h.setOrgs([status()])
+  await openedBoard(h, { hidden: false })
+  const before = structuredClone(h.ado.items.get(1204)!)
+  const assigned = await h.service.assign({ org: ORG, id: 1204, rev: 9, to: GRACE, board: STORIES_REF })
+
+  let lagging = 0
+  h.ado.on(isHydrateOf(1204), () => {
+    lagging += 1
+    return json(200, { count: 1, value: [before] })
+  })
+  await h.clock.tick(30_000)
+  assert.ok(lagging > 0, 'the board tick read 1204 from a lagging replica')
+  const card = (await h.service.board({ ...STORIES_BOARD, everyone: true })).items.find(entry => entry.id === 1204)
+  assert.deepEqual([card?.rev, card?.assignedTo], [assigned.rev, 'Grace Hopper'])
+})
+
+test("assigning refreshes the cached details' assignee", async () => {
+  const h = harness()
+  await openedBoard(h)
+  const opened = await h.service.details(ORG, 1204)
+  assert.deepEqual(opened.assignee, { displayName: 'Alex Contoso', uniqueName: 'alex@contoso.example' })
+  const assigned = await h.service.assign({ org: ORG, id: 1204, rev: opened.item.rev, to: GRACE })
+  const reads = detailReads(h)
+
+  const details = await h.service.details(ORG, 1204)
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual([details.assignee, details.item.rev, details.item.assignedTo], [GRACE, assigned.rev, 'Grace Hopper'])
+})
+
+test('assignees read the team once an hour and name the signed-in account', async () => {
+  const h = harness(status({ account: ALEX }))
+  const team = { org: ORG, projectId: PROJECT, teamId: TEAM }
+  const first = await h.service.assignees(team)
+  assert.deepEqual(await h.service.assignees(team), first)
+  assert.equal(h.ado.count(isMembersGet), 1)
+  assert.deepEqual(first.me, { displayName: 'Alex Contoso', uniqueName: 'alex@contoso.example' })
+  assert.deepEqual(first.members.map(member => member.displayName), ['Alex Contoso', 'Barbara Liskov', 'Dennis Ritchie', 'Grace Hopper'])
+
+  await h.clock.tick(61 * MINUTE)
+  await h.service.assignees(team)
+  assert.equal(h.ado.count(isMembersGet), 2)
+
+  const signedOut = harness()
+  assert.equal((await signedOut.service.assignees(team)).me, null)
+})
+
+const NO_TASK_TYPE = "This team's board has no task type, so tasks can't be added here."
+const EMPTY_TASK_TITLE = 'Write a title for the task first.'
+const SPRINT = 'Fabrikam Web\\Sprint 12'
+const FEATURES_REF = { teamId: TEAM, boardId: FEATURES }
+const isCreate = (call: AdoCall) => call.method === 'POST' && /\/_apis\/wit\/workitems\/\$[^/]+$/.test(call.path)
+const isPathsRead = (call: AdoCall) => isFieldsBatch(call) && call.body.fields.includes('System.IterationPath')
+const readsOf = (id: number) => (call: AdoCall) => isBatch(call) && call.body.ids.includes(id)
+
+async function taskBoard(h: ReturnType<typeof harness>): Promise<void> {
+  boardIds(h, [1204, 1205])
+  addChildren(h.ado, 1204, [childTask(5001, 'Active')])
+  await h.service.board({ ...STORIES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: STORIES_REF })
+  h.ado.change(1204, { fields: { 'System.IterationPath': SPRINT } })
+}
+
+async function storiesConfigWithoutTaskTypes(): Promise<BoardConfig> {
+  const ado = fakeAdo()
+  const http = createAdoHttp({ fetch: ado.fetch, authHeader: async () => 'Bearer test-credential', sleep: async () => {} })
+  const { taskTypes, ...config } = await loadBoardConfig(http, STORIES_BOARD)
+  assert.deepEqual(taskTypes, ['Task'])
+  return config
+}
+
+test('ticking a task patches it to its done state with no read first', async () => {
+  const h = harness()
+  await taskBoard(h)
+  const opened = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(opened.tasks.map(row => [row.id, row.rev, row.done, row.doneState]), [[5001, 1, false, 'Closed']])
+  const calls = h.ado.calls.length
+
+  const moved = await h.service.move({ org: ORG, id: 5001, rev: 1, to: { state: 'Closed' }, board: STORIES_REF })
+  const sent = h.ado.calls.slice(calls)
+  assert.deepEqual(sent.filter(isPatch).map(call => call.body), [[
+    { op: 'test', path: '/rev', value: 1 },
+    { op: 'replace', path: '/fields/System.State', value: 'Closed' }
+  ]])
+  assert.equal(sent.filter(isHydrateOf(5001)).length, 1)
+  assert.ok(sent.findIndex(readsOf(5001)) > sent.findIndex(isPatch), 'nothing reads 5001 before the PATCH')
+  assert.deepEqual([moved.id, moved.rev, moved.state], [5001, 2, 'Closed'])
+
+  const reads = detailReads(h)
+  const after = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual(after.tasks.map(row => [row.id, row.rev, row.state, row.done]), [[5001, 2, 'Closed', true]])
+})
+
+test('a details answer that lands after a tick keeps the ticked row', async () => {
+  const h = harness()
+  await taskBoard(h)
+  await h.service.details(ORG, 1204, { board: STORIES_REF })
+  const hydrates = h.ado.count(isHydrateOf(1204))
+  const held = h.ado.hold(isCommentsGet(1204))
+  const slow = h.service.details(ORG, 1204, { board: STORIES_REF, fresh: true })
+  await drain()
+  assert.equal(h.ado.count(isHydrateOf(1204)), hydrates + 1, 'the item was read, and its comments are held')
+
+  const moved = await h.service.move({ org: ORG, id: 5001, rev: 1, to: { state: 'Closed' }, board: STORIES_REF })
+  held.release()
+  const details = await slow
+  assert.deepEqual(details.tasks.map(row => [row.id, row.rev, row.state, row.done]), [[5001, moved.rev, 'Closed', true]])
+})
+
+test('a task changed by someone else answers CONFLICT and its row is refreshed', async () => {
+  const h = harness()
+  await taskBoard(h)
+  await h.service.details(ORG, 1204, { board: STORIES_REF })
+  h.ado.change(5001, { fields: { 'System.Title': 'Write the filter tests first' } })
+
+  const error = await rejection(h.service.move({ org: ORG, id: 5001, rev: 1, to: { state: 'Closed' }, board: STORIES_REF }))
+  assert.deepEqual([error.code, error.message], ['conflict', CONFLICT])
+  assert.equal(h.ado.items.get(5001)?.fields['System.State'], 'Active')
+
+  const reads = detailReads(h)
+  const after = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual(after.tasks.map(row => [row.id, row.rev, row.title, row.done]), [[5001, 2, 'Write the filter tests first', false]])
+})
+
+test("adding a task creates it under the parent with the parent's area and iteration", async () => {
+  const h = harness()
+  await taskBoard(h)
+  const opened = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  const parentUrl = h.entities.of(ORG).workItems.get('1204')?.value.url ?? assert.fail('the store holds 1204')
+  const calls = h.ado.calls.length
+
+  const { task, parent } = await h.service.addTask({ org: ORG, parentId: 1204, title: 'Write the filter docs', board: STORIES_REF })
+  const sent = h.ado.calls.slice(calls)
+  const count = (match: (call: AdoCall) => boolean) => sent.filter(match).length
+  const [post] = sent.filter(isCreate)
+  assert.ok(post.path.endsWith('/_apis/wit/workitems/$Task'), post.path)
+  assert.deepEqual(post.body, createTaskPatch({ title: 'Write the filter docs', areaPath: 'Fabrikam Web\\Platform', iterationPath: SPRINT, parentUrl }))
+  const { title, done, doneState, openState } = task
+  assert.deepEqual({ title, done, doneState, openState }, { title: 'Write the filter docs', done: false, doneState: 'Closed', openState: 'Active' })
+  assert.deepEqual([task.id, task.type, task.url], [6001, 'Task', `${ORG_URL}/Fabrikam%20Web/_workitems/edit/6001`])
+  assert.ok(parent.rev > opened.item.rev, `the parent's rev moved on from ${opened.item.rev} to ${parent.rev}`)
+  assert.deepEqual([parent.id, parent.rev], [1204, h.ado.items.get(1204)?.rev])
+  assert.deepEqual([count(isCreate), count(isHydrateOf(1204)), count(isPathsRead)], [1, 1, 0])
+  assert.ok(count(isTypeStates('Task')) <= 1)
+})
+
+test("adding a task reads the parent's paths first only when the store lacks them", async () => {
+  const h = harness()
+  await taskBoard(h)
+  assert.equal(h.entities.of(ORG).workItems.get('1204')?.value.fields['System.IterationPath'], undefined, 'the store holds 1204 from before its iteration was set')
+
+  await h.service.addTask({ org: ORG, parentId: 1204, title: 'Write the filter docs', board: STORIES_REF })
+  assert.equal(h.ado.count(isPathsRead), 1)
+  assert.deepEqual(h.ado.calls.find(isPathsRead)?.body.ids, [1204])
+  assert.ok(h.ado.calls.findIndex(isPathsRead) < h.ado.calls.findIndex(isCreate))
+  assert.equal(h.ado.calls.find(isCreate)?.body[2].value, SPRINT)
+
+  await h.service.addTask({ org: ORG, parentId: 1204, title: 'Review the filter docs', board: STORIES_REF })
+  assert.equal(h.ado.count(isPathsRead), 1)
+  assert.equal(h.ado.calls.filter(isCreate)[1].body[2].value, SPRINT)
+})
+
+test('adding a task to a parent that no longer exists answers GONE', async () => {
+  const h = harness()
+  await taskBoard(h)
+  h.ado.remove(1204)
+  const error = await rejection(h.service.addTask({ org: ORG, parentId: 1204, title: 'Write the filter docs', board: STORIES_REF }))
+  assert.deepEqual([error.code, error.message], ['not_found', GONE])
+  assert.equal(h.ado.count(isCreate), 0)
+})
+
+test('the new task shows in the cached details without another read', async () => {
+  const h = harness()
+  await taskBoard(h)
+  await h.service.details(ORG, 1204, { board: STORIES_REF })
+  const { task, parent } = await h.service.addTask({ org: ORG, parentId: 1204, title: 'Write the filter docs', board: STORIES_REF })
+  const reads = detailReads(h)
+
+  const details = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual(detailReads(h), reads)
+  assert.deepEqual(details.tasks.map(row => row.id), [5001, task.id])
+  assert.deepEqual(details.tasks[1], task)
+  assert.deepEqual(details.links.filter(link => link.kind === 'child').map(link => link.title), ['Task 5001', 'Write the filter docs'])
+  assert.equal(details.item.rev, parent.rev)
+})
+
+test('a Features board has no task type, so its items list children read-only', async () => {
+  const h = harness()
+  boardIds(h, [1204, 1205])
+  addChildren(h.ado, 1100, [story(5101, T0, 'Saved searches')])
+  await h.service.board({ ...FEATURES_BOARD, everyone: true })
+  h.service.visibility({ surface: 'board', org: ORG, visible: false, board: FEATURES_REF })
+
+  const details = await h.service.details(ORG, 1100, { board: FEATURES_REF })
+  assert.deepEqual([details.taskTypes, details.taskType], [[], null])
+  assert.deepEqual(details.tasks.map(row => [row.id, row.type]), [[5101, 'User Story']])
+  const error = await rejection(h.service.addTask({ org: ORG, parentId: 1100, title: 'Write the filter docs', board: FEATURES_REF }))
+  assert.deepEqual([error.code, error.message], ['bad_request', NO_TASK_TYPE])
+  assert.equal(h.ado.count(isCreate), 0)
+})
+
+test("a task can't be added under an item that isn't one of the board's types", async () => {
+  const h = harness()
+  await taskBoard(h)
+  const error = await rejection(h.service.addTask({ org: ORG, parentId: 1207, title: 'Write the filter docs', board: STORIES_REF }))
+  assert.deepEqual([error.code, error.message], ['bad_request', NO_TASK_TYPE])
+  assert.equal(h.ado.count(isCreate), 0)
+})
+
+test('a blank title is refused with no request', async () => {
+  const h = harness()
+  for (const title of ['', '   ']) {
+    const error = await rejection(h.service.addTask({ org: ORG, parentId: 1204, title, board: STORIES_REF }))
+    assert.deepEqual([error.code, error.message], ['bad_request', EMPTY_TASK_TITLE])
+  }
+  assert.equal(h.ado.calls.length, 0)
+})
+
+test('a saved config without task types is refreshed once', async () => {
+  const saved = await storiesConfigWithoutTaskTypes()
+  const h = harness()
+  h.entities.of(ORG).boardConfigs.put(boardConfigKey(STORIES_BOARD), saved)
+
+  const first = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.equal(h.ado.count(isBacklogConfig), 1)
+  assert.deepEqual([first.taskTypes, first.taskType], [['Task'], 'Task'])
+
+  const failing = harness()
+  failing.entities.of(ORG).boardConfigs.put(boardConfigKey(STORIES_BOARD), saved)
+  failing.ado.on(isBacklogConfig, () => json(500, { message: 'TF246017: Azure DevOps Services is unavailable.' }))
+  const unread = await failing.service.details(ORG, 1204, { board: STORIES_REF })
+  await failing.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.equal(failing.ado.count(isBacklogConfig), 1, 'a backlog that fails is not read again on every call')
+  assert.deepEqual([unread.taskTypes, unread.taskType], [[], null])
+})
+
+test("a restored board view's config without task types isn't used for details", async () => {
+  const { cache } = await savedBoard()
+  const saved = cache[cacheKey(ORG, `board:${TEAM}:${STORIES}`)] as { value: { result: { board: BoardConfig } } }
+  assert.deepEqual(saved.value.result.board.taskTypes, ['Task'])
+  delete saved.value.result.board.taskTypes
+  const h = harness(status({ account: ALEX }), { cache, at: T0 + 30 * MINUTE })
+  h.setOrgs([status({ account: ALEX })])
+  boardIds(h, [1204, 1205])
+  const revalidation = h.ado.hold(isStoriesWiql)
+
+  const painted = await h.service.board(STORIES_BOARD)
+  assert.deepEqual([painted.stale, painted.board.taskTypes], [true, undefined])
+  const details = await h.service.details(ORG, 1204, { board: STORIES_REF })
+  assert.deepEqual([details.taskTypes, details.taskType], [['Task'], 'Task'])
+  assert.equal(h.ado.count(isBacklogConfig), 0, 'the saved config already names the task types')
+  revalidation.release()
+  await drain()
 })

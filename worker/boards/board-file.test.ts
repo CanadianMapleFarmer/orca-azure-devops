@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { assert, test } from 'orca/testing'
+import { boardFileText } from '../../src/board/ref'
 import { AdoError } from '../ado/http'
 import type { HostCall } from '../workspace/focused'
 import { boardFilePath, openBoard, writeBoardFile } from './board-file'
@@ -77,7 +78,7 @@ test('writeBoardFile writes the file and a self-ignoring .gitignore', async () =
   await withTempDir(async dir => {
     const file = await writeBoardFile(fs, dir, { org: 'contoso', ...BOARD })
     assert.equal(file, path.join(dir, '.orca-ado', `contoso.${TEAM}.adoboard`))
-    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { org: 'contoso', ...BOARD })
+    assert.equal(await fs.readFile(file, 'utf8'), boardFileText({ org: 'contoso', ...BOARD }), 'the text the board editor writes')
     assert.equal(await fs.readFile(path.join(dir, '.orca-ado', '.gitignore'), 'utf8'), '*\n')
   })
 })
@@ -97,6 +98,7 @@ test('openBoard refuses remote or missing workspaces with the message', async ()
   const cases: Record<string, unknown>[] = [
     { 'workspace.readContext': null },
     { 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [workspace({ hostId: 'ssh:build-box' })], truncated: false } },
+    { 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [workspace({ hostId: 'ssh-1' })], truncated: false } },
     { 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [workspace({ branch: 'main' })], truncated: false } },
     { 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [workspace(), workspace({ id: 'ws-2', path: '/other/web-app' })], truncated: false } }
   ]
@@ -132,6 +134,20 @@ test('openBoard writes the board file in the focused workspace and opens it by i
     assert.deepEqual(calls.at(-1), { method: 'editor.open', params: { workspaceId: 'ws-1', path: `.orca-ado/contoso.${TEAM}.adoboard` } })
     assert.deepEqual(JSON.parse(await fs.readFile(boardFilePath(dir, 'contoso', TEAM), 'utf8')), { org: 'contoso', ...BOARD })
   })
+})
+
+test('openBoard opens the board in a workspace on Orca\'s "local" host as well as one without a host', async () => {
+  for (const hostId of ['local', null]) {
+    await withTempDir(async dir => {
+      const { call, calls } = host({
+        'workspace.readContext': CONTEXT,
+        'workspace.list': { workspaces: [workspace({ path: dir, hostId })], truncated: false },
+        'editor.open': { opened: true }
+      })
+      assert.deepEqual(await openBoard({ call, fs, boardOf: async () => BOARD }, 'contoso'), { opened: true }, String(hostId))
+      assert.deepEqual(calls.at(-1)?.params, { workspaceId: 'ws-1', path: `.orca-ado/contoso.${TEAM}.adoboard` })
+    })
+  }
 })
 
 test('openBoard refuses a detached worktree whose branch it cannot match', async () => {

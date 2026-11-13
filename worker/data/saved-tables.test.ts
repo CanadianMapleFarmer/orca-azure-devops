@@ -52,6 +52,18 @@ test('PR records keep the newest that fit in 160 KiB, at most 600, each with its
   assert.equal(prRecordsOf(small).repos[0].prs.length, MAX_SAVED_PRS)
 })
 
+test('saved pull request records leave out titles', () => {
+  const tables = tablesAt(T0)
+  tables.prs.put(prKey(record(321)), { ...record(321), title: 'Add vehicle search filters' })
+  const saved = prRecordsOf(tables)
+  assert.equal('title' in saved.repos[0].prs[0], false)
+  assert.equal(tables.prs.get(prKey(record(321)))?.value.title, 'Add vehicle search filters')
+
+  const restored = tablesAt(T0)
+  seedPrRecords(restored, saved)
+  assert.deepEqual(restored.prs.get(prKey(record(321)))?.value, record(321))
+})
+
 test('seeding restores the tables with their original age and never replaces a newer entry', () => {
   const before = tablesAt(T0)
   const config = { boardId: 'b1', boardName: 'Stories' } as BoardConfig

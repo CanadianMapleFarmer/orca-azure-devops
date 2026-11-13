@@ -103,7 +103,7 @@ export function createPipelinesService(deps: PipelinesServiceDeps): PipelinesSer
     const entry: OrgRuns = {
       controller: new AbortController(),
       source: createRunSource(deps.http, org, now, deps.entities.of(org), longestVisibleMs(RUNS_MS)),
-      projects: cachedCodeProjects(deps.http, org, deps.entities.of(org).projects),
+      projects: cachedCodeProjects(deps.http, org, deps.entities.of(org)),
       base: null,
       snapshot: null,
       fullAt: null,

@@ -4,7 +4,7 @@ import { drain } from '../test-support'
 import { currentContext, inLane, type Lane } from './context'
 import { createEntities, type Table } from './entities'
 import { MAX_ENTRIES } from './freshness'
-import type { ItemRecord } from './records'
+import type { DetailsRecord, ItemRecord } from './records'
 
 const T0 = Date.parse('2026-11-11T10:00:00Z')
 const MINUTE = 60_000
@@ -181,6 +181,46 @@ test('the timeline rule keeps the higher changeId', () => {
   assert.equal(timelines.put('7', timeline(11)).changeId, 12)
   assert.equal(timelines.put('7', timeline(12)).changeId, 12)
   assert.equal(timelines.put('7', timeline(13)).changeId, 13)
+})
+
+function details(rev: number, descriptionMd: string): DetailsRecord {
+  return {
+    id: 1204,
+    rev,
+    projectId: 'p',
+    home: 'Fabrikam Web',
+    relations: '',
+    descriptionMd,
+    acceptanceMd: '',
+    assignee: null,
+    links: [],
+    tasks: [],
+    moreTasks: 0,
+    tasksRead: true,
+    prRefs: []
+  }
+}
+
+test('the details and comments tables hold at most 50 items', () => {
+  const tables = createEntities(clock().now).of('contoso')
+  assert.deepEqual([MAX_ENTRIES.itemDetails, MAX_ENTRIES.comments], [50, 50])
+  for (let id = 1; id <= 51; id++) {
+    tables.itemDetails.put(String(id), details(1, `Story ${id}`))
+    tables.comments.put(String(id), [])
+  }
+  assert.equal(tables.itemDetails.entries().length, 50)
+  assert.equal(tables.comments.entries().length, 50)
+  assert.equal(tables.itemDetails.get('1'), undefined)
+  assert.equal(tables.comments.get('1'), undefined)
+})
+
+test('the details table keeps the higher rev', () => {
+  const table = createEntities(clock().now).of('contoso').itemDetails
+  table.put('1204', details(10, 'newer'))
+  assert.equal(table.put('1204', details(9, 'older')).descriptionMd, 'newer')
+  assert.equal(table.put('1204', details(10, 'same rev')).descriptionMd, 'same rev')
+  assert.equal(table.put('1204', details(11, 'next')).descriptionMd, 'next')
+  assert.equal(table.get('1204')?.value.descriptionMd, 'next')
 })
 
 test('tables evict the least recently used entries past their limit', async () => {

@@ -1,9 +1,10 @@
 import * as path from 'node:path'
+import { boardFileText } from '../../src/board/ref'
 import { NO_BOARDS } from '../../src/shared/messages'
 import { isValidOrgName } from '../ado/org'
 import { BAD_BOARD, badRequest, NO_LOCAL_WORKSPACE } from '../messages'
 import { TAB_FOLDER, writeTabFile, type TabFileFs } from '../tab-files'
-import { focusedWorkspace, type HostCall } from '../workspace/focused'
+import { focusedWorkspace, isLocalWorkspace, type HostCall } from '../workspace/focused'
 
 export type BoardFileFs = TabFileFs
 export interface BoardFileContent { org: string; projectId: string; teamId: string; boardId: string }
@@ -20,8 +21,7 @@ export function boardFilePath(workspacePath: string, org: string, teamId: string
 }
 
 export async function writeBoardFile(fs: BoardFileFs, workspacePath: string, content: BoardFileContent): Promise<string> {
-  const text = `${JSON.stringify({ org: content.org, projectId: content.projectId, teamId: content.teamId, boardId: content.boardId }, null, 2)}\n`
-  return writeTabFile(fs, workspacePath, fileName(content.org, content.teamId), text)
+  return writeTabFile(fs, workspacePath, fileName(content.org, content.teamId), boardFileText(content))
 }
 
 export async function openBoard(
@@ -29,7 +29,7 @@ export async function openBoard(
   org: string
 ): Promise<{ opened: boolean; message?: string }> {
   const workspace = await focusedWorkspace(deps.call)
-  if (!workspace || workspace.hostId !== null) return { opened: false, message: NO_LOCAL_WORKSPACE }
+  if (!workspace || !isLocalWorkspace(workspace)) return { opened: false, message: NO_LOCAL_WORKSPACE }
   const board = await deps.boardOf(org)
   if (!board) return { opened: false, message: NO_BOARDS }
   await writeBoardFile(deps.fs, workspace.path, { org, ...board })

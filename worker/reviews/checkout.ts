@@ -11,7 +11,7 @@ import {
   REVIEW_PR_CLOSED
 } from '../messages'
 import type { Arm } from '../workspace/arm'
-import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
+import { focusedWorkspace, isLocalWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import type { AdoRemote } from '../workspace/remotes'
 import { workspacesOfRepo } from '../workspace/repo-workspaces'
 
@@ -32,7 +32,7 @@ export async function checkoutPr(deps: CheckoutDeps, key: ReviewKey): Promise<Ch
   const listed = await listWorkspaces(deps.call)
   const focused = await focusedWorkspace(deps.call, listed)
   const target = { org: key.org, project: pr.projectName, repo: pr.repoName }
-  const local = listed.filter(entry => entry.hostId === null)
+  const local = listed.filter(isLocalWorkspace)
   const found = await workspacesOfRepo(deps, local, target)
   const rank = (workspace: WorkspaceEntry) =>
     (onBranch(workspace, pr.source) ? 0 : 4) + (workspace.kind === 'worktree' ? 0 : 2) + (workspace.id === focused?.id ? 0 : 1)

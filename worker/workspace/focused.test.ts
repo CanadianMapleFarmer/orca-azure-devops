@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { focusedWorkspace, type HostCall, type WorkspaceEntry } from './focused'
+import { focusedWorkspace, isLocalWorkspace, type HostCall, type WorkspaceEntry } from './focused'
 
 const WEB: WorkspaceEntry = { id: 'ws-web', kind: 'worktree', name: 'web-app', path: '/repos/web-app', branch: 'feature/1204-search', hostId: null }
 const NOTES: WorkspaceEntry = { id: 'ws-notes', kind: 'folder', name: 'notes', path: '/repos/notes', branch: null, hostId: null }
@@ -39,4 +39,10 @@ test('focusedWorkspace uses workspaces already listed instead of listing again',
   const listed = host({ branch: 'feature/1204-search', displayName: 'web-app' }, [])
   assert.equal((await focusedWorkspace(listed.call, [WEB]))?.id, 'ws-web')
   assert.deepEqual(listed.methods, ['workspace.readContext'])
+})
+
+test('isLocalWorkspace counts no host and Orca\'s "local" host as local, and an SSH host as remote', () => {
+  assert.equal(isLocalWorkspace(WEB), true)
+  assert.equal(isLocalWorkspace({ ...WEB, hostId: 'local' }), true)
+  for (const hostId of ['ssh-1', 'ssh:build-box']) assert.equal(isLocalWorkspace({ ...WEB, hostId }), false, hostId)
 })

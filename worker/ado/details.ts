@@ -1,15 +1,16 @@
-import type { PrChip, WorkComment, WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
+import type { Assignee, PrChip, WorkComment, WorkItemDetails } from '../../src/shared/work'
 import { badRequest, EMPTY_COMMENT, MALFORMED, NOT_A_PR, UNKNOWN_AUTHOR } from '../messages'
 import { htmlToMarkdown } from './html'
-import { AdoError, type AdoHttp } from './http'
+import type { AdoHttp } from './http'
 import { orgWebUrl } from './org'
 import { patchWorkItem } from './patch'
 import { pullRequestNamedUrl } from './pr-links'
 import { expectList, expectText, shaped } from './shape'
-import { hydrate, parsePrRef, PR_ARTIFACT_PREFIX, textOr, timestamp, workItemUrl, type RawWorkItem } from './workitems'
+import { parsePrRef, PR_ARTIFACT_PREFIX, textOr, timestamp, workItemUrl, type RawWorkItem } from './workitems'
 
 type Link = WorkItemDetails['links'][number]
 type Relations = NonNullable<RawWorkItem['relations']>
+type LinkKind = (typeof WORK_ITEM_LINKS)[number]['kind']
 
 interface RawComment {
   id?: unknown
@@ -28,8 +29,7 @@ const DESCRIPTION_FIELD = 'System.Description'
 const ACCEPTANCE_FIELD = 'Microsoft.VSTS.Common.AcceptanceCriteria'
 const BODY_CAP = 30_000
 const COMMENT_CAP = 4_000
-const COMMENT_LIMIT = 50
-const TITLE_LIMIT = 50
+export const COMMENT_LIMIT = 50
 const COMMENTS_API_VERSION = '7.1-preview.4'
 const WORK_ITEM_LINKS = [
   { kind: 'parent', rel: 'System.LinkTypes.Hierarchy-Reverse' },
@@ -40,40 +40,50 @@ const WORK_ITEM_RELATION_ID = /\/_apis\/wit\/workitems\/(\d+)\/?$/i
 const VISUALSTUDIO_HOST = /^([^.]+)\.visualstudio\.com$/
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 
-export async function loadDetails(
-  http: AdoHttp,
-  org: string,
-  projectId: string,
-  summary: WorkItemSummary,
-  raw: RawWorkItem,
-  chips: PrChip[] = []
-): Promise<WorkItemDetails> {
-  const relations = raw.relations ?? []
-  const linked = linkedWorkItems(relations)
-  const titleIds = [...new Set(linked.map(link => link.id))].slice(0, TITLE_LIMIT)
-  const [comments, titled] = await Promise.all([
-    fetchComments(http, org, projectId, summary),
-    hydrate(http, org, projectId, titleIds).catch(untitled)
-  ])
-  const titles = new Map(titled.map(item => [item.id, item]))
-  const home = textOr(raw.fields['System.TeamProject'], '') || projectId
+export function bodyOf(raw: RawWorkItem, itemUrl: string): { descriptionMd: string; acceptanceMd: string; assignee: Assignee | null } {
   return {
-    item: summary,
-    descriptionMd: markdown(raw.fields[DESCRIPTION_FIELD], BODY_CAP, summary.url),
-    acceptanceMd: markdown(raw.fields[ACCEPTANCE_FIELD], BODY_CAP, summary.url),
-    comments,
-    links: [
-      ...linked.map(({ kind, id }): Link => {
-        const found = titles.get(id)
-        return {
-          kind,
-          title: textOr(found?.fields['System.Title'], '') || `#${id}`,
-          url: workItemUrl(orgWebUrl(org), textOr(found?.fields['System.TeamProject'], '') || home, id)
-        }
-      }),
-      ...pullRequestLinks(org, relations, chips)
-    ]
+    descriptionMd: markdown(raw.fields[DESCRIPTION_FIELD], BODY_CAP, itemUrl),
+    acceptanceMd: markdown(raw.fields[ACCEPTANCE_FIELD], BODY_CAP, itemUrl),
+    assignee: assigneeOf(raw.fields['System.AssignedTo'])
   }
+}
+
+export function linkedIds(raw: RawWorkItem): { kind: LinkKind; id: number }[] {
+  const relations = raw.relations ?? []
+  return WORK_ITEM_LINKS.flatMap(({ kind, rel }) =>
+    relations
+      .filter(link => link.rel === rel)
+      .flatMap(link => {
+        const id = workItemId(link.url)
+        return id === null ? [] : [{ kind, id }]
+      })
+  )
+}
+
+export function linkRows(org: string, raw: RawWorkItem, linked: readonly RawWorkItem[], chips: PrChip[], home: string): Link[] {
+  const records = new Map(linked.map(item => [item.id, item]))
+  return [
+    ...linkedIds(raw).map(({ kind, id }): Link => {
+      const found = records.get(id)
+      return {
+        kind,
+        title: textOr(found?.fields['System.Title'], '') || `#${id}`,
+        url: workItemUrl(orgWebUrl(org), textOr(found?.fields['System.TeamProject'], '') || home, id)
+      }
+    }),
+    ...pullRequestLinks(org, raw.relations ?? [], chips)
+  ]
+}
+
+export async function readComments(http: AdoHttp, org: string, projectId: string, id: number, itemUrl: string): Promise<WorkComment[]> {
+  const { data } = await http.json<{ comments: RawComment[] }>({
+    org,
+    project: projectId,
+    path: commentsPath(id),
+    query: { $top: COMMENT_LIMIT, order: 'desc' },
+    apiVersion: COMMENTS_API_VERSION
+  })
+  return shaped(() => expectList<RawComment>(data.comments).slice(0, COMMENT_LIMIT).map(raw => toComment(raw, itemUrl)), MALFORMED.comment)
 }
 
 export async function addComment(http: AdoHttp, org: string, projectId: string, id: number, text: string): Promise<WorkComment> {
@@ -99,20 +109,6 @@ export async function addPullRequestLink(http: AdoHttp, org: string, projectId: 
     { op: 'test', path: '/rev', value: raw.rev },
     { op: 'add', path: '/relations/-', value: { rel: 'ArtifactLink', url: artifactUrl, attributes: { name: 'Pull Request' } } }
   ])
-}
-
-async function fetchComments(http: AdoHttp, org: string, projectId: string, summary: WorkItemSummary): Promise<WorkComment[]> {
-  const { data } = await http.json<{ comments: RawComment[] }>({
-    org,
-    project: projectId,
-    path: commentsPath(summary.id),
-    query: { $top: COMMENT_LIMIT, order: 'desc' },
-    apiVersion: COMMENTS_API_VERSION
-  })
-  return shaped(
-    () => expectList<RawComment>(data.comments).slice(0, COMMENT_LIMIT).map(raw => toComment(raw, summary.url)),
-    MALFORMED.comment
-  )
 }
 
 async function resolveArtifactUrl(http: AdoHttp, org: string, pr: ParsedPrUrl): Promise<string> {
@@ -157,17 +153,6 @@ function readPrUrl(prUrl: string, org: string): ParsedPrUrl | null {
   }
 }
 
-function linkedWorkItems(relations: Relations): { kind: Link['kind']; id: number }[] {
-  return WORK_ITEM_LINKS.flatMap(({ kind, rel }) =>
-    relations
-      .filter(link => link.rel === rel)
-      .flatMap(link => {
-        const id = workItemId(link.url)
-        return id === null ? [] : [{ kind, id }]
-      })
-  )
-}
-
 function pullRequestLinks(org: string, relations: Relations, chips: PrChip[]): Link[] {
   const states = new Map(chips.map(chip => [chip.prId, chip.state]))
   return relations
@@ -196,6 +181,13 @@ function toComment(raw: RawComment, itemUrl: string): WorkComment {
   }
 }
 
+function assigneeOf(identity: unknown): Assignee | null {
+  if (typeof identity !== 'object' || identity === null) return null
+  const { displayName, uniqueName } = identity as { displayName?: unknown; uniqueName?: unknown }
+  const named = (value: unknown): value is string => typeof value === 'string' && value !== ''
+  return named(displayName) && named(uniqueName) ? { displayName, uniqueName } : null
+}
+
 function markdown(html: unknown, maxChars: number, itemUrl: string): string {
   return htmlToMarkdown(textOr(html, ''), { maxChars, itemUrl })
 }
@@ -206,11 +198,6 @@ function toHtml(text: string): string {
 
 function commentsPath(id: number): string {
   return `/_apis/wit/workItems/${id}/comments`
-}
-
-function untitled(error: unknown): RawWorkItem[] {
-  if (error instanceof AdoError && error.code === 'rate_limited') throw error
-  return []
 }
 
 function expectId(value: unknown): string {

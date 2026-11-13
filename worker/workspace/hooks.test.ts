@@ -5,11 +5,12 @@ import { createContextCache, type ItemInfo } from './agents'
 import { createArm } from './arm'
 import { registerWorkspaceHooks, type WorkspaceHookDeps } from './hooks'
 import { createLinkStore, LINKS_KEY } from './links'
+import { createPendingLinks } from './pending'
 
 const T0 = Date.parse('2026-11-04T09:00:00Z')
 const MINUTE = 60_000
 const BRANCH = 'feature/1204-add-vehicle-search-filters'
-const ARMED = { org: 'contoso', itemId: 1204, branch: BRANCH }
+const ITEM = { org: 'contoso', itemId: 1204 }
 const ITEM_URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/1204'
 const PREFIX = `[ADO User Story #1204: Add vehicle search filters](${ITEM_URL})`
 const CREATE = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2', base: 'main' } as const
@@ -23,6 +24,7 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
   let now = T0
   const { data, store } = memoryStore()
   const arm = createArm(() => now)
+  const pending = createPendingLinks(() => now)
   const links = await createLinkStore(store, () => now)
   const context = createContextCache()
   const state = { agentContext: true }
@@ -30,6 +32,7 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
   const deps: WorkspaceHookDeps = {
     arm,
     links,
+    pending,
     context,
     itemInfo: async (org, itemId) => (org === 'contoso' && itemId === 1204 ? INFO : null),
     timeout: timeouts.timeout,
@@ -40,6 +43,7 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
   return {
     w,
     arm,
+    pending,
     links,
     context,
     data,
@@ -52,38 +56,7 @@ async function setup(over: Partial<WorkspaceHookDeps> = {}) {
 const status = (terminalId: string | undefined, workspaceId: string | null) =>
   ({ workspaceId, paneKey: 'pane-1', ...(terminalId ? { terminalId } : {}), state: 'working', receivedAt: T0 }) as const
 
-test('an armed branch renames exactly one workspace creation', async () => {
-  const { w, arm } = await setup()
-  arm.arm(ARMED)
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
-  assert.deepEqual(w.logs, [])
-})
-
-test('an expired or consumed arm passes the event through', async () => {
-  const { w, arm, advance } = await setup()
-  const passes = { kind: 'continue', event: CREATE }
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'nothing armed')
-
-  arm.arm(ARMED)
-  advance(10 * MINUTE)
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'expired')
-
-  arm.arm(ARMED)
-  assert.equal((await w.hooks.fire('workspace.create.before', CREATE)).kind, 'continue')
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'consumed')
-  assert.deepEqual(w.logs, [])
-})
-
-test('a folder creation passes unchanged and leaves the arm for the next worktree', async () => {
-  const { w, arm } = await setup()
-  arm.arm(ARMED)
-  const folder = { kind: 'folder', projectId: 'repo-web', name: 'notes' } as const
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', folder), { kind: 'continue', event: folder })
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
-})
-
-test('an armed pull request sets the branch, name and base and links nothing', async () => {
+test('an armed pull request sets the branch, name and base of exactly one worktree and links nothing', async () => {
   const { w, arm, links, data } = await setup()
   arm.arm(PR_ARMED)
   assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: REVIEWING })
@@ -92,6 +65,21 @@ test('an armed pull request sets the branch, name and base and links nothing', a
   assert.equal(links.byWorkspace('ws-9'), null)
   assert.equal(data[LINKS_KEY], undefined)
   assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE }, 'used once')
+  assert.deepEqual(w.logs, [])
+})
+
+test('an expired or consumed arm passes the event through', async () => {
+  const { w, arm, advance } = await setup()
+  const passes = { kind: 'continue', event: CREATE }
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'nothing armed')
+
+  arm.arm(PR_ARMED)
+  advance(10 * MINUTE)
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'expired')
+
+  arm.arm(PR_ARMED)
+  assert.equal((await w.hooks.fire('workspace.create.before', CREATE)).kind, 'continue')
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), passes, 'consumed')
   assert.deepEqual(w.logs, [])
 })
 
@@ -108,79 +96,60 @@ test('a pull request arm skips folder workspaces and stays armed for a worktree 
   )
 })
 
-test('a pull request arm replaces an armed work item and the reverse', async () => {
-  const { w, arm, links } = await setup()
-  arm.arm(ARMED)
+test("a pull request arm leaves alone the worktree an item's command creates, and serves the next one", async () => {
+  const { w, arm, pending } = await setup()
   arm.arm(PR_ARMED)
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: REVIEWING })
+  pending.expect({ ...ITEM, branch: BRANCH })
+  const itemCreate = { ...CREATE, branch: `${BRANCH}-2`, name: BRANCH }
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', itemCreate), { kind: 'continue', event: itemCreate })
+  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: REVIEWING }, 'still armed')
+})
+
+test('a worktree created by hand passes through unnamed while nothing is armed', async () => {
+  const { w, pending } = await setup()
+  pending.expect({ ...ITEM, branch: BRANCH })
   assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: CREATE })
-
-  arm.arm(PR_ARMED)
-  arm.arm(ARMED)
-  assert.deepEqual(await w.hooks.fire('workspace.create.before', CREATE), { kind: 'continue', event: { ...CREATE, branch: BRANCH, name: BRANCH } })
-  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
-  await drain()
-  assert.deepEqual(links.byWorkspace('ws-9'), { org: 'contoso', itemId: 1204 })
 })
 
-test('a pull request taken after a work item leaves the work item nothing to link', async () => {
-  const { w, arm, links } = await setup()
-  arm.arm(ARMED)
-  await w.hooks.fire('workspace.create.before', CREATE)
-  arm.arm(PR_ARMED)
-  await w.hooks.fire('workspace.create.before', CREATE)
-  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
-  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-10', kind: 'worktree', path: '/repos/web-app-3', branch: SOURCE })
-  await drain()
-  assert.equal(links.byWorkspace('ws-9'), null)
-  assert.equal(links.byWorkspace('ws-10'), null)
-})
+const created = (workspaceId: string, branch: string) => ({ workspaceId, kind: 'worktree', path: `/repos/${workspaceId}`, branch }) as const
 
-test('create.after links the workspace to the item', async () => {
-  const { w, arm, links, data } = await setup()
-  arm.arm(ARMED)
-  await w.hooks.fire('workspace.create.before', CREATE)
-  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
+test('create.after links the workspace made on a pending branch, or its -N copy, and tells the panel', async () => {
+  const { w, pending, links, data } = await setup()
+  pending.expect({ ...ITEM, branch: BRANCH })
+  await w.hooks.fire('workspace.create.after', created('ws-9', `${BRANCH}-2`))
   await drain()
-  assert.deepEqual(links.byWorkspace('ws-9'), { org: 'contoso', itemId: 1204 })
+  assert.deepEqual(links.byWorkspace('ws-9'), ITEM)
   assert.deepEqual(Object.keys(data[LINKS_KEY] as object), ['ws-9'])
+  assert.deepEqual(w.posts, [{ event: 'work.workspaceReady', payload: { ...ITEM, workspaceId: 'ws-9', branch: `${BRANCH}-2` } }])
 
-  await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-10', kind: 'worktree', path: '/repos/other', branch: BRANCH })
-  assert.equal(links.byWorkspace('ws-10'), null, 'the arm links one workspace')
+  await w.hooks.fire('workspace.create.after', created('ws-10', BRANCH))
+  assert.equal(links.byWorkspace('ws-10'), null, 'a pending link is used once')
+  assert.equal(w.posts.length, 1)
   assert.deepEqual(w.logs, [])
 })
 
-test('create.after links nothing for another branch, after 30 seconds or without a taken arm', async () => {
-  const { w, arm, links, advance } = await setup()
-  const created = (workspaceId: string, branch: string) => ({ workspaceId, kind: 'worktree', path: `/repos/${workspaceId}`, branch }) as const
-
+test('create.after links nothing for another branch, after two minutes or without a pending link', async () => {
+  const { w, pending, links, advance } = await setup()
   await w.hooks.fire('workspace.create.after', created('ws-1', BRANCH))
-  assert.equal(links.byWorkspace('ws-1'), null, 'nothing was armed')
+  assert.equal(links.byWorkspace('ws-1'), null, 'nothing pending')
 
-  arm.arm(ARMED)
-  await w.hooks.fire('workspace.create.after', created('ws-2', BRANCH))
-  assert.equal(links.byWorkspace('ws-2'), null, 'armed but not taken')
+  pending.expect({ ...ITEM, branch: BRANCH })
+  await w.hooks.fire('workspace.create.after', created('ws-2', 'feature/1205-fix-pagination-offset'))
+  await w.hooks.fire('workspace.create.after', created('ws-3', `orca/${BRANCH}`))
+  assert.equal(links.byWorkspace('ws-2'), null, 'another branch')
+  assert.equal(links.byWorkspace('ws-3'), null, 'another branch that ends the same')
 
-  await w.hooks.fire('workspace.create.before', CREATE)
-  await w.hooks.fire('workspace.create.after', created('ws-3', 'feature/1205-fix-pagination-offset'))
-  assert.equal(links.byWorkspace('ws-3'), null, 'another branch')
-
-  advance(30_001)
+  advance(2 * MINUTE + 1)
   await w.hooks.fire('workspace.create.after', created('ws-4', BRANCH))
   assert.equal(links.byWorkspace('ws-4'), null, 'too late')
-
-  arm.arm(ARMED)
-  await w.hooks.fire('workspace.create.before', CREATE)
-  await w.hooks.fire('workspace.create.after', created('ws-5', `orca/${BRANCH}`))
-  assert.deepEqual(links.byWorkspace('ws-5'), { org: 'contoso', itemId: 1204 }, 'a prefix Orca added')
+  assert.deepEqual(w.posts, [])
 })
 
 test('a failed link save is logged by workspace id and never fails the hook', async () => {
   const failing: StorePort = { get: async () => null, set: async () => Promise.reject(new Error('disk full: secret-value')) }
-  const { w, arm } = await setup({ links: await createLinkStore(failing, () => T0) })
-  arm.arm(ARMED)
-  await w.hooks.fire('workspace.create.before', CREATE)
-  const after = await w.hooks.fire('workspace.create.after', { workspaceId: 'ws-9', kind: 'worktree', path: '/repos/web-app-2', branch: BRANCH })
+  const { w, pending } = await setup({ links: await createLinkStore(failing, () => T0) })
+  pending.expect({ ...ITEM, branch: BRANCH })
+  const after = await w.hooks.fire('workspace.create.after', created('ws-9', BRANCH))
   await drain()
   assert.equal(after.kind, 'continue')
   assert.deepEqual(w.logs, ['could not save the link for workspace ws-9'])

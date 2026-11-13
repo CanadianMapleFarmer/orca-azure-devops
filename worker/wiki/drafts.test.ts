@@ -497,6 +497,19 @@ test('edit refuses code wikis, pages over 1 MiB, a 51st draft and no local works
   })
 })
 
+test('edit opens a draft in a workspace on Orca\'s "local" host and refuses an SSH host', async () => {
+  for (const hostId of [null, 'local']) {
+    await withDirs(1, async ([web]) => {
+      const h = harness([workspace('ws-web', web, 'web-app', 'main', hostId)])
+      assert.deepEqual(await h.drafts.edit(ref(CHECKLIST)), { opened: true, message: OPENED_CHECKLIST }, String(hostId))
+      assert.deepEqual(h.opened, [{ workspaceId: 'ws-web', path: `.orca-ado/${CHECKLIST_FILE}` }])
+    })
+  }
+  const h = harness([workspace('ws-ssh', '/srv/web-app', 'web-app', 'main', 'ssh-1')])
+  assert.deepEqual(await h.drafts.edit(ref(CHECKLIST)), { opened: false, message: NO_WORKSPACE })
+  assert.deepEqual([h.opened, h.ado.count(isPage)], [[], 0])
+})
+
 test('a draft whose workspace is gone says so', async () => {
   await withDirs(2, async ([web, docs]) => {
     const h = harness([workspace('ws-web', web), workspace('ws-docs', docs, 'web-app-docs', 'docs')])

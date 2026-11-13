@@ -1,6 +1,6 @@
 import { afterEach, assert, hostError, test, type MockRequests, type TestElement, type TestPanel, type TestQuery, type TreeSnapshot } from 'orca/testing'
 import type { OrgStatus } from '../../shared/types'
-import type { WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../shared/work'
+import type { CloneTargets, StartRepo, StartRepos, WorkItemDetails, WorkItemSummary, WorkSnapshot } from '../../shared/work'
 import { MAX_LABEL_BYTES, utf8Length } from '../label'
 import { closeCleanly, countNodes, mountPanel, org as orgStatus, reloadPanel, requestsTo, type TestHost } from '../test-support'
 import { board, BOARDS, item, LANES, largeWork, listOf, NOW, parentOf, pr, snapshotOf, task, workTask } from './fixtures'
@@ -26,6 +26,14 @@ function detailsOf(over: Partial<WorkItemDetails> = {}): WorkItemDetails {
       { kind: 'related', title: 'Session timeout', url: 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/103' },
       { kind: 'pr', title: 'PR 55: Fix redirect', url: 'https://dev.azure.com/contoso/Fabrikam%20Web/_git/web/pullrequest/55' }
     ],
+    assignee: null,
+    tasks: [],
+    moreTasks: 0,
+    tasksRead: true,
+    prs: [],
+    taskTypes: [],
+    taskType: null,
+    readAt: 0,
     ...over
   }
 }
@@ -40,8 +48,12 @@ interface OpenOptions {
   persisted?: { plugin?: Record<string, unknown>; workspace?: Record<string, unknown> }
 }
 
+const NO_REPO_LIST = () => {
+  throw hostError('unavailable', 'Orca is busy.')
+}
+
 async function open(snapshot: MockRequests['work.snapshot'], more: MockRequests = {}, options: OpenOptions = {}) {
-  const mounted = await mountPanel(options.orgs ?? [org('contoso')], { 'work.snapshot': snapshot, ...more }, options)
+  const mounted = await mountPanel(options.orgs ?? [org('contoso')], { 'work.snapshot': snapshot, 'work.startRepos': NO_REPO_LIST, ...more }, options)
   panel = mounted.panel
   return mounted.host
 }
@@ -1288,77 +1300,578 @@ test('a failed Link reloads the details and keeps the typed link', async () => {
   assert.ok(panel.findAll({ type: 'Callout' }).some(callout => callout.props.tone === 'danger' && callout.text === CONFLICT))
 })
 
-test('Start a workspace names the branch to create', async () => {
-  const host = await open(snapshotOf({ mine: [item(101)] }), {
-    'work.details': detailsOf(),
-    'work.startWorkspace': { branch: 'feature/101-fix-login-redirect', armedUntil: NOW + 600_000 }
-  })
+const BRANCH = 'feature/101-fix-login-redirect'
+const WEB = { id: 'repo-web::/repos/web', name: 'web' }
+const LINKED = { id: 'repo-web::/repos/web-101', name: 'web-101' }
+const SENT = { status: 'sent', branch: BRANCH, repo: 'web', agent: 'claude', workspace: WEB, shortened: false, clone: null } as const
+const LAUNCHED = { status: 'sent', agent: 'claude', workspace: LINKED, shortened: false } as const
+const SHORTENED =
+  'The description is too long to give the agent, so it got the title and link only. With "Add work item context to agent prompts" on, later prompts in this workspace start with the link too.'
+const FISH = 'Starting a workspace or an agent from an item works with the bash and zsh shells only for now. Yours is fish.'
+
+const button = (text: string) => panel.find({ type: 'Button', text })
+const buttons = () => panel.findAll({ type: 'Button' }).map(each => each.text).filter(text => /Start|Open workspace|Show it/.test(text))
+const startCallouts = () => panel.findAll({ type: 'Callout' }).map(callout => ({ tone: callout.props.tone, text: callout.text }))
+
+function capturedTimeouts() {
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  const pending = new Map<number, { run: () => void; ms: number }>()
+  let next = 1_000_000
+  globalThis.setTimeout = ((run: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms !== 60_000 && ms !== 600_000) return realSet(run, ms, ...rest)
+    next += 1
+    pending.set(next, { run, ms })
+    return next
+  }) as typeof setTimeout
+  globalThis.clearTimeout = ((id?: number) => (pending.has(id ?? 0) ? void pending.delete(id ?? 0) : realClear(id))) as typeof clearTimeout
+  const after = (ms: number) => [...pending].filter(([, timer]) => timer.ms === ms)
+  return {
+    count: (ms = 60_000) => after(ms).length,
+    async fire(ms = 60_000) {
+      const due = after(ms)
+      for (const [id] of due) pending.delete(id)
+      for (const [, timer] of due) timer.run()
+      await panel.settled()
+    },
+    restore() {
+      globalThis.setTimeout = realSet
+      globalThis.clearTimeout = realClear
+    }
+  }
+}
+
+test('an item without a workspace offers Start a workspace and agent only', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), { 'work.details': detailsOf() })
   await openCard()
-  await panel.press({ type: 'Button', text: 'Start a workspace' })
-  assert.deepEqual(inputsTo(host, 'work.startWorkspace'), [{ org: 'contoso', id: 101 }])
-  assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'accent')
-  assert.ok(panel.find({ type: 'Text', text: 'Create a new workspace in Orca now. Its branch will be named feature/101-fix-login-redirect.' }))
+  assert.deepEqual(inputsTo(host, 'work.itemWorkspace'), [{ org: 'contoso', id: 101 }])
+  assert.deepEqual(buttons(), ['Start a workspace and agent'])
+  assert.equal(button('Start a workspace and agent')?.disabled, false)
 })
 
-test('Cancel in the start callout disarms the branch and closes the callout', async () => {
-  const host = await open(snapshotOf({ mine: [item(101)] }), {
-    'work.details': detailsOf(),
-    'work.startWorkspace': { branch: 'feature/101-fix-login-redirect', armedUntil: NOW + 600_000 },
-    'work.cancelWorkspace': { ok: true }
-  })
+test('Start a workspace and agent says where the branch is made, then that it is open, then that the agent works', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), { 'work.details': detailsOf(), 'work.startWork': SENT })
   await openCard()
-  await panel.press({ type: 'Button', text: 'Start a workspace' })
-  await panel.press({ type: 'Button', text: 'Cancel' })
-  assert.deepEqual(inputsTo(host, 'work.cancelWorkspace'), [{ org: 'contoso', itemId: 101 }])
-  assert.equal(panel.find({ type: 'Callout' }), null)
-  assert.equal(panel.find({ type: 'Button', text: 'Start a workspace' })?.disabled, false)
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101 }])
+  assert.deepEqual(startCallouts(), [{ tone: 'accent', text: `Creating ${BRANCH} in web. Orca opens it when it's ready.` }])
+
+  await panel.post('work.workspaceReady', { org: 'contoso', itemId: 102, workspaceId: LINKED.id, branch: 'feature/102-x' })
+  await panel.post('work.workspaceReady', { org: 'fabrikam', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+  assert.deepEqual(buttons(), ['Start a workspace and agent'], 'another item, or another organisation, changes nothing')
+
+  await panel.post('work.workspaceReady', { org: 'contoso', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+  assert.deepEqual(startCallouts(), [{ tone: 'success', text: `${BRANCH} is open, and claude is starting with the item's details.` }])
+  assert.deepEqual(buttons(), ['Start an agent', 'Open workspace'])
+
+  await panel.post('work.agentWorking', { org: 'contoso', itemId: 101 })
+  assert.deepEqual(startCallouts(), [{ tone: 'success', text: 'claude is working on it.' }])
 })
 
-test('the start callout shows only while the posted arm is this item', async () => {
-  await open(snapshotOf({ mine: [item(101)] }), {
-    'work.details': detailsOf(),
-    'work.startWorkspace': { branch: 'feature/101-fix-login-redirect', armedUntil: NOW + 600_000 }
-  })
-  const shown = () => panel.find({ type: 'Text', text: 'Create a new workspace in Orca now. Its branch will be named feature/101-fix-login-redirect.' }) !== null
+test("Start stays off while Orca creates the workspace, so a second press can't make a second one", async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), { 'work.details': detailsOf(), 'work.startWork': SENT })
   await openCard()
-  for (const other of [null, { org: 'contoso', prId: 4110 }, { org: 'contoso', itemId: 102 }, { org: 'fabrikam', itemId: 101 }]) {
-    await panel.press({ type: 'Button', text: 'Start a workspace' })
-    await panel.post('workspace.armChanged', { org: 'contoso', itemId: 101 })
-    assert.equal(shown(), true, 'the worker posted this item')
-    await panel.post('workspace.armChanged', other)
-    assert.equal(shown(), false, JSON.stringify(other))
-    assert.equal(panel.find({ type: 'Button', text: 'Cancel' }), null)
-    assert.equal(panel.find({ type: 'Callout' }), null)
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.equal(button('Start a workspace and agent')?.disabled, true)
+  assert.equal(inputsTo(host, 'work.startWork').length, 1)
+
+  await panel.post('work.workspaceReady', { org: 'contoso', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+  assert.equal(button('Start an agent')?.disabled, false, 'the workspace is there, so another agent is a choice')
+})
+
+test('Start an agent stays off until the agent works, or until the 60-second warning', async () => {
+  const timeouts = capturedTimeouts()
+  try {
+    const host = await open(snapshotOf({ mine: [item(101)] }), {
+      'work.details': detailsOf(),
+      'work.itemWorkspace': { workspace: LINKED, unsupported: null },
+      'work.startAgent': LAUNCHED
+    })
+    await openCard()
+    await panel.press({ type: 'Button', text: 'Start an agent' })
+    assert.equal(button('Start an agent')?.disabled, true)
+    assert.equal(button('Open workspace')?.disabled, false)
+    await panel.post('work.agentWorking', { org: 'contoso', itemId: 101 })
+    assert.equal(button('Start an agent')?.disabled, false)
+
+    await panel.press({ type: 'Button', text: 'Start an agent' })
+    assert.equal(button('Start an agent')?.disabled, true)
+    await timeouts.fire()
+    assert.equal(button('Start an agent')?.disabled, false, 'after the warning another try is allowed')
+    assert.equal(inputsTo(host, 'work.startAgent').length, 2)
+  } finally {
+    timeouts.restore()
   }
 })
 
-test('Start an agent shows the message only when nothing launched', async () => {
-  let launched = false
-  const host = await open(snapshotOf({ mine: [item(101)] }), {
-    'work.details': detailsOf(),
-    'work.startAgent': () => ({ launched, message: 'Start a workspace for this item first.' })
-  })
+test('a prompt cut to the title and link is explained', async () => {
+  await open(snapshotOf({ mine: [item(101)] }), { 'work.details': detailsOf(), 'work.startWork': { ...SENT, shortened: true } })
   await openCard()
-  await panel.press({ type: 'Button', text: 'Start an agent' })
-  assert.deepEqual(inputsTo(host, 'work.startAgent'), [{ org: 'contoso', id: 101 }])
-  assert.equal(panel.find({ type: 'Callout' })?.text, 'Start a workspace for this item first.')
-
-  launched = true
-  await panel.press({ type: 'Button', text: 'Start an agent' })
-  assert.equal(panel.find({ type: 'Callout' }), null)
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.deepEqual(startCallouts(), [
+    { tone: 'accent', text: `Creating ${BRANCH} in web. Orca opens it when it's ready.` },
+    { tone: 'warning', text: SHORTENED }
+  ])
 })
 
-test('a failed start shows the message', async () => {
+const REPO = { type: 'Select', label: 'Repository' } as const
+const PROJECT = { type: 'Select', label: 'Project' } as const
+const CLONE_REPO = { type: 'Select', label: 'Repository to clone' } as const
+const WEB_APP = 'contoso/fabrikam web/web-app'
+const API = 'contoso/fabrikam api/api'
+const TOOLS = 'contoso/tools/tools'
+const ROWS: StartRepo[] = [
+  { key: WEB_APP, name: 'web-app', detail: 'Fabrikam Web', source: 'pr' },
+  { key: API, name: 'api', detail: 'Fabrikam API', source: 'last' },
+  { key: TOOLS, name: 'tools', detail: 'Tools', source: 'org' },
+  { key: 'git:github.com/contoso/notes', name: 'notes', detail: 'github.com', source: 'other' }
+]
+const TARGETS: CloneTargets = {
+  projects: [
+    { id: 'p-web', name: 'Fabrikam Web', repos: [{ id: 'r-web', name: 'web-app' }, { id: 'r-api', name: 'api' }] },
+    { id: 'p-tools', name: 'Tools', repos: [{ id: 'r-tools', name: 'tools' }] }
+  ],
+  readAt: NOW,
+  more: 0
+}
+const KNOWN = 'web-app · Fabrikam Web (linked pull request)'
+const READING = 'Reading the repository list…'
+const NO_GIT = "Git wasn't found, so the plugin can't clone. Install Git, then try again."
+const UNLISTED =
+  "Azure DevOps didn't list this organisation's repositories, so the plugin can't clone from it. Clone the repository yourself and add it to Orca."
+const SETUP_SKIPPED =
+  "This repository's setup didn't run, because the plugin just added it to Orca. Look the repository over, then run its setup steps yourself in the workspace's terminal. Later workspaces in this repository run setup as usual."
+
+const reposOf = (over: Partial<StartRepos> = {}): StartRepos => ({ repos: [...ROWS], selected: null, clone: { folder: '~/orca/repos' }, ...over })
+const labelsOf = (query: TestQuery) => ((panel.find(query)?.props.options ?? []) as { label: string }[]).map(option => option.label)
+const startButton = () => button('Start a workspace and agent')
+const pressStart = () => panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+
+const optionsOf = (query: TestQuery) => ((panel.find(query)?.props.options ?? []) as { value: string }[]).map(option => option.value)
+
+test('with several repositories the panel asks which one, offering the last answer first, with its message', async () => {
+  const repos = [
+    { key: 'contoso/web/api', name: 'api', detail: 'Web', source: 'org' },
+    { key: 'contoso/web/web', name: 'web', detail: 'Web', source: 'last' }
+  ] as const
+  const gone = "That repository isn't in Orca any more. Choose another."
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startWork': input =>
+      input.repo ? SENT : { status: 'choose-repo', repos: { repos: [...repos], selected: 'contoso/web/web', clone: { folder: '~/orca/repos' } }, message: gone }
+  })
+  await openCard()
+  assert.deepEqual(inputsTo(host, 'work.startRepos'), [{ org: 'contoso', id: 101 }])
+  assert.equal(panel.find(REPO), null, "a list the worker couldn't give leaves the choice to Start")
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.deepEqual(optionsOf(REPO), ['contoso/web/api', 'contoso/web/web', 'clone'])
+  assert.deepEqual(labelsOf(REPO), ['api · Web', 'web · Web (last used)', 'Clone from Azure DevOps…'])
+  assert.equal(panel.valueOf(REPO), 'contoso/web/web')
+  assert.deepEqual(startCallouts(), [{ tone: 'warning', text: gone }])
+  await panel.select(REPO, 'contoso/web/api')
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101 }, { org: 'contoso', id: 101, repo: { kind: 'orca', key: 'contoso/web/api' } }])
+  assert.equal(panel.find(REPO)?.disabled, true)
+  assert.deepEqual(startCallouts(), [{ tone: 'accent', text: `Creating ${BRANCH} in web. Orca opens it when it's ready.` }])
+})
+
+test('with a known repo the details show it with Change repo, and Start uses it', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ selected: WEB_APP }),
+    'work.startWork': SENT
+  })
+  await openCard()
+  assert.deepEqual(inputsTo(host, 'work.startRepos'), [{ org: 'contoso', id: 101 }])
+  assert.ok(panel.find({ type: 'Text', text: KNOWN }))
+  assert.equal(button('Change repo')?.disabled, false)
+  assert.equal(panel.find(REPO), null)
+  assert.equal(startButton()?.disabled, false)
+  await pressStart()
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101, repo: { kind: 'orca', key: WEB_APP } }])
+})
+
+test('with no known repo the list shows every row and Start waits for a choice', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf(),
+    'work.startWork': SENT
+  })
+  await openCard()
+  assert.deepEqual(labelsOf(REPO), [KNOWN, 'api · Fabrikam API (last used)', 'tools · Tools', 'notes · github.com', 'Clone from Azure DevOps…'])
+  assert.equal(panel.find(REPO)?.props.placeholder, 'Choose a repository')
+  assert.equal(panel.valueOf(REPO), '')
+  assert.equal(startButton()?.disabled, true)
+  await panel.select(REPO, TOOLS)
+  assert.equal(startButton()?.disabled, false)
+  await pressStart()
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101, repo: { kind: 'orca', key: TOOLS } }])
+})
+
+test('Change repo opens the list on the current repo, and picking another starts there', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ selected: WEB_APP }),
+    'work.startWork': SENT
+  })
+  await openCard()
+  await panel.press({ type: 'Button', text: 'Change repo' })
+  assert.equal(panel.valueOf(REPO), WEB_APP)
+  assert.equal(panel.find({ type: 'Text', text: KNOWN }), null)
+  assert.equal(button('Change repo'), null)
+  assert.equal(startButton()?.disabled, false)
+  await panel.select(REPO, API)
+  await pressStart()
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101, repo: { kind: 'orca', key: API } }])
+})
+
+test('Clone from Azure DevOps… reads the list once, selects nothing, and says where it clones once a repository is chosen', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ selected: WEB_APP }),
+    'work.cloneTargets': () => new Promise<CloneTargets>(resolve => setTimeout(() => resolve(TARGETS), 60)),
+    'work.startWork': SENT
+  })
+  await openCard()
+  await panel.press({ type: 'Button', text: 'Change repo' })
+  assert.deepEqual(inputsTo(host, 'work.cloneTargets'), [])
+  const choosing = panel.select(REPO, 'clone')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(panel.valueOf(REPO), 'clone')
+  assert.ok(panel.find({ type: 'Text', text: READING }))
+  assert.equal(panel.find(PROJECT), null)
+  assert.equal(startButton()?.disabled, true)
+
+  await choosing
+  assert.equal(panel.find({ type: 'Text', text: READING }), null)
+  assert.deepEqual(labelsOf(PROJECT), ['Fabrikam Web', 'Tools'])
+  assert.equal(panel.find(PROJECT)?.props.placeholder, 'Choose a project')
+  assert.equal(panel.valueOf(PROJECT), '', 'the linked pull request preselects nothing')
+  assert.deepEqual(optionsOf(CLONE_REPO), [])
+  assert.equal(startButton()?.disabled, true)
+
+  await panel.select(PROJECT, 'p-web')
+  assert.deepEqual(labelsOf(CLONE_REPO), ['web-app', 'api'])
+  assert.equal(panel.find(CLONE_REPO)?.props.placeholder, 'Choose a repository')
+  assert.equal(panel.valueOf(CLONE_REPO), '')
+  assert.equal(panel.find({ type: 'Text', text: /^Clones into / }), null)
+  assert.equal(startButton()?.disabled, true)
+
+  await panel.select(CLONE_REPO, 'r-web')
+  assert.ok(panel.find({ type: 'Text', text: 'Clones into ~/orca/repos/web-app' }))
+  assert.equal(startButton()?.disabled, false)
+  await pressStart()
+  assert.deepEqual(inputsTo(host, 'work.startWork'), [{ org: 'contoso', id: 101, repo: { kind: 'clone', projectId: 'p-web', repoId: 'r-web' } }])
+  assert.deepEqual(inputsTo(host, 'work.cloneTargets'), [{ org: 'contoso' }])
+})
+
+test('with no repos in Orca the picker opens on Clone and says so', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ repos: [] }),
+    'work.cloneTargets': TARGETS
+  })
+  await openCard()
+  assert.equal(panel.valueOf(REPO), 'clone')
+  assert.deepEqual(labelsOf(REPO), ['Clone from Azure DevOps…'])
+  assert.ok(panel.find({ type: 'Text', text: 'No repositories are in Orca on this computer yet. Clone one from Azure DevOps.' }))
+  assert.deepEqual(inputsTo(host, 'work.cloneTargets'), [{ org: 'contoso' }])
+  assert.deepEqual(labelsOf(PROJECT), ['Fabrikam Web', 'Tools'])
+  await panel.select(PROJECT, 'p-tools')
+  assert.equal(panel.valueOf(CLONE_REPO), '', "a project's only repository is still the user's to choose")
+  assert.equal(panel.find({ type: 'Text', text: /^Clones into / }), null)
+  assert.equal(startButton()?.disabled, true)
+  await panel.select(CLONE_REPO, 'r-tools')
+  assert.ok(panel.find({ type: 'Text', text: 'Clones into ~/orca/repos/tools' }))
+  assert.equal(startButton()?.disabled, false)
+})
+
+test("a repository list that answers late, from an earlier open of the item, doesn't undo a choice made since", async () => {
+  let answerFirst: (repos: StartRepos) => void = () => {}
+  let asked = 0
   await open(snapshotOf({ mine: [item(101)] }), {
     'work.details': detailsOf(),
-    'work.startWorkspace': () => {
-      throw hostError('action_failed', 'Azure DevOps is unreachable.')
+    'work.startRepos': () => (++asked === 1 ? new Promise<StartRepos>(resolve => (answerFirst = resolve)) : reposOf())
+  })
+  const acts: Promise<void>[] = []
+  const act = async (next: () => Promise<void>) => {
+    acts.push(next())
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await act(() => openCard())
+  await act(() => panel.press({ label: 'Back' }))
+  await act(() => openCard())
+  await act(() => panel.settled())
+  await act(() => panel.select(REPO, TOOLS))
+  assert.equal(asked, 2)
+  answerFirst(reposOf({ selected: WEB_APP }))
+  await Promise.all(acts)
+  await panel.settled()
+  assert.equal(panel.valueOf(REPO), TOOLS)
+  assert.equal(panel.find({ type: 'Text', text: KNOWN }), null)
+})
+
+test('a clone problem shows instead of the project and repository selects, and Start stays off', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ clone: { problem: NO_GIT } }),
+    'work.cloneTargets': TARGETS
+  })
+  await openCard()
+  await panel.select(REPO, 'clone')
+  assert.deepEqual(startCallouts(), [{ tone: 'warning', text: NO_GIT }])
+  assert.equal(panel.find(PROJECT), null)
+  assert.equal(panel.find(CLONE_REPO), null)
+  assert.equal(startButton()?.disabled, true)
+  assert.deepEqual(inputsTo(host, 'work.cloneTargets'), [])
+})
+
+test("a repository list Azure DevOps won't give shows why instead of the selects, Start stays off, and Clone asks again next time", async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf(),
+    'work.cloneTargets': () => {
+      throw hostError('action_failed', UNLISTED)
     }
   })
   await openCard()
-  await panel.press({ type: 'Button', text: 'Start a workspace' })
-  assert.equal(panel.find({ type: 'Callout' })?.props.tone, 'danger')
-  assert.equal(panel.find({ type: 'Callout' })?.text, 'Azure DevOps is unreachable.')
+  await panel.select(REPO, 'clone')
+  assert.deepEqual(startCallouts(), [{ tone: 'warning', text: UNLISTED }])
+  assert.equal(panel.find(PROJECT), null)
+  assert.equal(startButton()?.disabled, true)
+  await panel.select(REPO, TOOLS)
+  assert.deepEqual(startCallouts(), [])
+  assert.equal(startButton()?.disabled, false)
+  await panel.select(REPO, 'clone')
+  assert.deepEqual(inputsTo(host, 'work.cloneTargets'), [{ org: 'contoso' }, { org: 'contoso' }])
+})
+
+test("a sent clone says it is cloning with Show it, keeps Start off without a late notice at 60 seconds, shows it at 10 minutes, and says setup didn't run", async () => {
+  const timeouts = capturedTimeouts()
+  try {
+    const host = await open(snapshotOf({ mine: [item(101)] }), {
+      'work.details': detailsOf(),
+      'work.startRepos': reposOf({ repos: [] }),
+      'work.cloneTargets': TARGETS,
+      'work.startWork': { ...SENT, repo: 'tools', clone: { folder: '~/orca/repos/tools', fresh: true, setupSkipped: true } },
+      'work.openWorkspace': { opened: true }
+    })
+    await openCard()
+    await panel.select(PROJECT, 'p-tools')
+    await panel.select(CLONE_REPO, 'r-tools')
+    await pressStart()
+    assert.deepEqual(startCallouts(), [
+      { tone: 'accent', text: `Cloning tools into ~/orca/repos/tools, then creating ${BRANCH}. Orca opens it when it's ready. Show it` },
+      { tone: 'warning', text: SETUP_SKIPPED }
+    ])
+    await panel.press({ type: 'Button', text: 'Show it' })
+    assert.deepEqual(inputsTo(host, 'work.openWorkspace'), [{ workspaceId: WEB.id }])
+
+    assert.equal(timeouts.count(60_000), 0)
+    await timeouts.fire(60_000)
+    assert.equal(startButton()?.disabled, true)
+    assert.equal(timeouts.count(600_000), 1)
+    await timeouts.fire(600_000)
+    assert.deepEqual(startCallouts(), [
+      { tone: 'neutral', text: `Sent to Orca. If ${BRANCH} didn't appear, the terminal "ADO #101" in web shows why. Show it` },
+      { tone: 'warning', text: SETUP_SKIPPED }
+    ])
+    assert.equal(startButton()?.disabled, false)
+
+    await panel.post('work.workspaceReady', { org: 'contoso', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+    assert.deepEqual(startCallouts(), [
+      { tone: 'success', text: `${BRANCH} is open, and claude is starting with the item's details.` },
+      { tone: 'warning', text: SETUP_SKIPPED }
+    ])
+  } finally {
+    timeouts.restore()
+  }
+})
+
+test('under the notice the setup note comes first, then the shortened-prompt note', async () => {
+  await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startWork': { ...SENT, repo: 'tools', shortened: true, clone: { folder: '~/orca/repos/tools', fresh: true, setupSkipped: true } }
+  })
+  await openCard()
+  await pressStart()
+  assert.deepEqual(startCallouts(), [
+    { tone: 'accent', text: `Cloning tools into ~/orca/repos/tools, then creating ${BRANCH}. Orca opens it when it's ready. Show it` },
+    { tone: 'warning', text: SETUP_SKIPPED },
+    { tone: 'warning', text: SHORTENED }
+  ])
+})
+
+test('the picker goes once the workspace is linked', async () => {
+  await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startRepos': reposOf({ selected: WEB_APP }),
+    'work.startWork': SENT
+  })
+  await openCard()
+  await pressStart()
+  assert.ok(panel.find({ type: 'Text', text: KNOWN }))
+  assert.equal(button('Change repo')?.disabled, true, 'the repo stays put while Orca creates the workspace')
+
+  await panel.post('work.workspaceReady', { org: 'contoso', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+  assert.equal(panel.find({ type: 'Text', text: KNOWN }), null)
+  assert.equal(button('Change repo'), null)
+  assert.equal(panel.find(REPO), null)
+  assert.deepEqual(buttons(), ['Start an agent', 'Open workspace'])
+})
+
+test('a workspace already on the branch becomes the item\'s workspace', async () => {
+  await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startWork': { status: 'linked', branch: BRANCH, workspace: LINKED }
+  })
+  await openCard()
+  await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+  assert.deepEqual(startCallouts(), [{ tone: 'success', text: `web-101 is already on ${BRANCH}, so it's now this item's workspace.` }])
+  assert.deepEqual(buttons(), ['Start an agent', 'Open workspace'])
+})
+
+test("Start an agent runs in the item's workspace and says when the agent works", async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.itemWorkspace': { workspace: LINKED, unsupported: null },
+    'work.startAgent': LAUNCHED,
+    'work.openWorkspace': { opened: true }
+  })
+  await openCard()
+  assert.deepEqual(buttons(), ['Start an agent', 'Open workspace'])
+  assert.deepEqual(inputsTo(host, 'work.startRepos'), [], 'an item with a workspace needs no repository list')
+  await panel.press({ type: 'Button', text: 'Start an agent' })
+  assert.deepEqual(inputsTo(host, 'work.startAgent'), [{ org: 'contoso', id: 101 }])
+  assert.deepEqual(startCallouts(), [{ tone: 'success', text: 'claude is starting in web-101.' }])
+  await panel.post('work.agentWorking', { org: 'contoso', itemId: 101 })
+  assert.deepEqual(startCallouts(), [{ tone: 'success', text: 'claude is working on it.' }])
+
+  await panel.press({ type: 'Button', text: 'Open workspace' })
+  assert.deepEqual(inputsTo(host, 'work.openWorkspace'), [{ workspaceId: LINKED.id }])
+})
+
+test('with no answer after 60 seconds the panel says, without calling it a failure, where to look, and Show it opens that workspace', async () => {
+  const timeouts = capturedTimeouts()
+  try {
+    const host = await open(snapshotOf({ mine: [item(101)] }), {
+      'work.details': detailsOf(),
+      'work.startWork': SENT,
+      'work.openWorkspace': { opened: true }
+    })
+    await openCard()
+    await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+    assert.equal(timeouts.count(), 1)
+    await timeouts.fire()
+    assert.deepEqual(startCallouts(), [{ tone: 'neutral', text: `Sent to Orca. If ${BRANCH} didn't appear, the terminal "ADO #101" in web shows why. Show it` }])
+    await panel.press({ type: 'Button', text: 'Show it' })
+    assert.deepEqual(inputsTo(host, 'work.openWorkspace'), [{ workspaceId: WEB.id }])
+
+    await panel.post('work.workspaceReady', { org: 'contoso', itemId: 101, workspaceId: LINKED.id, branch: BRANCH })
+    assert.deepEqual(startCallouts(), [{ tone: 'success', text: `${BRANCH} is open, and claude is starting with the item's details.` }], 'a late answer still lands')
+  } finally {
+    timeouts.restore()
+  }
+})
+
+test('an agent the panel never hears working gets the same neutral message after 60 seconds', async () => {
+  const timeouts = capturedTimeouts()
+  try {
+    const host = await open(snapshotOf({ mine: [item(101)] }), {
+      'work.details': detailsOf(),
+      'work.itemWorkspace': { workspace: LINKED, unsupported: null },
+      'work.startAgent': LAUNCHED,
+      'work.openWorkspace': { opened: true }
+    })
+    await openCard()
+    await panel.press({ type: 'Button', text: 'Start an agent' })
+    assert.deepEqual(startCallouts(), [{ tone: 'success', text: 'claude is starting in web-101.' }])
+    await timeouts.fire()
+    assert.deepEqual(startCallouts(), [{ tone: 'neutral', text: `Sent to Orca. If claude didn't start, the terminal "ADO #101" in web-101 shows why. Show it` }])
+    await panel.press({ type: 'Button', text: 'Show it' })
+    assert.deepEqual(inputsTo(host, 'work.openWorkspace'), [{ workspaceId: LINKED.id }])
+  } finally {
+    timeouts.restore()
+  }
+})
+
+test('an answer in time cancels the 60-second warning, and so does leaving the item', async () => {
+  const timeouts = capturedTimeouts()
+  try {
+    await open(snapshotOf({ mine: [item(101), item(102)] }), {
+      'work.details': input => detailsOf({ item: item(input.id) }),
+      'work.itemWorkspace': input => ({ workspace: input.id === 101 ? LINKED : null, unsupported: null }),
+      'work.startAgent': LAUNCHED,
+      'work.startWork': SENT
+    })
+    await openCard('Story 101')
+    await panel.press({ type: 'Button', text: 'Start an agent' })
+    await panel.post('work.agentWorking', { org: 'contoso', itemId: 101 })
+    assert.equal(timeouts.count(), 0)
+
+    await panel.press({ type: 'Button', text: 'Start an agent' })
+    await panel.press({ label: 'Back' })
+    await openCard('Story 102')
+    assert.equal(timeouts.count(), 0)
+    assert.deepEqual(startCallouts(), [])
+  } finally {
+    timeouts.restore()
+  }
+})
+
+test('a refusal shows in its tone, and a failed start shows the message', async () => {
+  const results: unknown[] = [
+    { status: 'refused', tone: 'danger', message: "Orca didn't let the plugin open a terminal. Update the plugin and approve its access in Settings → Plugins." },
+    { status: 'refused', tone: 'warning', message: "None of this project's repositories is in Orca on this computer. Add one to Orca, then try again." }
+  ]
+  await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.startWork': () => {
+      const next = results.shift()
+      if (!next) throw hostError('action_failed', 'Azure DevOps is unreachable.')
+      return next as never
+    }
+  })
+  await openCard()
+  for (const expected of [
+    { tone: 'danger', text: "Orca didn't let the plugin open a terminal. Update the plugin and approve its access in Settings → Plugins." },
+    { tone: 'warning', text: "None of this project's repositories is in Orca on this computer. Add one to Orca, then try again." },
+    { tone: 'danger', text: 'Azure DevOps is unreachable.' }
+  ]) {
+    await panel.press({ type: 'Button', text: 'Start a workspace and agent' })
+    assert.deepEqual(startCallouts(), [expected])
+  }
+  assert.deepEqual(buttons(), ['Start a workspace and agent'])
+})
+
+test('an unsupported platform or shell turns the start buttons off and says why', async () => {
+  const host = await open(snapshotOf({ mine: [item(101), item(102)] }), {
+    'work.details': input => detailsOf({ item: item(input.id) }),
+    'work.itemWorkspace': input => ({ workspace: input.id === 102 ? LINKED : null, unsupported: FISH })
+  })
+  await openCard('Story 101')
+  assert.equal(button('Start a workspace and agent')?.disabled, true)
+  assert.ok(panel.find({ type: 'Text', text: FISH }))
+  assert.deepEqual(inputsTo(host, 'work.startRepos'), [], 'nothing can start here, so no repository list is read')
+
+  await panel.press({ label: 'Back' })
+  await openCard('Story 102')
+  assert.equal(button('Start an agent')?.disabled, true)
+  assert.equal(button('Open workspace')?.disabled, false)
+})
+
+test('the start button waits for the workspace lookup, and a failed lookup still offers it without reading the repositories', async () => {
+  const host = await open(snapshotOf({ mine: [item(101)] }), {
+    'work.details': detailsOf(),
+    'work.itemWorkspace': () => new Promise((_, reject) => setTimeout(() => reject(hostError('unavailable', 'Orca is busy.')), 60))
+  })
+  const opening = openCard()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(button('Start a workspace and agent')?.disabled, true)
+  await opening
+  assert.equal(button('Start a workspace and agent')?.disabled, false)
+  assert.deepEqual(startCallouts(), [])
+  assert.deepEqual(inputsTo(host, 'work.startRepos'), [])
 })
 
 test('details offers Open in Azure DevOps and Back returns to the list', async () => {
@@ -1394,6 +1907,169 @@ test('a details view without acceptance criteria omits that section', async () =
     ['Reproduced on staging.']
   )
   assert.equal(panel.findAll({ type: 'List' }).length, 0)
+})
+
+const readLine = () => panel.find({ type: 'Text', text: /^Read / })
+
+const readAt = () => inside(readLine() as TestElement, { type: 'RelativeTime' }).map(time => time.props.at)
+
+const dangers = () => panel.findAll({ type: 'Callout' }).filter(callout => callout.props.tone === 'danger').map(callout => callout.text)
+
+const stateShown = () => (panel.find({ type: 'KeyValue' })?.props.items as { label: string; value: unknown }[] | undefined)?.[1]?.value
+
+function held<T>() {
+  let release: (value: T) => void = () => {}
+  let fail: (error: unknown) => void = () => {}
+  const promise = new Promise<T>((resolve, reject) => {
+    release = resolve
+    fail = reject
+  })
+  return { promise, release: (value: T) => release(value), fail: (error: unknown) => fail(error) }
+}
+
+test('the details say when they were read', async () => {
+  await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), { 'work.details': detailsOf({ readAt: NOW - 120_000 }) })
+  await openCard('Fix login redirect')
+  assert.equal(readLine()?.props.muted, true)
+  assert.deepEqual(readAt(), [NOW - 120_000])
+})
+
+test('Refresh reads the details again with fresh and keeps them on screen meanwhile', async () => {
+  const again = held<WorkItemDetails>()
+  let loads = 0
+  const host = await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), {
+    'work.details': () => (++loads === 1 ? detailsOf({ readAt: NOW - 600_000 }) : again.promise)
+  })
+  await openCard('Fix login redirect')
+  assert.deepEqual(
+    panel
+      .findAll({ type: 'IconButton' })
+      .filter(button => ['Back', 'Refresh'].includes(button.label ?? ''))
+      .map(button => [button.label, button.props.icon, button.props.variant, button.props.size]),
+    [
+      ['Back', 'close', 'ghost', 'sm'],
+      ['Refresh', 'refresh', 'ghost', 'sm']
+    ]
+  )
+  assert.equal(panel.find({ label: 'Refresh' })?.disabled, false)
+
+  const pressing = panel.press({ label: 'Refresh' })
+  await pause(10)
+  assert.deepEqual(inputsTo(host, 'work.details'), [
+    { org: 'contoso', id: 101 },
+    { org: 'contoso', id: 101, fresh: true }
+  ])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Fix login redirect')
+  assert.equal(panel.find({ type: 'Skeleton' }), null)
+  assert.deepEqual(readAt(), [NOW - 600_000])
+  assert.equal(panel.find({ label: 'Refresh' })?.disabled, true)
+
+  again.release(detailsOf({ item: item(101, { title: 'Fix login redirect', state: 'Resolved' }), readAt: NOW }))
+  await pressing
+  assert.equal(stateShown(), 'Resolved')
+  assert.deepEqual(readAt(), [NOW])
+  assert.equal(panel.find({ label: 'Refresh' })?.disabled, false)
+})
+
+test("a comment posted during a Refresh survives the Refresh's answer that lacks it", async () => {
+  const again = held<WorkItemDetails>()
+  let loads = 0
+  const posted = { id: 2, author: 'Ada Lovelace', createdAt: NOW, textMd: 'Fixed in the next build.' }
+  const host = await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), {
+    'work.details': () => (++loads === 1 ? detailsOf() : again.promise),
+    'work.comment': posted
+  })
+  await openCard('Fix login redirect')
+  await panel.type({ label: 'Add a comment' }, 'Fixed in the next build.')
+  const pressing = panel.press({ label: 'Refresh' })
+  await pause(10)
+  const commenting = panel.press({ type: 'Button', text: 'Comment' })
+  await pause(10)
+  assert.deepEqual(inputsTo(host, 'work.comment'), [{ org: 'contoso', id: 101, text: 'Fixed in the next build.' }])
+
+  again.release(detailsOf({ item: item(101, { title: 'Fix login redirect', state: 'Resolved' }), readAt: NOW }))
+  await Promise.all([pressing, commenting])
+  assert.equal(stateShown(), 'Resolved')
+  assert.deepEqual(
+    panel.findAll({ type: 'Markdown' }).map(markdown => markdown.props.content).slice(2),
+    ['Fixed in the next build.', 'Reproduced on staging.']
+  )
+})
+
+const commentsShown = () => panel.findAll({ type: 'Markdown' }).map(markdown => markdown.props.content).slice(2)
+
+test("Refresh drops a newest comment deleted in Azure DevOps that wasn't posted here", async () => {
+  let loads = 0
+  const newest = { id: 2, author: 'Ada Lovelace', createdAt: NOW, textMd: 'Fixed in the next build.' }
+  await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), {
+    'work.details': () => (++loads === 1 ? detailsOf({ comments: [newest, ...detailsOf().comments] }) : detailsOf())
+  })
+  await openCard('Fix login redirect')
+  assert.deepEqual(commentsShown(), ['Fixed in the next build.', 'Reproduced on staging.'])
+
+  await panel.press({ label: 'Refresh' })
+  assert.deepEqual(commentsShown(), ['Reproduced on staging.'])
+})
+
+test('a comment you posted stays through Refreshes that lack it for 2 minutes, then goes', async () => {
+  const posted = { id: 2, author: 'Ada Lovelace', createdAt: NOW, textMd: 'Fixed in the next build.' }
+  await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), { 'work.details': () => detailsOf(), 'work.comment': posted })
+  await openCard('Fix login redirect')
+  await panel.type({ label: 'Add a comment' }, 'Fixed in the next build.')
+  const realNow = Date.now
+  let clock = realNow()
+  Date.now = () => clock
+  try {
+    await panel.press({ type: 'Button', text: 'Comment' })
+    clock += 120_000 - 1
+    await panel.press({ label: 'Refresh' })
+    assert.deepEqual(commentsShown(), ['Fixed in the next build.', 'Reproduced on staging.'])
+
+    clock += 1
+    await panel.press({ label: 'Refresh' })
+    assert.deepEqual(commentsShown(), ['Reproduced on staging.'])
+  } finally {
+    Date.now = realNow
+  }
+})
+
+test('a Refresh that fails shows the message and keeps the details, and the next one clears it', async () => {
+  let loads = 0
+  await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), {
+    'work.details': () => {
+      loads += 1
+      if (loads === 2) throw hostError('action_failed', 'Azure DevOps is unreachable.')
+      return loads === 1 ? detailsOf() : detailsOf({ item: item(101, { title: 'Fix login redirect', state: 'Resolved' }) })
+    }
+  })
+  await openCard('Fix login redirect')
+  await panel.press({ label: 'Refresh' })
+  assert.deepEqual(dangers(), ['Azure DevOps is unreachable.'])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Fix login redirect')
+  assert.equal(stateShown(), 'Active')
+
+  await panel.press({ label: 'Refresh' })
+  assert.deepEqual(dangers(), [])
+  assert.equal(stateShown(), 'Resolved')
+})
+
+test('Refresh after details that could not load reads them again', async () => {
+  let loads = 0
+  const host = await open(snapshotOf({ mine: [item(101, { title: 'Fix login redirect' })] }), {
+    'work.details': () => {
+      if (++loads === 1) throw hostError('action_failed', 'Azure DevOps is unreachable.')
+      return detailsOf()
+    }
+  })
+  await openCard('Fix login redirect')
+  assert.deepEqual(dangers(), ['Azure DevOps is unreachable.'])
+  await panel.press({ label: 'Refresh' })
+  assert.deepEqual(inputsTo(host, 'work.details'), [
+    { org: 'contoso', id: 101 },
+    { org: 'contoso', id: 101, fresh: true }
+  ])
+  assert.deepEqual(dangers(), [])
+  assert.equal(panel.find({ type: 'Heading' })?.text, 'Fix login redirect')
 })
 
 test('a long group shows 25 cards and Show N more reveals the next ones', async () => {

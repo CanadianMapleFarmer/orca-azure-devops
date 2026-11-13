@@ -12,6 +12,7 @@ export interface BoardArgs {
 
 interface BacklogLevel {
   workItemTypes?: { name?: unknown }[]
+  defaultWorkItemType?: { name?: unknown }
 }
 
 interface BacklogConfiguration {
@@ -71,7 +72,7 @@ export async function listTeamBoards(
 
 export async function loadBoardConfig(http: AdoHttp, args: BoardArgs): Promise<BoardConfig> {
   const [{ board, taskTypes }, areas] = await Promise.all([
-    args.boardId ? fetchBoard(http, args, args.boardId).then((named): FoundBoard => ({ board: named })) : fetchRequirementBoard(http, args),
+    args.boardId ? fetchNamedBoard(http, args, args.boardId) : fetchRequirementBoard(http, args),
     teamGet<TeamFieldValues>(http, args, 'teamsettings/teamfieldvalues')
   ])
   const requirementTypes = shape(() => requirementTypeNames(board))
@@ -101,16 +102,40 @@ async function fetchRequirementBoard(http: AdoHttp, args: BoardArgs): Promise<Fo
     teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration'),
     listTeamBoards(http, args)
   ])
-  const name = shape(() => expectText(backlog.requirementBacklog.name))
-  const lowerName = name.toLowerCase()
-  const match = boards.find(board => board.name === name) ?? boards.find(board => board.name.toLowerCase() === lowerName)
+  const name = requirementName(backlog)
+  const match = boards.find(board => board.name === name) ?? boards.find(board => sameName(board.name, name))
   if (!match) throw new AdoError('not_found', 404, noBoardNamed(name))
   return { board: await fetchBoard(http, args, match.id), taskTypes: taskTypeNames(backlog) }
 }
 
+async function fetchNamedBoard(http: AdoHttp, args: BoardArgs, boardId: string): Promise<FoundBoard> {
+  const [board, taskTypes] = await Promise.all([fetchBoard(http, args, boardId), namedTaskTypes(http, args)])
+  if (!taskTypes) return { board }
+  return { board, taskTypes: sameName(shape(() => expectText(board.name)), taskTypes.requirement) ? taskTypes.names : [] }
+}
+
+async function namedTaskTypes(http: AdoHttp, args: BoardArgs): Promise<{ requirement: string; names: string[] } | null> {
+  try {
+    const backlog = await teamGet<BacklogConfiguration>(http, args, 'backlogconfiguration')
+    return { requirement: requirementName(backlog), names: shape(() => taskTypeNames(backlog)) }
+  } catch (error) {
+    if (!(error instanceof AdoError) || error.code === 'rate_limited') throw error
+    return null
+  }
+}
+
+function requirementName(backlog: BacklogConfiguration): string {
+  return shape(() => expectText(backlog.requirementBacklog.name))
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
 function taskTypeNames(backlog: BacklogConfiguration): string[] {
   const levels = backlog.bugsBehavior === 'asTasks' ? [backlog.taskBacklog, backlog.bugWorkItems] : [backlog.taskBacklog]
-  return [...new Set(levels.flatMap(typeNames))]
+  const preferred: unknown = backlog.taskBacklog?.defaultWorkItemType?.name
+  return [...new Set([...(typeof preferred === 'string' ? [preferred] : []), ...levels.flatMap(typeNames)])]
 }
 
 function typeNames(level: BacklogLevel | undefined): string[] {

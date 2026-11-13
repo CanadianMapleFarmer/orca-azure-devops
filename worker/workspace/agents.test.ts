@@ -1,13 +1,13 @@
 import { assert, test } from 'orca/testing'
 import type { WorkItemDetails, WorkItemSummary } from '../../src/shared/work'
-import { carriesContext, createContextCache, itemLink, itemPrompt } from './agents'
+import { carriesContext, createContextCache, itemLink, itemPrompt, shortPrompt } from './agents'
 
 const URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/1204'
 const LINK = `[ADO User Story #1204: Add vehicle search filters](${URL})`
 
 function details(over: Partial<WorkItemDetails> = {}): WorkItemDetails {
   const item = { org: 'contoso', id: 1204, type: 'User Story', title: 'Add vehicle search filters', url: URL } as WorkItemSummary
-  return { item, descriptionMd: '', acceptanceMd: '', comments: [], links: [], ...over }
+  return { item, descriptionMd: '', acceptanceMd: '', comments: [], links: [], assignee: null, tasks: [], moreTasks: 0, tasksRead: true, prs: [], taskTypes: [], taskType: null, readAt: 0, ...over }
 }
 
 test('itemLink is the one-line ADO reference', () => {
@@ -44,22 +44,13 @@ test('itemPrompt leaves out an empty section and is just the reference when both
   assert.equal(itemPrompt(details()), LINK)
 })
 
-const HEAD = `${LINK}\n\n## Description\n\n`
-const REST = `\n\n… open in Azure DevOps for the rest: ${URL}`
-
-test('itemPrompt keeps a text that fits and cuts one that does not, pointing at Azure DevOps', () => {
-  const room = 4000 - HEAD.length
-  assert.equal(itemPrompt(details({ descriptionMd: 'a'.repeat(room) })), HEAD + 'a'.repeat(room))
-
-  const prompt = itemPrompt(details({ descriptionMd: 'a'.repeat(room + 1), acceptanceMd: 'Never shown' }))
-  assert.equal(prompt, HEAD + 'a'.repeat(4000 - HEAD.length - REST.length) + REST)
-  assert.equal(prompt.length, 4000)
+test('itemPrompt keeps the whole description and acceptance criteria, however long', () => {
+  const long = 'a'.repeat(10_000)
+  assert.equal(itemPrompt(details({ descriptionMd: long, acceptanceMd: long })), `${LINK}\n\n## Description\n\n${long}\n\n## Acceptance criteria\n\n${long}`)
 })
 
-test('itemPrompt honours maxChars and never leaves half a surrogate pair', () => {
-  const prompt = itemPrompt(details({ descriptionMd: '😀'.repeat(200) }), HEAD.length + 3 + REST.length)
-  assert.equal(prompt, `${HEAD}😀${REST}`)
-  assert.ok(itemPrompt(details({ descriptionMd: 'c'.repeat(500) }), 1000).length <= 1000)
+test('shortPrompt is the reference and a pointer to the link', () => {
+  assert.equal(shortPrompt(details({ descriptionMd: 'Never shown' })), `${LINK}\n\nRead the description and acceptance criteria at the link above.`)
 })
 
 test('the context cache maps a terminal to its workspace, the newest record winning', () => {
