@@ -3,7 +3,7 @@ import { pathCandidates } from '../../src/shared/file-ref'
 import type { RunSummary } from '../../src/shared/pipelines'
 import { fileNotFound, NO_LOCAL_WORKSPACE_FILE, noRepoWorkspace, NOT_A_FILE_PATH } from '../messages'
 import type { RunCommand } from '../sys/run'
-import { focusedWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
+import { focusedWorkspace, isLocalWorkspace, listWorkspaces, type HostCall, type WorkspaceEntry } from '../workspace/focused'
 import { remotesOf, type AdoRemote } from '../workspace/remotes'
 import { workspacesOfRepo } from '../workspace/repo-workspaces'
 
@@ -40,7 +40,7 @@ export async function openRunFile(deps: OpenFileDeps, input: OpenFileInput): Pro
 
   const listed = await listWorkspaces(deps.call)
   const focused = await focusedWorkspace(deps.call, listed)
-  const local = listed.filter(entry => entry.hostId === null)
+  const local = listed.filter(isLocalWorkspace)
   const focusedLocal = local.find(entry => entry.id === focused?.id) ?? null
   const repo = run.repository?.name ?? focusedLocal?.name ?? ''
   const pool = run.repository ? await repositoryWorkspaces(deps, run, local, focusedLocal) : focusedLocal ? [focusedLocal] : []

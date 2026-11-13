@@ -150,6 +150,19 @@ test('checkout refuses a closed PR, a fork and a repository with no local worksp
   assert.deepEqual([none.opened, none.armed], [[], []])
 })
 
+test('checkout counts a workspace on Orca\'s "local" host as local and refuses an SSH host', async () => {
+  for (const hostId of [null, 'local']) {
+    const review = workspace('web-app-review', { branch: SOURCE, hostId })
+    const d = desk({ workspaces: [review], focused: review, remotes: { [review.path]: [WEB] } })
+    assert.deepEqual(await checkoutPr(d.deps, KEY), { status: 'opened', message: `Opened web-app-review. It's already on ${SOURCE}.` }, String(hostId))
+    assert.deepEqual(d.opened, [{ workspaceId: 'web-app-review' }])
+  }
+  const ssh = workspace('web-app-review', { branch: SOURCE, hostId: 'ssh-1' })
+  const remote = desk({ workspaces: [ssh], focused: ssh, remotes: { [ssh.path]: [WEB] } })
+  assert.deepEqual(await checkoutPr(remote.deps, KEY), { status: 'refused', message: NO_WORKSPACE })
+  assert.deepEqual([remote.opened, remote.armed, remote.read], [[], [], []])
+})
+
 test('checkout refuses a repository that is open only as a folder, which cannot create worktrees', async () => {
   const folder = workspace('web-app', { kind: 'folder', branch: null })
   const d = desk({ workspaces: [folder], focused: folder, remotes: { [folder.path]: [WEB] } })

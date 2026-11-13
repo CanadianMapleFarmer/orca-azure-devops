@@ -93,4 +93,5 @@ Panel overhaul:
 
 General:
 
+- Orca 1.4.258 reports every local workspace with `hostId: "local"`, not `null`, and the plugin counts both as local. On a new Orca, check that a local workspace still opens a board, a run's file, a checkout and a wiki tab, and that an SSH workspace is still refused.
 - On the client organisation, read **Connection status** after 10 minutes with the Work tab and a board open, and record the request totals and the `Rate limit` line with its `X-RateLimit-*` figures. Also record the `ETag seen` line, which names the endpoints that answer with an `ETag`.

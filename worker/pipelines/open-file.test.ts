@@ -436,6 +436,29 @@ test('a run without an Azure Repos repository uses the focused local workspace o
   })
 })
 
+test('openRunFile counts a workspace on Orca\'s "local" host as local and refuses an SSH host, with or without a repository', async () => {
+  await withTempDir(async base => {
+    await write(base, 'src/app.ts')
+    const cases: [RunSummary['repository'], string][] = [
+      [runOf().repository, 'Open a local workspace of web-app first.'],
+      [null, 'Open a local workspace first.']
+    ]
+    for (const [repository, message] of cases) {
+      const request = { run: runOf({ repository }), path: `${AGENT}/src/app.ts`, line: 1 }
+      for (const hostId of [null, 'local']) {
+        const web = workspace('ws-web', base, 'main', hostId)
+        const h = host([web], web)
+        assert.deepEqual(await openRunFile(depsOf(h.call, { [base]: [WEB] }).deps, request), { opened: true, path: 'src/app.ts', line: 1 }, String(hostId))
+        assert.deepEqual(h.opened(), [{ workspaceId: 'ws-web', path: 'src/app.ts' }])
+      }
+      const ssh = workspace('ws-web', base, 'main', 'ssh-1')
+      const remote = host([ssh], ssh)
+      assert.deepEqual(await openRunFile(depsOf(remote.call, { [base]: [WEB] }).deps, request), { opened: false, message })
+      assert.deepEqual(remote.opened(), [])
+    }
+  })
+})
+
 test('openRunFile refuses an over-long or non-text path before reading anything', async () => {
   const { call, calls } = host([], null)
   const { deps } = depsOf(call)

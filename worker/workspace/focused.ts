@@ -2,6 +2,10 @@ export type HostCall = (method: string, params?: unknown) => Promise<any>
 
 export interface WorkspaceEntry { id: string; kind: 'worktree' | 'folder'; name: string; path: string; branch: string | null; hostId: string | null }
 
+export function isLocalWorkspace(entry: WorkspaceEntry): boolean {
+  return entry.hostId === null || entry.hostId === 'local'
+}
+
 export async function listWorkspaces(call: HostCall): Promise<WorkspaceEntry[]> {
   const { workspaces }: { workspaces: WorkspaceEntry[] } = await call('workspace.list')
   return workspaces
