@@ -21,11 +21,35 @@ export const CHIPS_NEED_CODE_READ = 'Linked PR status needs Code (Read) access.'
 export const TASKS_NOT_LOADED = "Couldn't load the tasks under your items. They show after the next refresh."
 export const NOT_A_PR = "That isn't an Azure DevOps pull request link."
 export const EMPTY_COMMENT = 'Write a comment first.'
+export const BAD_ASSIGNEE = 'Choose someone from the list.'
+export const EMPTY_TASK_TITLE = 'Write a title for the task first.'
+export const TASK_TITLE_TOO_LONG = 'A task title can be at most 255 characters.'
 export const UNKNOWN_AUTHOR = 'Unknown'
 export const REST_IN_ADO = '… open in Azure DevOps for the rest'
 export const NO_LOCAL_WORKSPACE = 'Open a local workspace first, or use + → Azure DevOps board.'
 export const BAD_BOARD = "That board can't be opened."
-export const NO_ITEM_WORKSPACE = 'Start a workspace for this item first, or open one in Orca.'
+export const NO_ITEM_WORKSPACE = 'This item has no workspace in Orca yet. Start a workspace and agent first.'
+export const AGENT_STARTING = 'An agent is already starting for this item.'
+export const STILL_CREATING = "This item's workspace is still being created. If Orca's terminal shows an error, try again in two minutes."
+export const REPO_GONE = "That repository isn't in Orca any more. Choose another."
+export const NO_TERMINAL_HOME = 'Cloning needs a workspace in Orca to run in. Open any folder in Orca, then try again.'
+export const CLONE_FOLDER_SETTING = '"Folder for new clones" must be a full path, such as ~/orca/repos.'
+export const CLONE_NAME_UNSAFE = "This repository's name can't be used as a folder name. Clone it yourself and add it to Orca."
+export const CLONE_URL_UNSAFE = "The plugin can't build a safe clone address for this repository. Clone it yourself and add it to Orca."
+export const NO_GIT = "Git wasn't found, so the plugin can't clone. Install Git, then try again."
+export const CLONE_GONE = 'Azure DevOps no longer lists that repository. Choose another.'
+export const CLONE_RELOAD = 'The repository list needs reloading. Choose the repository to clone again.'
+export const REPOS_UNLISTED = "Azure DevOps didn't list this organisation's repositories, so the plugin can't clone from it. Clone the repository yourself and add it to Orca."
+export const BAD_AGENT = 'Default agent must be an agent name such as claude or codex.'
+export const TERMINAL_REFUSED = "Orca didn't let the plugin open a terminal. Update the plugin and approve its access in Settings → Plugins."
+export const COMMAND_TOO_LONG = 'The command for this item is too long for Orca. Shorten the branch name template.'
+export const LINK_NOT_SAVED = "Couldn't save the link between a workspace and its work item."
+export const PROMPT_NOT_SAVED = "Couldn't save the agent's prompt in ~/.orca-azure-devops/starts. Check that folder's permissions."
+export const START_FILES_NOT_REMOVED = "Couldn't remove a start file in ~/.orca-azure-devops/starts."
+export const READ_AT_LINK = 'Read the description and acceptance criteria at the link above.'
+export const NOT_ON_WINDOWS = "Starting a workspace or an agent from an item isn't supported on Windows yet."
+export const ONLY_MAC_AND_LINUX = 'Starting a workspace or an agent from an item works on macOS and Linux only for now.'
+export const ONLY_BASH_AND_ZSH = 'Starting a workspace or an agent from an item works with the bash and zsh shells only for now.'
 export const SETTINGS_READ_FAILED = "Couldn't read settings; keeping the previous values."
 export const BOARDS_TEAM_GONE = 'That project or team no longer exists.'
 export const NO_CODE_PROJECTS = 'Pick at least one project, or choose all projects.'
@@ -381,6 +405,30 @@ export function approvedNeedsMore(count: number): string {
 
 export function rerunning(stage: string): string {
   return `Rerunning ${stage}.`
+}
+
+export function yourShellIs(name: string): string {
+  return `${ONLY_BASH_AND_ZSH} Yours is ${name}.`
+}
+
+export function cloneFolderTaken(folder: string, repo: string): string {
+  return `${folder} already exists and isn't a clone of ${repo}. Move it, or change "Folder for new clones", then try again.`
+}
+
+export function cloneFolderNotYours(folder: string): string {
+  return `${folder} belongs to another user, so the plugin won't add it to Orca. Move it, or change "Folder for new clones", then try again.`
+}
+
+export function stillCloning(repo: string, itemId: number): string {
+  return `${repo} is still being cloned (terminal "ADO #${itemId}"). Try again once it closes.`
+}
+
+export function cloneRootFailed(root: string): string {
+  return `Couldn't create ${root}. Check "Folder for new clones".`
+}
+
+export function cloneRootUnsafe(root: string): string {
+  return `${root} must be a folder only you can change. Check its owner and permissions, or change "Folder for new clones".`
 }
 
 export function noRepoWorkspace(repo: string): string {

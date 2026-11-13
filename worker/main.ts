@@ -5,6 +5,7 @@ import * as os from 'node:os'
 import * as tls from 'node:tls'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import manifest from '../orca-plugin.json' with { type: 'json' }
+import { cachedCodeRepos, type CodeRepos } from './ado/code-projects'
 import { createAzCliProvider, createAzProfiles } from './auth/azcli'
 import { createEntraProvider } from './auth/entra-provider'
 import { within } from './abort'
@@ -13,10 +14,11 @@ import { registerWorkHandlers } from './boards/handlers'
 import { createBoardsService } from './boards/service'
 import { createConnections, type StorePort } from './connections'
 import { withUserContext } from './data/context'
-import { createEntities } from './data/entities'
+import { createEntities, type Table } from './data/entities'
 import { createGovernor } from './data/governor'
 import { createMetrics, metricsLines } from './data/metrics'
 import { createPersisted } from './data/persist'
+import type { RepoRecord } from './data/records'
 import { createPressure, paceOf } from './data/rate-limit'
 import { createSavedTables } from './data/saved-tables'
 import { NETWORK } from './messages'
@@ -25,7 +27,7 @@ import { registerOrgHandlers } from './org-handlers'
 import { createRunActions } from './pipelines/actions'
 import { registerPipelineHandlers } from './pipelines/handlers'
 import { createNotifier, type Shown } from './pipelines/notify'
-import { fileInside, gitRemotes, openRunFile, type OpenFileDeps } from './pipelines/open-file'
+import { adoRemotes, fileInside, gitHasHead, gitRemoteSets, gitTopLevel, openRunFile, type OpenFileDeps } from './pipelines/open-file'
 import { openRun } from './pipelines/run-file'
 import { createRunViews } from './pipelines/run-views'
 import { createPipelinesService } from './pipelines/service'
@@ -62,6 +64,7 @@ import { createWikiService } from './wiki/service'
 import { createArm } from './workspace/arm'
 import type { HostCall } from './workspace/focused'
 import { registerWorkspaceHandlers } from './workspace/handlers'
+import { createStartFiles } from './workspace/start-files'
 
 const SHUTDOWN = { killAfterMs: 1_500, withinMs: 1_900 }
 const FLUSH_WITHIN_MS = 1_500
@@ -292,7 +295,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 
   const call: HostCall = (method, params) => orca.host.call(method as never, params as never)
   const gitPath = findExecutable('git', { pathEnv: process.env.PATH })
-  const remotes = gitRemotes(runCommand, gitPath, Date.now)
+  const remoteSets = gitRemoteSets(runCommand, gitPath, Date.now)
+  const remotes = adoRemotes(remoteSets)
   const arm = createArm(Date.now, { scheduler, changed: current => orca.panels.post('workspace.armChanged', current) })
   const openFileDeps: OpenFileDeps = {
     call,
@@ -302,7 +306,37 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     isFileInside: fileInside(fs)
   }
   const host = withUserContext(orca)
-  await registerWorkspaceHandlers(host, { boards, store, call, arm })
+  const uid = process.getuid?.() ?? -1
+  const repoLists = new WeakMap<Table<RepoRecord[]>, CodeRepos>()
+  await registerWorkspaceHandlers(host, {
+    boards,
+    store,
+    call,
+    arm,
+    remoteSets,
+    entities,
+    team: async org => (await connections.list()).find(status => status.org === org)?.boards?.teamId ?? null,
+    home,
+    hasGit: gitPath !== null,
+    root: { fs, uid },
+    codeRepos: org => {
+      const table = entities.of(org).codeRepos
+      const list = repoLists.get(table) ?? cachedCodeRepos(http, org, table, Date.now)
+      repoLists.set(table, list)
+      return list
+    },
+    folders: {
+      fs,
+      uid,
+      topLevel: gitTopLevel(runCommand, gitPath),
+      hasHead: gitHasHead(runCommand, gitPath),
+      remotes: async folder => (await remoteSets(folder, { fresh: true })).ado
+    },
+    log,
+    shell: { platform: process.platform, shell: process.env.SHELL },
+    files: createStartFiles({ home, fs, now: Date.now, uid }),
+    later: (ms, run) => void setTimeout(run, ms).unref()
+  })
   host.panels.handle('plugin.ping', () => ({ version: manifest.version }))
   registerOrgHandlers(host, connections, http)
   registerWorkHandlers(host, { boards, http, call })

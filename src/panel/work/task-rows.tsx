@@ -1,5 +1,6 @@
 import { Badge, Box, Link, Row, Text, type OrcaNode } from 'orca'
-import { CompactMove, moveTargets } from './item-card'
+import { moveTargets } from '../../shared/work-moves'
+import { CompactMove } from './item-card'
 import { openDetails } from './item-details'
 import { cutTitle, type TaskRow } from './plan'
 

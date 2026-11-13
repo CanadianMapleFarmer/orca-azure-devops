@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "azure-devops",
   "name": "Azure DevOps",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Unofficial. Azure DevOps work items, boards, pipelines, pull requests and wikis in the Orca sidebar.",
   "icon": "assets/icon.png",
   "cover": {
@@ -39,7 +39,7 @@
   "repository": "https://github.com/kloppers-labs/orca-azure-devops",
   "homepage": "https://github.com/kloppers-labs/orca-azure-devops",
   "engines": {
-    "orca": ">=1.4.248"
+    "orca": ">=1.4.256"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
@@ -110,7 +110,7 @@
       {
         "key": "defaultAgent",
         "title": "Default agent",
-        "description": "The agent \"Start an agent\" launches, such as claude or codex.",
+        "description": "The agent an item's Start buttons run, such as claude or codex.",
         "type": "string",
         "default": "claude",
         "placeholder": "claude"
@@ -127,6 +127,15 @@
         "description": "{id} is the work item id and {slug} its title.",
         "type": "string",
         "default": "feature/{id}-{slug}"
+      },
+      {
+        "key": "cloneFolder",
+        "title": "Folder for new clones",
+        "description": "Repositories cloned from Azure DevOps go here, each in a folder named after the repository.",
+        "type": "string",
+        "default": "~/orca/repos",
+        "placeholder": "~/orca/repos",
+        "maxLength": 1024
       },
       {
         "key": "autoCompleteMergeStrategy",
@@ -285,7 +294,7 @@
       "kind": "agent:read"
     },
     {
-      "kind": "agent:launch"
+      "kind": "terminal:send"
     },
     {
       "kind": "notifications:show"

@@ -1,13 +1,13 @@
 import type { StageChip } from '../../src/shared/pipelines'
 import type { WikiRef } from '../../src/shared/wiki'
-import type { BoardConfig } from '../../src/shared/work'
+import type { Assignee, BoardConfig, WorkComment } from '../../src/shared/work'
 import type { TypeState } from '../ado/board-config'
 import type { RawBuild } from '../ado/builds'
 import type { NamedItem } from '../ado/core'
 import type { RawTimeline } from '../ado/timeline'
 import { fly, join, type Flight } from './context'
 import { MAX_ENTRIES } from './freshness'
-import type { CheckRecord, ItemRecord, PrRecord } from './records'
+import type { CheckRecord, DetailsRecord, ItemRecord, PrRecord, RepoRecord } from './records'
 
 export interface Stamped<T> { value: T; at: number }
 interface TableSpec<T> { maxEntries: number; replaces?: (incoming: T, stored: T) => boolean }
@@ -32,7 +32,11 @@ export interface OrgEntities {
   boardConfigs: Table<BoardConfig>
   typeStates: Table<TypeState[]>
   projects: Table<NamedItem[]>
+  codeRepos: Table<RepoRecord[]>
   wikis: Table<WikiRef[]>
+  itemDetails: Table<DetailsRecord>
+  comments: Table<WorkComment[]>
+  teamMembers: Table<Assignee[]>
 }
 
 export type TableName = keyof OrgEntities
@@ -94,7 +98,11 @@ export function createEntities(now: () => number): Entities {
       boardConfigs: table('boardConfigs'),
       typeStates: table('typeStates'),
       projects: table('projects'),
-      wikis: table('wikis')
+      codeRepos: table('codeRepos'),
+      wikis: table('wikis'),
+      itemDetails: table<DetailsRecord>('itemDetails', (incoming, stored) => incoming.rev >= stored.rev),
+      comments: table('comments'),
+      teamMembers: table('teamMembers')
     }
     return tables
   }

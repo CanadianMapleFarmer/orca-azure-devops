@@ -32,6 +32,7 @@ import { syncShare } from './share/state'
 import { watchVisibility } from './visibility'
 import { syncWiki } from './wiki/state'
 import { WikiTab } from './wiki/wiki-tab'
+import { acceptAgentWorking, acceptWorkspaceReady } from './work/item-start'
 import { acceptChange, hideWork, syncWork } from './work/state'
 import { WorkTab } from './work/work-tab'
 
@@ -90,7 +91,9 @@ export function setup(ctx: PanelContext): () => void {
     plugin.on('work.changed', acceptChange),
     plugin.on('prs.changed', acceptPrs),
     plugin.on('runs.changed', acceptRuns),
-    plugin.on('workspace.armChanged', acceptArm)
+    plugin.on('workspace.armChanged', acceptArm),
+    plugin.on('work.workspaceReady', acceptWorkspaceReady),
+    plugin.on('work.agentWorking', acceptAgentWorking)
   )
   void loadOrgs()
   return () => {

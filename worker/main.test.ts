@@ -1755,15 +1755,9 @@ test('reviews.checkout and work.cancelWorkspace share one arm', async () => {
         assert.deepEqual(await w.request('work.cancelWorkspace', {}), { ok: true })
         assert.deepEqual(await w.hooks.fire('workspace.create.before', create), passes, 'the cancel disarmed the pull request')
 
-        const started = await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
         await w.request('reviews.checkout', key)
-        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), reviewing, 'checkout replaced the work item')
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), reviewing, 'checkout armed again')
         assert.deepEqual(await w.hooks.fire('workspace.create.before', create), passes, 'one slot, used once')
-
-        await w.request('reviews.checkout', key)
-        await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
-        const item = { kind: 'continue', event: { ...create, branch: started.branch, name: started.branch } }
-        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), item, 'the work item replaced the checkout')
         assert.equal(w.refusals.length, 0)
       })
     })
@@ -1784,29 +1778,22 @@ test('each Cancel disarms only its own arm, and every arm change is posted', asy
         const source = 'hotfix/1211-login-redirect'
         const create = { kind: 'worktree', projectId: 'repo-web', name: 'web-app-2' } as const
         const pr = { org: 'contoso', prId: 4110 }
-        const item = { org: 'contoso', itemId: 1204 }
 
         await w.request('reviews.checkout', key)
-        const started = await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
-        assert.deepEqual(await w.request('work.cancelWorkspace', pr), { ok: true })
-        assert.deepEqual(
-          await w.hooks.fire('workspace.create.before', create),
-          { kind: 'continue', event: { ...create, branch: started.branch, name: started.branch } },
-          "the pull request's Cancel left the later work item armed"
-        )
-
-        await w.request('work.startWorkspace', { org: 'contoso', id: 1204 })
-        await w.request('reviews.checkout', key)
-        assert.deepEqual(await w.request('work.cancelWorkspace', item), { ok: true })
+        assert.deepEqual(await w.request('work.cancelWorkspace', { org: 'contoso', prId: 4111 }), { ok: true })
         assert.deepEqual(
           await w.hooks.fire('workspace.create.before', create),
           { kind: 'continue', event: { ...create, branch: source, name: source, base: `origin/${source}` } },
-          "the work item's Cancel left the later pull request armed"
+          "another pull request's Cancel left this one armed"
         )
+
+        await w.request('reviews.checkout', key)
+        assert.deepEqual(await w.request('work.cancelWorkspace', pr), { ok: true })
+        assert.deepEqual(await w.hooks.fire('workspace.create.before', create), { kind: 'continue', event: create }, 'its own Cancel disarmed it')
 
         assert.deepEqual(
           w.posts.filter(post => post.event === 'workspace.armChanged').map(post => post.payload),
-          [pr, item, null, item, pr, null]
+          [pr, null, pr, null]
         )
         assert.equal(w.refusals.length, 0)
       })

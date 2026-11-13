@@ -15,14 +15,18 @@ export interface RepoWorkspace {
 
 const REMOTE_LOOKUPS = 4
 
-export async function workspacesOfRepo(
+export function workspacesOfRepo(
   deps: RepoWorkspacesDeps,
   local: WorkspaceEntry[],
   target: { org: string; project: string; repo: string }
 ): Promise<RepoWorkspace[]> {
+  return workspacesWithRemote(deps, local, remote => sameRepo(remote, target))
+}
+
+export async function workspacesWithRemote(deps: RepoWorkspacesDeps, local: WorkspaceEntry[], matches: (remote: AdoRemote) => boolean): Promise<RepoWorkspace[]> {
   const known = await mapLimit(local, REMOTE_LOOKUPS, async workspace => ({
     workspace,
-    remote: (await remotesOrNone(deps, workspace.path)).find(remote => sameRepo(remote, target))
+    remote: (await remotesOrNone(deps, workspace.path)).find(matches)
   }))
   return known.filter((entry): entry is RepoWorkspace => entry.remote !== undefined)
 }

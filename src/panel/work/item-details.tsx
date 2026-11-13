@@ -25,16 +25,17 @@ import {
   type OrcaNode
 } from 'orca'
 import { chipOf } from '../../shared/chips'
-import type { ArmIdentity, WorkItemDetails } from '../../shared/work'
-import { isArmed, requestArm, requestDisarm } from '../arm'
+import { recordOwn, withOwn, type OwnComments } from '../../shared/own-comments'
+import type { WorkItemDetails } from '../../shared/work'
 import { foldedAfter } from '../folds'
 import { messageOf } from '../state'
+import { resetStart, StartSection } from './item-start'
 import { openItem } from './state'
 
-type Loaded = { status: 'loading' } | { status: 'ready'; details: WorkItemDetails } | { status: 'failed'; message: string }
-type Section = 'comment' | 'link' | 'start'
+type Loaded = { status: 'loading' } | { status: 'ready'; details: WorkItemDetails; message?: string } | { status: 'failed'; message: string }
+type Section = 'comment' | 'link'
 type Fold = 'acceptance' | 'comments'
-type SectionNotice = { section: Section; tone: 'danger' | 'accent' | 'warning'; text: string; arm?: ArmIdentity }
+type SectionNotice = { section: Section; tone: 'danger'; text: string }
 
 const LINK_KINDS = [
   { kind: 'parent', label: 'Parent' },
@@ -44,11 +45,13 @@ const LINK_KINDS = [
 ] as const
 
 const loaded = atom<Loaded>({ status: 'loading' })
+const refreshing = atom(false)
 const commentDraft = atom('')
 const linkDraft = atom('')
 const working = atom<Section | null>(null)
 const sectionNotice = atom<SectionNotice | null>(null)
 const closedFolds = atom<Fold[]>([])
+const ownComments = atom<OwnComments>({})
 
 const foldOpen = (fold: Fold): boolean => !read(closedFolds).includes(fold)
 
@@ -63,11 +66,13 @@ const isOpen = (org: string, id: number): boolean => {
 export function openDetails(org: string, id: number): void {
   set(openItem, { org, id })
   set(loaded, { status: 'loading' })
+  set(refreshing, false)
   set(commentDraft, '')
   set(linkDraft, '')
   set(working, null)
   set(sectionNotice, null)
   set(closedFolds, [])
+  resetStart(org, id)
   void fetchDetails(org, id)
 }
 
@@ -82,8 +87,27 @@ async function fetchDetails(org: string, id: number): Promise<void> {
 }
 
 async function reloadDetails(org: string, id: number): Promise<void> {
-  const details = await plugin.request('work.details', { org, id })
-  if (isOpen(org, id)) set(loaded, { status: 'ready', details })
+  landed(org, id, await plugin.request('work.details', { org, id }))
+}
+
+function landed(org: string, id: number, details: WorkItemDetails): void {
+  if (!isOpen(org, id)) return
+  set(loaded, { status: 'ready', details: { ...details, comments: withOwn(read(ownComments), `${org}:${id}`, details.comments, Date.now()) } })
+}
+
+async function refreshDetails(): Promise<void> {
+  const open = read(openItem)
+  if (!open) return
+  const { org, id } = open
+  set(refreshing, true)
+  try {
+    landed(org, id, await plugin.request('work.details', { org, id, fresh: true }))
+  } catch (error) {
+    const message = messageOf(error)
+    if (isOpen(org, id)) update(loaded, (state): Loaded => (state.status === 'ready' ? { ...state, message } : { status: 'failed', message }))
+  } finally {
+    if (isOpen(org, id)) set(refreshing, false)
+  }
 }
 
 async function run(org: string, id: number, section: Section, work: () => Promise<void>): Promise<void> {
@@ -102,6 +126,7 @@ function postComment(org: string, id: number): Promise<void> {
   const text = read(commentDraft).trim()
   return run(org, id, 'comment', async () => {
     const comment = await plugin.request('work.comment', { org, id, text })
+    update(ownComments, own => recordOwn(own, `${org}:${id}`, comment, Date.now()))
     if (!isOpen(org, id)) return
     update(loaded, state =>
       state.status === 'ready' ? { ...state, details: { ...state.details, comments: [comment, ...state.details.comments] } } : state
@@ -125,46 +150,9 @@ function linkPullRequest(org: string, id: number, rev: number): Promise<void> {
   })
 }
 
-function startWorkspace(org: string, id: number): Promise<void> {
-  const arm = { org, itemId: id }
-  return run(org, id, 'start', async () => {
-    const { branch } = await requestArm(plugin.request('work.startWorkspace', { org, id }), () => arm)
-    if (!isOpen(org, id)) return
-    set(sectionNotice, { section: 'start', tone: 'accent', text: `Create a new workspace in Orca now. Its branch will be named ${branch}.`, arm })
-  })
-}
-
-function cancelWorkspace(org: string, id: number): Promise<void> {
-  const arm = { org, itemId: id }
-  return run(org, id, 'start', async () => {
-    await requestDisarm(plugin.request('work.cancelWorkspace', arm), arm)
-  })
-}
-
-function startAgent(org: string, id: number): Promise<void> {
-  return run(org, id, 'start', async () => {
-    const { launched, message } = await plugin.request('work.startAgent', { org, id })
-    if (!launched && message && isOpen(org, id)) set(sectionNotice, { section: 'start', tone: 'warning', text: message })
-  })
-}
-
-function NoticeFor({ section, onCancel }: { section: Section; onCancel?: () => void }): OrcaNode {
+function NoticeFor({ section }: { section: Section }): OrcaNode {
   const shown = read(sectionNotice)
-  if (shown?.section !== section) return null
-  if (!shown.arm || !onCancel) return <Callout tone={shown.tone}>{shown.text}</Callout>
-  if (!isArmed(shown.arm)) return null
-  return (
-    <Callout tone={shown.tone}>
-      <Stack gap="xs">
-        <Text size="sm">{shown.text}</Text>
-        <Row gap="sm">
-          <Button size="sm" variant="ghost" disabled={read(working) !== null} onPress={onCancel}>
-            Cancel
-          </Button>
-        </Row>
-      </Stack>
-    </Callout>
-  )
+  return shown?.section === section ? <Callout tone={shown.tone}>{shown.text}</Callout> : null
 }
 
 function Links({ links }: { links: WorkItemDetails['links'] }): OrcaNode {
@@ -225,7 +213,12 @@ function Body({ org, details }: { org: string; details: WorkItemDetails }): Orca
   const draft = read(linkDraft)
   return (
     <Stack gap="md">
-      <Heading level={3}>{item.title}</Heading>
+      <Stack gap="xs">
+        <Heading level={3}>{item.title}</Heading>
+        <Text muted size="xs">
+          Read <RelativeTime at={details.readAt} />
+        </Text>
+      </Stack>
       <KeyValue
         items={[
           { label: 'Type', value: item.type },
@@ -270,16 +263,7 @@ function Body({ org, details }: { org: string; details: WorkItemDetails }): Orca
         </Row>
         <NoticeFor section="link" />
       </Stack>
-      <Row gap="sm" align="center" wrap>
-        <Button disabled={busy} onPress={() => startWorkspace(org, item.id)}>
-          Start a workspace
-        </Button>
-        <Button disabled={busy} onPress={() => startAgent(org, item.id)}>
-          Start an agent
-        </Button>
-        <Link href={item.url}>Open in Azure DevOps</Link>
-      </Row>
-      <NoticeFor section="start" onCancel={() => cancelWorkspace(org, item.id)} />
+      <StartSection org={org} item={item} disabled={busy} />
     </Stack>
   )
 }
@@ -290,9 +274,17 @@ export function ItemDetails({ org }: { org: string }): OrcaNode {
     <Stack gap="md">
       <Row align="center" gap="sm">
         <IconButton icon="close" label="Back" variant="ghost" size="sm" onPress={closeDetails} />
+        <IconButton
+          icon="refresh"
+          label="Refresh"
+          variant="ghost"
+          size="sm"
+          disabled={state.status === 'loading' || read(refreshing)}
+          onPress={refreshDetails}
+        />
       </Row>
       {state.status === 'loading' ? <Skeleton lines={4} label="Loading details" /> : null}
-      {state.status === 'failed' ? <Callout tone="danger">{state.message}</Callout> : null}
+      {state.status !== 'loading' && state.message ? <Callout tone="danger">{state.message}</Callout> : null}
       {state.status === 'ready' ? <Body org={org} details={state.details} /> : null}
     </Stack>
   )

@@ -196,7 +196,7 @@ The arm works like this:
 
 - It serves one workspace and lasts 10 minutes.
 - The next new workspace you create in Orca gets it, in any project. The plugin can't tie the arm to a project. A workspace made with the `orca` command or by an automation gets it too, so create the one you want first. A new folder workspace doesn't use it.
-- Arming replaces an earlier arm, including one from **Start a workspace** on a work item.
+- Arming replaces an earlier arm. **Start a workspace and agent** on a work item cancels it, so its new workspace keeps the item's branch.
 - The workspace takes the branch name as its name.
 - **Cancel** disarms it, and never a later arm that replaced it. The box goes away by itself when a new workspace takes the arm, another arm replaces it or the 10 minutes are up. A panel reload removes only the box: the arm still serves the next new workspace until it expires.
 - When a local branch of the source's name exists and Orca has never fetched the remote's copy, Orca bases the workspace on that local branch as it is, without fetching. It may be behind, or hold commits you haven't pushed.

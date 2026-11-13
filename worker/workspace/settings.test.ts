@@ -2,6 +2,7 @@ import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import type { OrcaWorkerApi } from 'orca/worker'
 import manifest from '../../orca-plugin.json' with { type: 'json' }
 import { drain } from '../test-support'
+import { DEFAULT_CLONE_FOLDER } from './clone'
 import { watchWorkspaceSettings, type WorkspaceSettings } from './settings'
 
 async function watched(host = mockHost()) {
@@ -79,7 +80,16 @@ test('a settings read that fails after a change keeps the values read before', a
   assert.deepEqual(w.logs, [READ_FAILED])
 })
 
-test('the default agent setting names the Start an agent button', () => {
+test("the default agent setting names the item's Start buttons", () => {
   const setting = manifest.contributes.settings.find(entry => entry.key === 'defaultAgent')
-  assert.equal(setting?.description, 'The agent "Start an agent" launches, such as claude or codex.')
+  assert.equal(setting?.description, "The agent an item's Start buttons run, such as claude or codex.")
+})
+
+test('Folder for new clones defaults to ~/orca/repos and keeps what the user sets', async () => {
+  assert.equal((await watched()).settings.cloneFolder(), DEFAULT_CLONE_FOLDER)
+  assert.equal((await watched(mockHost({ settings: { cloneFolder: '  ' } }))).settings.cloneFolder(), '~/orca/repos')
+  assert.equal((await watched(mockHost({ settings: { cloneFolder: '/srv/repos' } }))).settings.cloneFolder(), '/srv/repos')
+  const setting = manifest.contributes.settings.find(entry => entry.key === 'cloneFolder')
+  assert.equal(setting?.title, 'Folder for new clones')
+  assert.equal(setting?.default, DEFAULT_CLONE_FOLDER)
 })

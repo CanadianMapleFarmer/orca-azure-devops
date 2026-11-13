@@ -9,7 +9,7 @@ import { isRecord } from './values'
 
 export type Row<T> = [key: string, value: T, at: number]
 export interface SavedMeta { configs: Row<BoardConfig>[]; states: Row<TypeState[]>[]; projects: Row<NamedItem[]>[] }
-export interface SavedPr extends Omit<PrRecord, 'projectId' | 'repoId'> { at: number; checks?: Stamped<CheckRecord> }
+export interface SavedPr extends Omit<PrRecord, 'projectId' | 'repoId' | 'title'> { at: number; checks?: Stamped<CheckRecord> }
 export interface SavedRepo { projectId: string; repoId: string; prs: SavedPr[] }
 export interface SavedPrRecords { repos: SavedRepo[] }
 
@@ -90,7 +90,7 @@ export function prRecordsOf(tables: Pick<OrgEntities, 'prs' | 'prChecks'>): Save
   const repoOf = new Map<SavedPr, SavedRepo>()
   const repos = new Map<string, SavedRepo>()
   for (const [key, { value, at }] of tables.prs.entries().sort(([a], [b]) => a.localeCompare(b))) {
-    const { projectId, repoId, ...rest } = value
+    const { projectId, repoId, title: _, ...rest } = value
     const id = `${projectId}/${repoId}`
     const repo = repos.get(id) ?? { projectId, repoId, prs: [] }
     repos.set(id, repo)

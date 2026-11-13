@@ -1,23 +1,15 @@
 import { Badge, Box, Button, IconButton, List, ListItem, Progress, read, Row, Select, Text, type OrcaNode } from 'orca'
 import { chipOf, MAX_CHIPS } from '../../shared/chips'
 import type { WorkItemSummary } from '../../shared/work'
+import { moveTargets, moveTo } from '../../shared/work-moves'
 import { setFoldOpen } from '../folds'
 import { openDetails } from './item-details'
 import { cutTitle, tasksKey, typeIcon, type WorkCard } from './plan'
 import { move, moveResets } from './state'
 
-const movesByColumn = (item: WorkItemSummary): boolean => item.targets.columns.length > 0
-
-export function moveTargets(item: WorkItemSummary): string[] {
-  const byColumn = movesByColumn(item)
-  const current = byColumn ? item.column : item.state
-  return (byColumn ? item.targets.columns : item.targets.states).filter(value => value !== current)
-}
-
 export function CompactMove({ org, item, placeholder = 'Move' }: { org: string; item: WorkItemSummary; placeholder?: string }): OrcaNode {
   const targets = moveTargets(item)
   if (targets.length === 0) return null
-  const byColumn = movesByColumn(item)
   return (
     <Box width={112} shrink={false}>
       <Select
@@ -26,7 +18,7 @@ export function CompactMove({ org, item, placeholder = 'Move' }: { org: string; 
         labelHidden
         placeholder={placeholder}
         options={targets.map(value => ({ value, label: value }))}
-        onChange={value => move(org, item.id, item.rev, byColumn ? { column: value } : { state: value })}
+        onChange={value => move(org, item.id, item.rev, moveTo(item, value))}
       />
     </Box>
   )

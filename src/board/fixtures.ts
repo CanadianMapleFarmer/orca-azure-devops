@@ -1,4 +1,4 @@
-import type { BoardColumn, BoardConfig, WorkItemSummary } from '../shared/work'
+import type { BoardColumn, BoardConfig, DetailPr, DetailTask, WorkComment, WorkItemDetails, WorkItemSummary } from '../shared/work'
 
 export const DEFAULT_LANE = '00000000-0000-0000-0000-000000000000'
 export const EXPEDITE = '48c9daeb-bbbb-44c5-9fd1-a2b3c4d5e6f7'
@@ -54,6 +54,60 @@ export function item(id: number, overrides: Partial<WorkItemSummary> = {}): Work
     url: `https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/${id}`,
     prs: [],
     targets: { columns: COLUMNS, states: [] },
+    ...overrides
+  }
+}
+
+const ITEM_URL = 'https://dev.azure.com/contoso/Fabrikam%20Web/_workitems/edit/'
+
+export function detailTask(id: number, overrides: Partial<DetailTask> = {}): DetailTask {
+  return {
+    id,
+    rev: 2,
+    type: 'Task',
+    title: `Task ${id}`,
+    state: 'To Do',
+    done: false,
+    assignedTo: null,
+    doneState: 'Done',
+    openState: 'In Progress',
+    url: `${ITEM_URL}${id}`,
+    ...overrides
+  }
+}
+
+export function detailPr(prId: number, overrides: Partial<DetailPr> = {}): DetailPr {
+  return {
+    prId,
+    title: `Pull request title ${prId}`,
+    target: 'main',
+    state: 'open',
+    build: 'none',
+    policies: 'none',
+    url: `https://dev.azure.com/contoso/Fabrikam%20Web/_git/web-app/pullrequest/${prId}`,
+    ...overrides
+  }
+}
+
+export function comment(id: number, overrides: Partial<WorkComment> = {}): WorkComment {
+  return { id, author: 'Dennis Ritchie', createdAt: 0, textMd: `Comment ${id}`, ...overrides }
+}
+
+export function details(overrides: Partial<WorkItemDetails> = {}): WorkItemDetails {
+  return {
+    item: item(4211, { title: 'Add vehicle search filters', assignedTo: 'Grace Hopper', parentId: 4100, parentTitle: 'Vehicle search' }),
+    descriptionMd: 'Buyers need to narrow the results by **make**.',
+    acceptanceMd: '1. Choosing a make lists only its models.',
+    assignee: { displayName: 'Grace Hopper', uniqueName: 'grace@contoso.example' },
+    comments: [],
+    links: [],
+    tasks: [],
+    moreTasks: 0,
+    tasksRead: true,
+    prs: [],
+    taskTypes: ['Task'],
+    taskType: 'Task',
+    readAt: 0,
     ...overrides
   }
 }

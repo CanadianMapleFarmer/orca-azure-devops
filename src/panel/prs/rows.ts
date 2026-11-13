@@ -1,3 +1,4 @@
+import { failedCheck, openCheck } from '../../shared/checks'
 import type { PrReviewer, PrSummary, ReleaseSet } from '../../shared/prs'
 import type { Chip } from '../chips'
 import type { Place, PlaceChip } from '../grouping'
@@ -27,14 +28,11 @@ const hasVote = (pr: PrSummary, vote: number): boolean => pr.reviewers.some(revi
 
 function worstCheck(pr: PrSummary): Chip | null {
   if (pr.mergeStatus === 'conflicts') return { tone: 'danger', text: 'conflicts' }
-  if (pr.checks?.build === 'failed') return { tone: 'danger', text: '✗ build' }
-  if (pr.checks?.policies === 'rejected') return { tone: 'danger', text: '✗ policies' }
+  const failed = failedCheck(pr.checks)
+  if (failed) return failed
   if (hasVote(pr, REJECTED_VOTE)) return { tone: 'danger', text: 'rejected' }
   if (hasVote(pr, WAITING_FOR_AUTHOR_VOTE)) return { tone: 'warning', text: 'waiting for author' }
-  if (pr.checks?.build === 'running') return { tone: 'warning', text: 'building' }
-  if (pr.checks?.policies === 'pending') return { tone: 'neutral', text: '· policies' }
-  if (pr.checks?.build === 'succeeded' || pr.checks?.policies === 'approved') return { tone: 'success', text: '✓ build' }
-  return null
+  return openCheck(pr.checks)
 }
 
 export function statusChip(pr: PrSummary): Chip | null {

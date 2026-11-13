@@ -4,17 +4,14 @@ import type { Job, Scheduler } from '../poll/scheduler'
 export const DEFAULT_BRANCH_TEMPLATE = 'feature/{id}-{slug}'
 
 const ARMED_MS = 600_000
-const CLAIM_MS = 30_000
 const SLUG_MAX = 40
 const EXPIRY_JOB = 'workspace.arm'
 
-export type ArmedBranch = { org: string; branch: string; itemId: number } | { org: string; branch: string; base: string; prId: number }
-export type ItemArm = Extract<ArmedBranch, { itemId: number }>
+export type ArmedBranch = { org: string; branch: string; base: string; prId: number }
 
 export interface Arm {
   arm(armed: ArmedBranch): number
   take(): ArmedBranch | null
-  claim(branch: string): ItemArm | null
   disarm(only?: ArmIdentity): void
 }
 
@@ -56,12 +53,11 @@ export function branchFor(template: string, item: { id: number; title: string })
 }
 
 function identityOf(armed: ArmedBranch): ArmIdentity {
-  return 'itemId' in armed ? { org: armed.org, itemId: armed.itemId } : { org: armed.org, prId: armed.prId }
+  return { org: armed.org, prId: armed.prId }
 }
 
 export function createArm(now: () => number, watch?: ArmWatch): Arm {
   let armed: { value: ArmedBranch; until: number } | null = null
-  let taken: { value: ArmedBranch; at: number } | null = null
 
   const expiry: Job = {
     key: EXPIRY_JOB,
@@ -89,17 +85,7 @@ export function createArm(now: () => number, watch?: ArmWatch): Arm {
       const current = armed
       if (!current) return null
       change(null)
-      if (now() >= current.until) return null
-      taken = { value: current.value, at: now() }
-      return current.value
-    },
-    claim(branch) {
-      const current = taken
-      if (!current || !('itemId' in current.value) || now() - current.at > CLAIM_MS) return null
-      const wanted = current.value.branch
-      if (branch !== wanted && !branch.endsWith(`/${wanted}`)) return null
-      taken = null
-      return current.value
+      return now() >= current.until ? null : current.value
     },
     disarm(only) {
       if (armed && (only === undefined || sameArm(identityOf(armed.value), only))) change(null)

@@ -1,23 +1,30 @@
-import { NO_BOARDS } from '../../src/shared/messages'
+import { NO_BOARDS, NO_TASK_TYPE } from '../../src/shared/messages'
+import { recordOwn, withOwn, type OwnComments } from '../../src/shared/own-comments'
 import type { BoardsTarget, OrgStatus } from '../../src/shared/types'
-import { NO_FAMILIES, type BoardConfig, type MoveTarget, type WorkComment, type WorkFamilies, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
-import { boardConfigKey, loadBoardConfig, type BoardArgs } from '../ado/board-config'
-import { addComment, addPullRequestLink, loadDetails, resolvePullRequest } from '../ado/details'
+import { NO_FAMILIES, type Assignee, type BoardConfig, type DetailTask, type MoveTarget, type WorkComment, type WorkFamilies, type WorkItemDetails, type WorkItemSummary, type WorkSnapshot } from '../../src/shared/work'
+import { assignItem } from '../ado/assign'
+import { boardConfigKey, loadBoardConfig, type BoardArgs, type TypeState } from '../ado/board-config'
+import { createTask, createTaskPatch, taskTitle } from '../ado/create-task'
+import { addComment, addPullRequestLink, COMMENT_LIMIT, readComments, resolvePullRequest } from '../ado/details'
 import { AdoError, withSignal, type AdoHttp } from '../ado/http'
 import { moveItem } from '../ado/move'
-import { boardClause, mineClause, readFields, textOr, workItemUrl, type RawWorkItem } from '../ado/workitems'
+import { malformed } from '../ado/shape'
+import { loadTeamMembers } from '../ado/team-members'
+import { boardClause, LINKED_FIELDS, mineClause, readFields, textOr, workItemUrl, type PrRef, type RawWorkItem } from '../ado/workitems'
 import type { StorePort } from '../connections'
 import { fly, inLane, join, type Flight } from '../data/context'
-import type { Entities, OrgEntities } from '../data/entities'
+import type { Entities, OrgEntities, Stamped } from '../data/entities'
 import { FRESHNESS } from '../data/freshness'
 import { VALUE_BUDGET_BYTES, type Persisted } from '../data/persist'
+import type { DetailsRecord } from '../data/records'
 import type { SavedTables } from '../data/saved-tables'
 import { isRecord, sameApartFromTime } from '../data/values'
-import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
+import { badRequest, CHIPS_NEED_CODE_READ, CONFLICT, failureMessage, FILTER_NOT_SAVED, GONE, joinMessages, LOAD_FAILED, MALFORMED, NOT_CONNECTED, REOPEN_BOARD, SHOWING_SAVED, UNKNOWN_COLUMN } from '../messages'
 import type { Scheduler } from '../poll/scheduler'
 import { createBoardFilters } from './board-filters'
 import { boardKey, createBoardViews, type BoardChange, type BoardLoad, type BoardRef, type BoardRequest, type BoardResult, type Synced } from './board-views'
 import { cleanRules, createNudgeStore, findNudges, type NudgeRule } from './nudges'
+import { childIds, composeDetails, detailsFresh, linkedReadIds, prRowsOf, recordOf, taskRowOf, withNewChild, withWrite } from './item-details'
 import { createRecentWrites } from './recent'
 import {
   capBoard,
@@ -35,6 +42,7 @@ import {
   rechip,
   restate,
   SAVED_BOARD_BYTES,
+  summaryFromStore,
   type ItemSource,
   type Me,
   type ViewIds
@@ -61,11 +69,15 @@ export interface BoardsService {
   onOrgs(orgs: OrgStatus[]): void
   snapshot(org: string): Promise<WorkSnapshot>
   refresh(org: string): Promise<WorkSnapshot>
-  details(org: string, id: number): Promise<WorkItemDetails>
+  details(org: string, id: number, options?: DetailsOptions): Promise<WorkItemDetails>
   cachedItem(org: string, id: number): WorkItemSummary | null
+  prRefs(org: string, id: number): PrRef[]
   itemInfo(org: string, id: number, signal: AbortSignal): Promise<ItemInfo | null>
   move(input: { org: string; id: number; rev: number; to: MoveTarget; board?: BoardRef }): Promise<WorkItemSummary>
   comment(org: string, id: number, text: string): Promise<WorkComment>
+  assign(input: { org: string; id: number; rev: number; to: Assignee | null; board?: BoardRef }): Promise<WorkItemSummary>
+  assignees(input: { org: string; projectId: string; teamId: string }): Promise<{ me: Assignee | null; members: Assignee[] }>
+  addTask(input: { org: string; parentId: number; title: string; board?: BoardRef }): Promise<{ task: DetailTask; parent: WorkItemSummary }>
   linkPr(input: { org: string; id: number; rev: number; prUrl: string; board?: BoardRef }): Promise<WorkItemSummary>
   board(input: BoardArgs & { everyone?: boolean; remember?: boolean }): Promise<BoardResult & { everyone: boolean }>
   defaultBoard(org: string): Promise<{ projectId: string; teamId: string; boardId: string } | null>
@@ -89,19 +101,29 @@ interface Holder { board: BoardConfig; items: WorkItemSummary[] }
 
 type ItemInfo = Pick<WorkItemSummary, 'type' | 'title' | 'url'>
 
+export interface DetailsOptions { board?: BoardRef; fresh?: boolean; comments?: boolean }
+
+interface DetailsRead { record: DetailsRecord; item: WorkItemSummary }
+
+interface TaskParent { url: string; type: string; project: string; areaPath: string; iterationPath: string }
+
 const MINE_MS = { visibleMs: 60_000, backgroundMs: null, quietMax: 2 }
 const INFO_FIELDS = ['System.WorkItemType', 'System.Title', 'System.TeamProject']
 const NO_MEMBERS: ViewIds = { members: [], stale: new Set() }
+const NO_STATES: ReadonlyMap<string, TypeState[]> = new Map()
+const PARENT_FIELDS = ['System.WorkItemType', 'System.TeamProject', 'System.AreaPath', 'System.IterationPath']
 
 export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   const { http, scheduler, now, entities, savedTables } = deps
   const nudges = createNudgeStore(deps.store)
   const filters = createBoardFilters(deps.store)
   const recent = createRecentWrites()
+  let ownComments: OwnComments = {}
   const sources = new Map<string, ItemSource>()
   const work = new Map<string, OrgWork>()
   const homes = new Map<string, string>()
   const polled = new Map<string, BoardsTarget>()
+  const loadedConfigs = new Set<string>()
   const connected = new Set<string>()
   const workVisible = new Set<string>()
   const boardViews = createBoardViews({
@@ -214,7 +236,16 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
   }
 
   function config(args: BoardArgs, signal?: AbortSignal): Promise<BoardConfig> {
-    return entities.of(args.org).boardConfigs.read(boardConfigKey(args), FRESHNESS.boardConfig, scoped => loadBoardConfig(withSignal(http, scoped), args), signal)
+    const key = boardConfigKey(args)
+    const table = entities.of(args.org).boardConfigs
+    const held = table.get(key)?.value
+    const outdated = held !== undefined && held.taskTypes === undefined && !loadedConfigs.has(key)
+    const load = async (scoped: AbortSignal) => {
+      const loaded = await loadBoardConfig(withSignal(http, scoped), args)
+      loadedConfigs.add(key)
+      return loaded
+    }
+    return table.read(key, outdated ? 0 : FRESHNESS.boardConfig, load, signal)
   }
 
   async function defaultConfig(status: OrgStatus, signal?: AbortSignal): Promise<BoardConfig> {
@@ -333,9 +364,9 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
 
   async function namedConfig(status: OrgStatus, ref: BoardRef): Promise<BoardConfig> {
     const view = boardViews.get(boardKey(status.org, ref.teamId, ref.boardId))
-    if (view) return view.result.board
+    if (view?.result.board.taskTypes) return view.result.board
     const own = status.boards?.teamId === ref.teamId ? status.boards.projectId : undefined
-    const projectId = homes.get(`${status.org}/${ref.teamId}`) ?? own
+    const projectId = view?.result.board.projectId ?? homes.get(`${status.org}/${ref.teamId}`) ?? own
     if (!projectId) throw badRequest(REOPEN_BOARD)
     return config({ org: status.org, projectId, teamId: ref.teamId, boardId: ref.boardId })
   }
@@ -368,6 +399,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     const source = sourceOf(status)
     const kept = source.put(raw)
     recent.record([mineKey(org), ...boardViews.of(org).map(view => view.key)], { raw: kept, like })
+    await rewriteDetails(status, raw, like)
     for (const view of boardViews.of(org)) {
       if (!view.result.items.some(item => item.id === raw.id)) continue
       const item = await restate(source, view.result.board, kept, like)
@@ -394,6 +426,76 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       families: done === null ? snapshot.families : patchFamilies(snapshot.families, item, done)
     }
     deps.post(entry.snapshot)
+  }
+
+  async function rewriteDetails(status: OrgStatus, raw: RawWorkItem, like: WorkItemSummary): Promise<void> {
+    const table = entities.of(status.org).itemDetails
+    const own = String(raw.id)
+    const listing = table.entries().filter(([key, { value }]) => key === own || value.tasks.some(task => task.id === raw.id))
+    for (const [key, { value }] of listing) {
+      const states = key === own ? NO_STATES : await typeStatesOf(status, value.projectId, raw)
+      const held = table.get(key)
+      if (!held) continue
+      const next = states && withWrite(held.value, raw, states, status.url, like.url)
+      if (!next) table.drop(key)
+      else if (next !== held.value) table.put(key, next, held.at)
+    }
+  }
+
+  async function typeStatesOf(status: OrgStatus, projectId: string, raw: RawWorkItem): Promise<ReadonlyMap<string, TypeState[]> | null> {
+    const type = textOr(raw.fields['System.WorkItemType'], '')
+    if (type === '') return NO_STATES
+    const states = await sourceOf(status).states(projectId, type).catch(() => null)
+    return states && new Map([[type, states]])
+  }
+
+  async function readDetails(status: OrgStatus, cfg: BoardConfig, id: number, signal: AbortSignal): Promise<DetailsRead> {
+    const source = sourceOf(status).withSignal(signal)
+    const loaded = await loadItem(source, cfg, id)
+    if (!loaded) throw new AdoError('not_found', 404, GONE)
+    const { raw, item, chips } = loaded
+    const ids = linkedReadIds(raw)
+    const linked = ids.length === 0 ? [] : await unlessFailed(source.fields(cfg.projectId, ids, new Set(ids), LINKED_FIELDS))
+    const states = linked && (await unlessFailed(childStates(source, cfg.projectId, raw, linked)))
+    const home = textOr(raw.fields['System.TeamProject'], '') || cfg.projectId
+    const record = recordOf({ raw, linked, states, chips, org: status.org, orgUrl: status.url, projectId: cfg.projectId, home, itemUrl: item.url })
+    return { record, item }
+  }
+
+  async function detailsBody(status: OrgStatus, cfg: BoardConfig, id: number, fresh: boolean): Promise<Stamped<DetailsRecord> & { item?: WorkItemSummary }> {
+    const table = entities.of(status.org).itemDetails
+    const key = String(id)
+    const held = table.get(key)
+    if (!fresh && detailsFresh(held, sourceOf(status).revOf(id), now())) return held
+    let read: DetailsRead | undefined
+    const value = await table.read(key, 0, async signal => {
+      read = await readDetails(status, cfg, id, signal)
+      return read.record
+    })
+    const stored = table.get(key)
+    const at = stored?.value === value ? stored.at : now()
+    if (!value.tasksRead && stored?.value === value) table.put(key, value, now() - FRESHNESS.itemDetails)
+    return { value, at, ...(read ? { item: read.item } : {}) }
+  }
+
+  async function detailsComments(status: OrgStatus, cfg: BoardConfig, id: number, options: DetailsOptions, itemUrl: string): Promise<WorkComment[]> {
+    const table = entities.of(status.org).comments
+    const key = String(id)
+    if (options.comments === false) return table.get(key)?.value ?? []
+    const held = options.fresh ? undefined : table.fresh(key, FRESHNESS.itemComments)
+    return held ?? table.read(key, 0, async signal => withOwnComments(status.org, id, await readComments(withSignal(http, signal), status.org, cfg.projectId, id, itemUrl)))
+  }
+
+  function withOwnComments(org: string, id: number, comments: WorkComment[]): WorkComment[] {
+    return withOwn(ownComments, `${org}:${id}`, comments, now()).slice(0, COMMENT_LIMIT)
+  }
+
+  async function taskParent(status: OrgStatus, cfg: BoardConfig, id: number): Promise<TaskParent> {
+    const held = sourceOf(status).record(id)
+    if (held && hasPaths(held)) return asTaskParent(held)
+    const [read] = await readFields(http, status.org, cfg.projectId, [id], PARENT_FIELDS)
+    if (!read) throw new AdoError('not_found', 404, GONE)
+    return asTaskParent(read)
   }
 
   async function republish(status: OrgStatus, cfg: BoardConfig, id: number): Promise<WorkItemSummary | null> {
@@ -469,11 +571,19 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       throw entry?.failure ?? new AdoError('server', 500, LOAD_FAILED)
     },
 
-    async details(org, id) {
+    async details(org, id, options = {}) {
       const status = await statusOf(org)
-      const { cfg } = await target(status, id)
-      const { raw, item, chips } = await reload(status, cfg, id)
-      return loadDetails(http, org, cfg.projectId, item, raw, chips)
+      const { cfg, cached } = await target(status, id, options.board)
+      const tables = entities.of(org)
+      const project = textOr(tables.workItems.get(String(id))?.value.fields['System.TeamProject'], '') || cfg.projectId
+      const itemUrl = cached?.url ?? workItemUrl(status.url, project, id)
+      const [body, comments] = await Promise.all([detailsBody(status, cfg, id, options.fresh === true), detailsComments(status, cfg, id, options, itemUrl)])
+      const record = tables.itemDetails.get(String(id))?.value ?? body.value
+      const item = (cached?.rev === record.rev ? cached : null) ?? body.item ?? (await summaryFromStore(sourceOf(status), cfg, id))
+      if (!item) throw new AdoError('not_found', 404, GONE)
+      const taskTypes = cfg.taskTypes ?? []
+      const taskType = isOnBoard(item, cfg) && taskTypes.length > 0 ? taskTypes[0] : null
+      return composeDetails({ record, item, comments: withOwnComments(org, id, comments), prs: prRowsOf(org, record.prRefs, tables), taskTypes, taskType, readAt: body.at })
     },
 
     cachedItem(org, id) {
@@ -482,6 +592,10 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const snapshot = entry && servable(entry) ? entry.snapshot : null
       const listed = [...(snapshot?.mine ?? []), ...(snapshot?.other ?? [])].find(item => item.id === id)
       return listed ?? boardViews.of(org).filter(servable).flatMap(view => view.result.items).find(item => item.id === id) ?? null
+    },
+
+    prRefs(org, id) {
+      return entities.of(org).itemDetails.get(String(id))?.value.prRefs ?? []
     },
 
     async itemInfo(org, id, signal) {
@@ -493,7 +607,7 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
     async move({ org, id, rev, to, board }) {
       const status = await statusOf(org)
       const { cfg, cached } = await target(status, id, board)
-      const current = cached && cached.rev >= rev ? cached : (await reload(status, cfg, id)).item
+      const current = (cached && cached.rev >= rev ? cached : null) ?? (await storedSummary(sourceOf(status), cfg, id, rev)) ?? (await reload(status, cfg, id)).item
       return change(status, cfg, id, rev, () => moveItem(http, org, cfg.projectId, { ...current, rev }, cfg, to))
     },
 
@@ -501,8 +615,47 @@ export function createBoardsService(deps: BoardsServiceDeps): BoardsService {
       const status = await statusOf(org)
       const { cfg } = await target(status, id)
       const comment = await addComment(http, org, cfg.projectId, id, text)
+      ownComments = recordOwn(ownComments, `${org}:${id}`, comment, now())
+      const comments = entities.of(org).comments
+      const held = comments.get(String(id))
+      if (held) comments.put(String(id), withOwnComments(org, id, held.value), held.at)
       await republish(status, cfg, id).catch(() => null)
       return comment
+    },
+
+    async assign({ org, id, rev, to, board }) {
+      const status = await statusOf(org)
+      const { cfg } = await target(status, id, board)
+      return change(status, cfg, id, rev, () => assignItem(http, org, cfg.projectId, id, rev, to))
+    },
+
+    async assignees({ org, projectId, teamId }) {
+      const status = await statusOf(org)
+      const load = (signal: AbortSignal) => loadTeamMembers(withSignal(http, signal), org, projectId, teamId)
+      const members = await entities.of(org).teamMembers.read(`${projectId}/${teamId}`, FRESHNESS.teamMembers, load)
+      const me = status.account ? { displayName: status.account.displayName, uniqueName: status.account.uniqueName } : null
+      return { me, members }
+    },
+
+    async addTask({ org, parentId, title, board }) {
+      const name = taskTitle(title)
+      const status = await statusOf(org)
+      const { cfg, cached } = await target(status, parentId, board)
+      const type = cfg.taskTypes?.[0]
+      if (type === undefined) throw badRequest(NO_TASK_TYPE)
+      const source = sourceOf(status)
+      const parent = await taskParent(status, cfg, parentId)
+      if (!isOnBoard({ type: cached?.type ?? parent.type }, cfg)) throw badRequest(NO_TASK_TYPE)
+      const raw = await createTask(http, org, cfg.projectId, type, createTaskPatch({ title: name, areaPath: parent.areaPath, iterationPath: parent.iterationPath, parentUrl: parent.url }))
+      source.put(raw)
+      const states = await source.states(cfg.projectId, type).catch(() => undefined)
+      const task = taskRowOf(raw, states, status.url, parent.project || cfg.projectId) ?? malformed(MALFORMED.workItem)
+      const details = entities.of(org).itemDetails
+      const held = details.get(String(parentId))
+      if (held) details.put(String(parentId), withNewChild(held.value, task), held.at)
+      const summary = (await republish(status, cfg, parentId)) ?? cached ?? (await summaryFromStore(source, cfg, parentId))
+      if (!summary) throw new AdoError('not_found', 404, GONE)
+      return { task, parent: summary }
     },
 
     async linkPr({ org, id, prUrl, board }) {
@@ -609,6 +762,37 @@ async function restatedRows(source: ItemSource, cfg: BoardConfig, families: Work
     if (hasTask(patched, item.id)) patched = patchFamilies(patched, item, await isCompleted(source, cfg, item))
   }
   return patched
+}
+
+function hasPaths({ fields }: { fields: Record<string, unknown> }): boolean {
+  return textOr(fields['System.AreaPath'], '') !== '' && textOr(fields['System.IterationPath'], '') !== ''
+}
+
+function asTaskParent({ url, fields }: { url: string; fields: Record<string, unknown> }): TaskParent {
+  const text = (name: string) => textOr(fields[name], '')
+  return { url, type: text('System.WorkItemType'), project: text('System.TeamProject'), areaPath: text('System.AreaPath'), iterationPath: text('System.IterationPath') }
+}
+
+async function storedSummary(source: ItemSource, cfg: BoardConfig, id: number, rev: number): Promise<WorkItemSummary | null> {
+  const record = source.record(id)
+  if (!record || (!record.withRelations && isOnBoard({ type: textOr(record.fields['System.WorkItemType'], '') }, cfg))) return null
+  return summaryFromStore(source, cfg, id, rev)
+}
+
+async function childStates(source: ItemSource, projectId: string, raw: RawWorkItem, linked: readonly RawWorkItem[]): Promise<ReadonlyMap<string, TypeState[]>> {
+  const children = new Set(childIds(raw))
+  const types = [...new Set(linked.filter(item => children.has(item.id)).map(item => textOr(item.fields['System.WorkItemType'], '')))].filter(type => type !== '')
+  const lists = await Promise.all(types.map(type => source.states(projectId, type)))
+  return new Map(types.map((type, index) => [type, lists[index]]))
+}
+
+async function unlessFailed<T>(read: Promise<T>): Promise<T | null> {
+  try {
+    return await read
+  } catch (error) {
+    if (!(error instanceof AdoError) || error.code === 'rate_limited') throw error
+    return null
+  }
 }
 
 function forcingAudit(held: Synced): Synced {

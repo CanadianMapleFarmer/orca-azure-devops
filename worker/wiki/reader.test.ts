@@ -180,10 +180,22 @@ test('Open in tab without a local workspace says so and writes nothing', async (
   })
   const unfocused = harness([], untouched)
   const remote = harness([workspace('/srv/web-app', 'ssh:build-box')], untouched)
-  for (const h of [unfocused, remote]) {
+  const ssh = harness([workspace('/srv/web-app', 'ssh-1')], untouched)
+  for (const h of [unfocused, remote, ssh]) {
     assert.deepEqual(await h.reader.openInTab(ref(CHECKLIST)), { opened: false, message: NO_WORKSPACE })
     assert.deepEqual(h.opened, [])
     assert.equal(h.ado.count(isPage), 0, 'the page is not read')
+  }
+})
+
+test('Open in tab opens the copy in a workspace on Orca\'s "local" host as well as one without a host', async () => {
+  for (const hostId of [null, 'local']) {
+    await withDirs(1, async ([web]) => {
+      const h = harness([workspace(web, hostId)])
+      assert.deepEqual(await h.reader.openInTab(ref(CHECKLIST)), { opened: true, message: OPENED }, String(hostId))
+      assert.deepEqual(h.opened, [{ workspaceId: 'ws-web', path: `.orca-ado/${COPY}` }])
+      assert.equal(await fs.readFile(onDisk(web, COPY), 'utf8'), COPY_TEXT)
+    })
   }
 })
 

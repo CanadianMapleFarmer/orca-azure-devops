@@ -52,7 +52,7 @@ function cardElement(item: WorkItemSummary, column: string): HTMLElement {
 export function createCards() {
   const cards = new Map<number, { key: string; node: HTMLElement }>()
   return {
-    card(item: WorkItemSummary, column: string, busy: boolean): HTMLElement {
+    card(item: WorkItemSummary, column: string, busy: boolean, selected: boolean): HTMLElement {
       const key = JSON.stringify([item, column])
       let entry = cards.get(item.id)
       if (!entry || entry.key !== key) {
@@ -61,6 +61,9 @@ export function createCards() {
       }
       entry.node.classList.toggle('busy', busy)
       entry.node.setAttribute('aria-busy', String(busy))
+      entry.node.classList.toggle('selected', selected)
+      if (selected) entry.node.setAttribute('aria-current', 'true')
+      else entry.node.removeAttribute('aria-current')
       return entry.node
     },
     keep(ids: ReadonlySet<number>): void {
@@ -71,7 +74,7 @@ export function createCards() {
 
 export type Cards = ReturnType<typeof createCards>
 
-export function boardGrid(layout: { columns: string[]; lanes: Lane[] }, cards: Cards, busy: (id: number) => boolean, onToggle: (laneId: string) => void): HTMLElement {
+export function boardGrid(layout: { columns: string[]; lanes: Lane[] }, cards: Cards, busy: (id: number) => boolean, selected: (id: number) => boolean, onToggle: (laneId: string) => void): HTMLElement {
   const grid = el('div', 'grid')
   grid.style.setProperty('--columns', String(layout.columns.length))
   for (const column of layout.columns) {
@@ -95,7 +98,7 @@ export function boardGrid(layout: { columns: string[]; lanes: Lane[] }, cards: C
       cell.dataset.lane = lane.id
       cell.setAttribute('role', 'list')
       cell.setAttribute('aria-label', showLanes ? `${column}, ${laneName}` : column)
-      cell.append(...(lane.cells[column] ?? []).map(item => cards.card(item, column, busy(item.id))))
+      cell.append(...(lane.cells[column] ?? []).map(item => cards.card(item, column, busy(item.id), selected(item.id))))
       grid.append(cell)
     }
   }

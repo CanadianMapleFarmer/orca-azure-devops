@@ -5,6 +5,7 @@ export interface DragHandlers {
   canDrag(id: number): boolean
   accepts(id: number, cell: Cell): boolean
   drop(id: number, cell: Cell | null): void
+  pressed(id: number): void
   ended(): void
 }
 
@@ -55,23 +56,28 @@ export function attachDrag(scroller: HTMLElement, handlers: DragHandlers): { dra
     current.over = over
   }
 
-  function finish(event: PointerEvent, commit: boolean): void {
-    const current = drag
-    if (!current || event.pointerId !== current.pointerId) return
+  function end(current: Drag, release: { x: number; y: number } | null): void {
     drag = null
     current.ghost?.remove()
     current.over?.classList.remove('drop')
     current.card.classList.remove('dragging')
     if (current.card.hasPointerCapture(current.pointerId)) current.card.releasePointerCapture(current.pointerId)
-    if (current.ghost && commit) handlers.drop(current.id, dropTarget({ x: event.clientX, y: event.clientY }, current.cells))
+    if (release && current.ghost) handlers.drop(current.id, dropTarget(release, current.cells))
+    else if (release) handlers.pressed(current.id)
     handlers.ended()
+  }
+
+  function finish(event: PointerEvent, commit: boolean): void {
+    const current = drag
+    if (!current || event.pointerId !== current.pointerId) return
+    end(current, commit ? { x: event.clientX, y: event.clientY } : null)
   }
 
   scroller.addEventListener('pointerdown', event => {
     if (event.button !== 0 || drag) return
     const card = (event.target as Element).closest<HTMLElement>('.card')
-    const id = Number(card?.dataset.id)
-    if (!card || !handlers.canDrag(id)) return
+    if (!card) return
+    const id = Number(card.dataset.id)
     const box = card.getBoundingClientRect()
     drag = {
       id,
@@ -91,6 +97,7 @@ export function attachDrag(scroller: HTMLElement, handlers: DragHandlers): { dra
     if (!current || event.pointerId !== current.pointerId) return
     if (!current.ghost) {
       if (Math.hypot(event.clientX - current.start.x, event.clientY - current.start.y) < THRESHOLD_PX) return
+      if (!handlers.canDrag(current.id)) return end(current, null)
       begin(current)
     }
     hover(current, { x: event.clientX, y: event.clientY })

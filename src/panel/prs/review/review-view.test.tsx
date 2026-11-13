@@ -408,8 +408,8 @@ test('the armed instructions show only while the posted arm is this pull request
   await reopen(REVIEW_TITLE)
   assert.equal(shown(), true, 'reopened while still armed')
 
-  await panel.post('workspace.armChanged', { org: 'contoso', itemId: 101 })
-  assert.equal(shown(), false, 'a work item replaced the arm')
+  await panel.post('workspace.armChanged', { org: 'contoso', prId: 4111 })
+  assert.equal(shown(), false, 'another pull request replaced the arm')
   await panel.post('workspace.armChanged', { org: 'contoso', prId: 4110 })
   assert.equal(shown(), true)
   await panel.post('workspace.armChanged', { org: 'fabrikam', prId: 4110 })

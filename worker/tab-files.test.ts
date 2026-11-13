@@ -68,17 +68,19 @@ test('writeTabFile creates the folder and its gitignore once and rewrites only o
 })
 
 test('openTabFile writes the file into the focused local workspace and opens it by its relative path', async () => {
-  await withTempDir(async dir => {
-    const { call, calls } = host({
-      'workspace.readContext': CONTEXT,
-      'workspace.list': { workspaces: [{ id: 'ws-1', kind: 'worktree', name: 'web-app', path: dir, branch: 'main', hostId: null }], truncated: false },
-      'editor.open': { opened: true }
+  for (const hostId of [null, 'local']) {
+    await withTempDir(async dir => {
+      const { call, calls } = host({
+        'workspace.readContext': CONTEXT,
+        'workspace.list': { workspaces: [{ id: 'ws-1', kind: 'worktree', name: 'web-app', path: dir, branch: 'main', hostId }], truncated: false },
+        'editor.open': { opened: true }
+      })
+      const file = path.join(dir, TAB_FOLDER, 'contoso.4512.adorun')
+      assert.deepEqual(await openTabFile({ call, fs }, 'contoso.4512.adorun', 'text\n', NO_WORKSPACE), { opened: true, file }, String(hostId))
+      assert.deepEqual(calls.at(-1), { method: 'editor.open', params: { workspaceId: 'ws-1', path: '.orca-ado/contoso.4512.adorun' } })
+      assert.equal(await fs.readFile(file, 'utf8'), 'text\n')
     })
-    const file = path.join(dir, TAB_FOLDER, 'contoso.4512.adorun')
-    assert.deepEqual(await openTabFile({ call, fs }, 'contoso.4512.adorun', 'text\n', NO_WORKSPACE), { opened: true, file })
-    assert.deepEqual(calls.at(-1), { method: 'editor.open', params: { workspaceId: 'ws-1', path: '.orca-ado/contoso.4512.adorun' } })
-    assert.equal(await fs.readFile(file, 'utf8'), 'text\n')
-  })
+  }
 })
 
 test('openTabFile refuses a missing or remote workspace with the given message and writes nothing', async () => {
@@ -88,7 +90,8 @@ test('openTabFile refuses a missing or remote workspace with the given message a
     readFile: async () => assert.fail('nothing is read')
   } as unknown as TabFileFs
   const remote = { id: 'ws-1', kind: 'worktree', name: 'web-app', path: '/srv/web-app', branch: 'main', hostId: 'ssh:build-box' }
-  for (const answers of [{ 'workspace.readContext': null }, { 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [remote], truncated: false } }]) {
+  const listing = (workspace: object) => ({ 'workspace.readContext': CONTEXT, 'workspace.list': { workspaces: [workspace], truncated: false } })
+  for (const answers of [{ 'workspace.readContext': null }, listing(remote), listing({ ...remote, hostId: 'ssh-1' })]) {
     const { call, calls } = host(answers)
     assert.deepEqual(await openTabFile({ call, fs: untouched }, 'contoso.4512.adorun', 'text\n', NO_WORKSPACE), { opened: false, message: NO_WORKSPACE })
     assert.equal(calls.some(entry => entry.method === 'editor.open'), false)

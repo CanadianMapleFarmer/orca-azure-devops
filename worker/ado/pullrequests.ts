@@ -1,9 +1,7 @@
 import type { PrKey, PrReviewer, PrSummary } from '../../src/shared/prs'
-import type { OrgStatus } from '../../src/shared/types'
-import { reviewersSignature, type PrRecord } from '../data/records'
+import { reviewersSignature, type PrRecord, type RepoRecord } from '../data/records'
 import { MALFORMED } from '../messages'
-import { byName, listProjects, type NamedItem } from './core'
-import { AdoError, type AdoHttp } from './http'
+import type { AdoHttp } from './http'
 import { branchName, pullRequestUrl } from './pr-links'
 import { expectList, expectText, malformed, shaped } from './shape'
 import { textOr, timestamp } from './workitems'
@@ -49,7 +47,12 @@ export interface PrCriteria {
 }
 
 interface RawRepository {
+  id: string
+  name: string
   project: { id: string; name: string }
+  sshUrl?: string | null
+  isDisabled?: boolean
+  isInMaintenance?: boolean
 }
 
 export async function listPullRequests(
@@ -97,15 +100,9 @@ export async function pullRequestWorkItems(http: AdoHttp, org: string, key: PrKe
   return shape(() => expectList<{ id: unknown }>(data.value).flatMap(item => workItemId(item.id)))
 }
 
-export async function codeProjects(http: AdoHttp, org: string, setting: OrgStatus['codeProjects']): Promise<NamedItem[]> {
-  if (setting !== 'all') return setting
-  try {
-    const { data } = await http.json<{ value: RawRepository[] }>({ org, path: '/_apis/git/repositories' })
-    return shape(() => projectsOf(expectList<RawRepository>(data.value)))
-  } catch (error) {
-    if (error instanceof AdoError && (error.code === 'not_found' || error.code === 'bad_request')) return listProjects(http, org)
-    throw error
-  }
+export async function listRepositories(http: AdoHttp, org: string): Promise<RepoRecord[]> {
+  const { data } = await http.json<{ value: RawRepository[] }>({ org, path: '/_apis/git/repositories' })
+  return shape(() => expectList<RawRepository>(data.value).map(toRepoRecord))
 }
 
 export function deletesSourceBranch(raw: RawPullRequest): boolean {
@@ -160,6 +157,7 @@ export function toPrRecord(raw: RawPullRequest, org: string): PrRecord {
     const projectId = expectText(raw.repository.project.id)
     const repoId = expectText(raw.repository.id)
     const prId = expectPrId(raw.pullRequestId)
+    const title = textOr(raw.title, null)
     return {
       projectId,
       repoId,
@@ -168,15 +166,21 @@ export function toPrRecord(raw: RawPullRequest, org: string): PrRecord {
       target: branchName(expectText(raw.targetRefName)),
       sourceCommit: textOr(raw.lastMergeSourceCommit?.commitId, null),
       reviewers: reviewersSignature(raw.reviewers),
-      url: pullRequestUrl(org, raw.repository.webUrl, projectId, repoId, prId)
+      url: pullRequestUrl(org, raw.repository.webUrl, projectId, repoId, prId),
+      ...(title === null ? {} : { title })
     }
   })
 }
 
-function projectsOf(repositories: RawRepository[]): NamedItem[] {
-  const projects = new Map<string, NamedItem>()
-  for (const { project } of repositories) projects.set(expectText(project.id), { id: project.id, name: expectText(project.name) })
-  return byName([...projects.values()])
+function toRepoRecord(raw: RawRepository): RepoRecord {
+  return {
+    id: expectText(raw.id),
+    name: expectText(raw.name),
+    projectId: expectText(raw.project.id),
+    projectName: expectText(raw.project.name),
+    ssh: typeof raw.sshUrl === 'string',
+    disabled: raw.isDisabled === true || raw.isInMaintenance === true
+  }
 }
 
 function workItemId(id: unknown): number[] {

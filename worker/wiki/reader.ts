@@ -3,7 +3,7 @@ import type { WikiPage, WikiPageRef } from '../../src/shared/wiki'
 import { fenceAfter, toFencedMermaid } from '../../src/shared/wiki-blocks'
 import { NO_LOCAL_WORKSPACE_WIKI, openedReader, READER_CUT_NOTE, READER_OUTSIDE, readerBanner } from '../messages'
 import { ensureTabFolder, TAB_FOLDER } from '../tab-files'
-import { focusedWorkspace, type HostCall } from '../workspace/focused'
+import { focusedWorkspace, isLocalWorkspace, type HostCall } from '../workspace/focused'
 import { assertInside, readerName, type DraftFs } from './draft-files'
 import type { WikiService } from './service'
 
@@ -29,7 +29,7 @@ export function createReader(deps: { wiki: Pick<WikiService, 'wiki' | 'page'>; c
   return {
     async openInTab(ref) {
       const workspace = await focusedWorkspace(deps.call)
-      if (!workspace || workspace.hostId !== null) return { opened: false, message: NO_LOCAL_WORKSPACE_WIKI }
+      if (!workspace || !isLocalWorkspace(workspace)) return { opened: false, message: NO_LOCAL_WORKSPACE_WIKI }
       const wiki = await deps.wiki.wiki(ref.org, ref.wikiId)
       const page = await deps.wiki.page(ref, MAX_READER_BYTES, READER_CUT_NOTE)
       const name = readerName(ref.org, wiki.name, ref.path)

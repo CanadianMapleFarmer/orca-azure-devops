@@ -53,8 +53,9 @@ export interface ItemSource {
   org: string
   orgUrl: string
   items(projectId: string, ids: number[], stale: ReadonlySet<number>): Promise<RawWorkItem[]>
-  fields(projectId: string, ids: number[], stale: ReadonlySet<number>): Promise<RawWorkItem[]>
+  fields(projectId: string, ids: number[], stale: ReadonlySet<number>, names?: readonly string[]): Promise<RawWorkItem[]>
   put(raw: RawWorkItem): RawWorkItem
+  record(id: number): ItemRecord | undefined
   revOf(id: number): number | undefined
   forget(ids: readonly number[]): void
   chips(refs: PrRef[]): Promise<PrChip[] | null>
@@ -88,11 +89,12 @@ export function createItemSource(http: AdoHttp, org: string, orgUrl: string, now
       const wanted = ids.filter(id => stale.has(id) || !held(id)?.withRelations)
       return settle(ids, wanted, await hydrate(scoped, org, projectId, wanted), true)
     },
-    async fields(projectId, ids, stale) {
+    async fields(projectId, ids, stale, names = TASK_FIELDS) {
       const wanted = ids.filter(id => stale.has(id) || !held(id))
-      return settle(ids, wanted, await readFields(scoped, org, projectId, wanted, TASK_FIELDS), false)
+      return settle(ids, wanted, await readFields(scoped, org, projectId, wanted, names), false)
     },
     put: raw => keep(raw, true),
+    record: held,
     revOf: id => held(id)?.rev,
     forget(ids) {
       for (const id of ids) workItems.drop(String(id))
@@ -176,6 +178,13 @@ export async function loadItem(source: ItemSource, cfg: BoardConfig, id: number)
   const base = toSummary(source.put(raw), cfg, source.orgUrl)
   const { items, chips } = await summarize(source, cfg, [base], await stateMoves(source, cfg, [base]))
   return { raw, item: items[0], chips }
+}
+
+export async function summaryFromStore(source: ItemSource, cfg: BoardConfig, id: number, rev?: number): Promise<WorkItemSummary | null> {
+  const record = source.record(id)
+  if (!record || (rev !== undefined && record.rev !== rev)) return null
+  const base = toSummary(record, cfg, source.orgUrl)
+  return (await summarize(source, cfg, [base], await stateMoves(source, cfg, [base]))).items[0]
 }
 
 export async function restate(source: ItemSource, cfg: BoardConfig, raw: RawWorkItem, like: WorkItemSummary): Promise<WorkItemSummary> {

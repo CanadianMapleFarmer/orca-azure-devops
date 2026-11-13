@@ -11,9 +11,12 @@ export interface WorkHandlerDeps { boards: BoardsService; http: AdoHttp; call: H
 export function registerWorkHandlers(orca: OrcaWorkerApi, { boards, http, call }: WorkHandlerDeps): void {
   orca.panels.handle('work.snapshot', input => boards.snapshot(input.org))
   orca.panels.handle('work.refresh', input => boards.refresh(input.org))
-  orca.panels.handle('work.details', input => boards.details(input.org, input.id))
+  orca.panels.handle('work.details', input => boards.details(input.org, input.id, { board: input.board, fresh: input.fresh }))
   orca.panels.handle('work.move', input => boards.move(input))
   orca.panels.handle('work.comment', input => boards.comment(input.org, input.id, input.text))
+  orca.panels.handle('work.assign', input => boards.assign(input))
+  orca.panels.handle('work.assignees', input => boards.assignees(input))
+  orca.panels.handle('work.addTask', input => boards.addTask(input))
   orca.panels.handle('work.linkPr', input => boards.linkPr(input))
   orca.panels.handle('work.board', input => boards.board(input))
   orca.panels.handle('work.boards', input => listTeamBoards(http, input))

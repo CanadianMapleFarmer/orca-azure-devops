@@ -4,7 +4,7 @@ import type { CheckoutResult, FileDiff, PrReview, ReviewKey, ReviewResult, VoteC
 import type { Channel, ShareKind, SharePrefsView, ShareRequest, ShareResult } from './shared/share/types'
 import type { ConnectFailure, ConnectionMethod, Identity, OrgStatus } from './shared/types'
 import type { DraftSummary, WikiHit, WikiLevel, WikiPage, WikiPageRef, WikiRef, WikiResult } from './shared/wiki'
-import type { ArmIdentity, BoardConfig, MoveTarget, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
+import type { ArmIdentity, Assignee, BoardConfig, CloneTargets, DetailTask, ItemWorkspace, MoveTarget, RepoPick, StartAgentResult, StartRepos, StartWorkResult, WorkComment, WorkItemDetails, WorkItemSummary, WorkSnapshot } from './shared/work'
 declare module 'orca' {
   interface PluginRequests {
     'plugin.ping': { input: {}; output: { version: string } }
@@ -19,12 +19,21 @@ declare module 'orca' {
     'orgs.setCodeProjects': { input: { org: string; projects: 'all' | string[] }; output: OrgStatus }
     'work.snapshot': { input: { org: string }; output: WorkSnapshot }
     'work.refresh': { input: { org: string }; output: WorkSnapshot }
-    'work.details': { input: { org: string; id: number }; output: WorkItemDetails }
+    'work.details': { input: { org: string; id: number; board?: { teamId: string; boardId: string }; fresh?: boolean }; output: WorkItemDetails }
     'work.move': {
       input: { org: string; id: number; rev: number; to: MoveTarget; board?: { teamId: string; boardId: string } }
       output: WorkItemSummary
     }
     'work.comment': { input: { org: string; id: number; text: string }; output: WorkComment }
+    'work.assign': {
+      input: { org: string; id: number; rev: number; to: Assignee | null; board?: { teamId: string; boardId: string } }
+      output: WorkItemSummary
+    }
+    'work.assignees': { input: { org: string; projectId: string; teamId: string }; output: { me: Assignee | null; members: Assignee[] } }
+    'work.addTask': {
+      input: { org: string; parentId: number; title: string; board?: { teamId: string; boardId: string } }
+      output: { task: DetailTask; parent: WorkItemSummary }
+    }
     'work.linkPr': {
       input: { org: string; id: number; rev: number; prUrl: string; board?: { teamId: string; boardId: string } }
       output: WorkItemSummary
@@ -40,9 +49,13 @@ declare module 'orca' {
       input: { org: string; teamId: string; rules?: { branch: string; column: string }[] }
       output: { rules: { branch: string; column: string }[] }
     }
-    'work.startWorkspace': { input: { org: string; id: number }; output: { branch: string; armedUntil: number } }
+    'work.itemWorkspace': { input: { org: string; id: number }; output: ItemWorkspace }
+    'work.startRepos': { input: { org: string; id: number; board?: { teamId: string; boardId: string } }; output: StartRepos }
+    'work.cloneTargets': { input: { org: string }; output: CloneTargets }
+    'work.startWork': { input: { org: string; id: number; board?: { teamId: string; boardId: string }; repo?: RepoPick }; output: StartWorkResult }
+    'work.startAgent': { input: { org: string; id: number }; output: StartAgentResult }
+    'work.openWorkspace': { input: { workspaceId: string }; output: { opened: true } }
     'work.cancelWorkspace': { input: ArmIdentity | { org?: undefined }; output: { ok: true } }
-    'work.startAgent': { input: { org: string; id: number }; output: { launched: boolean; message?: string } }
     'ui.visibility': {
       input: {
         surface: 'work' | 'board' | 'prs' | 'pipelines' | 'run'
@@ -108,5 +121,7 @@ declare module 'orca' {
     'runs.changed': RunsSnapshot
     'runs.viewChanged': { org: string; buildId: number }
     'workspace.armChanged': ArmIdentity | null
+    'work.workspaceReady': { org: string; itemId: number; workspaceId: string; branch: string }
+    'work.agentWorking': { org: string; itemId: number }
   }
 }

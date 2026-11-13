@@ -1,5 +1,8 @@
 import { assert, test } from 'orca/testing'
-import { createToolbar, focusSelectorOf, noteText } from './render'
+import { findAll, withFakeDom, type FakeNode } from './fake-dom'
+import { boardConfig, item } from './fixtures'
+import { layoutBoard } from './layout'
+import { boardGrid, createCards, createToolbar, focusSelectorOf, noteText } from './render'
 
 const NOW = Date.parse('2026-11-11T09:00:00Z')
 const THREE_HOURS_AGO = NOW - 3 * 3600 * 1000
@@ -82,5 +85,32 @@ test("the toolbar presses neither filter until the board's filter is known", () 
     assert.deepEqual(pressed(), { Me: 'true', Everyone: 'false' })
     update(true)
     assert.deepEqual(pressed(), { Me: 'false', Everyone: 'true' })
+  })
+})
+
+const classes = (node: FakeNode) => node.className.split(' ')
+
+test('the open card is marked current and selected', () => {
+  withFakeDom(() => {
+    const cards = createCards()
+    const open = cards.card(item(4211), 'Active', false, true) as unknown as FakeNode
+    assert.equal(classes(open).includes('selected'), true)
+    assert.equal(open.attributes.get('aria-current'), 'true')
+
+    const closed = cards.card(item(4211), 'Active', false, false) as unknown as FakeNode
+    assert.equal(closed, open, 'the same card, unmarked')
+    assert.equal(classes(closed).includes('selected'), false)
+    assert.equal(closed.attributes.has('aria-current'), false)
+  })
+})
+
+test('cards have no aria-haspopup', () => {
+  withFakeDom(() => {
+    const items = [item(4207, { column: 'New' }), item(4211)]
+    const grid = boardGrid(layoutBoard(boardConfig(), items, new Set()), createCards(), () => false, id => id === 4211, () => {}) as unknown as FakeNode
+    const cards = findAll(grid, node => classes(node).includes('card'))
+    assert.deepEqual(cards.map(node => node.attributes.get('role')), ['listitem', 'listitem'])
+    assert.equal(cards.some(node => node.attributes.has('aria-haspopup')), false)
+    assert.deepEqual(cards.filter(node => node.attributes.get('aria-current') === 'true').map(node => node.dataset.id), ['4211'])
   })
 })

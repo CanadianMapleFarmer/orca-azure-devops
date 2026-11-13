@@ -101,7 +101,7 @@ export function createPrsService(deps: PrsServiceDeps): PrsService {
     const entry = entries.get(org) ?? {
       controller: new AbortController(),
       source: createPrSource(http, org, now, deps.entities.of(org), longestVisibleMs(PRS_MS)),
-      projects: cachedCodeProjects(http, org, deps.entities.of(org).projects),
+      projects: cachedCodeProjects(http, org, deps.entities.of(org)),
       threads: createThreadCadence(now),
       base: null,
       snapshot: null,

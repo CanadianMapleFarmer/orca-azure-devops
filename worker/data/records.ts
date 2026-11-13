@@ -1,5 +1,6 @@
 import type { PrChecks, PrKey } from '../../src/shared/prs'
-import type { RawWorkItem } from '../ado/workitems'
+import type { Assignee, DetailTask, WorkItemDetails } from '../../src/shared/work'
+import type { PrRef, RawWorkItem } from '../ado/workitems'
 
 export type ItemRecord = RawWorkItem & { withRelations: boolean }
 
@@ -12,6 +13,32 @@ export interface PrRecord {
   sourceCommit: string | null
   reviewers: string
   url: string
+  title?: string
+}
+
+export interface RepoRecord {
+  id: string
+  name: string
+  projectId: string
+  projectName: string
+  ssh: boolean
+  disabled: boolean
+}
+
+export interface DetailsRecord {
+  id: number
+  rev: number
+  projectId: string
+  home: string
+  relations: string
+  descriptionMd: string
+  acceptanceMd: string
+  assignee: Assignee | null
+  links: WorkItemDetails['links']
+  tasks: DetailTask[]
+  moreTasks: number
+  tasksRead: boolean
+  prRefs: PrRef[]
 }
 
 export interface CheckRecord extends PrChecks {

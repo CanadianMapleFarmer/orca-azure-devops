@@ -322,7 +322,7 @@ test('toRecord keeps only the fields the views read and the child and PR links',
     withRelations: true
   })
   assert.deepEqual([...KEPT_FIELDS].sort(), [
-    'System.AreaPath', 'System.AssignedTo', 'System.ChangedDate', 'System.Id', 'System.Parent', 'System.State', 'System.TeamProject', 'System.Title', 'System.WorkItemType'
+    'System.AreaPath', 'System.AssignedTo', 'System.ChangedDate', 'System.Id', 'System.IterationPath', 'System.Parent', 'System.State', 'System.TeamProject', 'System.Title', 'System.WorkItemType'
   ])
   assert.deepEqual(toSummary(record, config(), ORG_URL), toSummary(raw, config(), ORG_URL), 'the views read the same summary')
   assert.deepEqual(childIdsOf(record), [1209])
@@ -330,6 +330,13 @@ test('toRecord keeps only the fields the views read and the child and PR links',
   const fieldsOnly = toRecord({ id: 1207, rev: 2, url: 'u', fields: { 'System.Id': 1207, 'System.Title': 'Task' } }, false)
   assert.deepEqual(fieldsOnly, { id: 1207, rev: 2, url: 'u', fields: { 'System.Id': 1207, 'System.Title': 'Task' }, withRelations: false })
   assert.deepEqual(toRecord({ ...raw, relations: [null, { rel: CHILD_LINK, url: 7 }] as never }, true).relations, [])
+})
+
+test('records keep the iteration path', () => {
+  const raw = batchItem(1204)
+  const fields = { ...raw.fields, 'System.IterationPath': 'Fabrikam Web\\Sprint 12' }
+  assert.equal(toRecord({ ...raw, fields }, true).fields['System.IterationPath'], 'Fabrikam Web\\Sprint 12')
+  assert.equal(toRecord({ ...raw, fields }, false).fields['System.IterationPath'], 'Fabrikam Web\\Sprint 12')
 })
 
 test('toSummary reads column, done flag, lane and parent from WEF fields', () => {

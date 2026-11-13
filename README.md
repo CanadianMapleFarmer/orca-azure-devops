@@ -14,13 +14,13 @@ Find **Azure DevOps** in Orca's plugin list ([catalog page](https://onorca.dev/p
 orca plugin install kloppers-labs/orca-azure-devops
 ```
 
-Orca lists what the plugin may do before you approve it, and [Permissions](docs/reference.md#permissions) explains each item. The plugin runs its own code with your account's access; community plugins are checked by machine, not reviewed by the Orca team. `orca plugin update` fetches newer releases.
+Orca lists what the plugin may do before you approve it, and [Permissions](docs/reference.md#permissions) explains each item. Starting a workspace or an agent from an item runs one line in a terminal of yours (`terminal:send`): an `orca` command, or for a repository it clones, `git clone`, `orca repo add` and `orca worktree create`. The plugin runs its own code with your account's access; community plugins are checked by machine, not reviewed by the Orca team. `orca plugin update` fetches newer releases.
 
 Then open **Azure DevOps** in Orca's sidebar and connect an organisation, as [Connecting and signing in](docs/connecting.md) describes.
 
 ## What it does
 
-- **Work:** your items by board column or by the board's own swimlanes, with their tasks inside them and a compact Move; a full-tab team board with drag-and-drop; a workspace or an agent started from an item. [Work guide](docs/work.md)
+- **Work:** your items by board column or by the board's own swimlanes, with their tasks inside them and a compact Move; a full-tab team board with drag-and-drop, where a card opens its details, tasks and comments beside the board to comment, reassign, and tick off or add tasks; a workspace and an agent started in one click from an item in the sidebar or a card on the board, in any repository in Orca or one it clones from Azure DevOps. [Work guide](docs/work.md)
 - **Pull requests:** release sets grouped by project, **Mine** and **To review**, Approve and Auto-complete, sharing to Teams or the clipboard, and PR reviews with diffs, votes and comment threads. [Pull requests guide](docs/pull-requests.md)
 - **Pipelines:** your runs grouped by project with their stages, approvals you can give or share, and a full-tab run view with a live log and an error summary. [Pipelines guide](docs/pipelines.md)
 - **Wiki:** a page tree, search, Open in tab with Mermaid diagrams drawn, and Edit in Orca with a Publish that handles conflicts. [Wiki guide](docs/wiki.md)
@@ -49,7 +49,8 @@ Then open **Azure DevOps** in Orca's sidebar and connect an organisation, as [Co
 
 ## Requirements
 
-- Orca 1.4.248 or later.
+- Orca 1.4.256 or later.
+- To start a workspace or an agent from an item: macOS or Linux, with bash or zsh as your shell.
 - For Azure CLI sign-in: Azure CLI 2.54 or later.
 - For Sign in with Microsoft: an app registration an admin creates once, as [Registering the app (for admins)](docs/connecting.md#registering-the-app-for-admins) describes. Without one, use the Azure CLI or a personal access token.
 

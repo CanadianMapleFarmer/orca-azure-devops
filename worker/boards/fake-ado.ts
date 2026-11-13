@@ -30,6 +30,7 @@ type Override = { match: (call: AdoCall) => boolean; respond: (call: AdoCall) =>
 
 const TYPE_STATES: Record<string, string> = { 'User Story': 'states-user-story', Bug: 'states-bug', Task: 'states-task', Feature: 'states-user-story' }
 const PULL_REQUESTS: Record<number, string> = { 321: 'pull-request-completed', 322: 'pull-request-active' }
+const PARENT_LINK = 'System.LinkTypes.Hierarchy-Reverse'
 
 function extraItems(): RawWorkItem[] {
   const item = (id: number, fields: Record<string, unknown>): RawWorkItem => ({
@@ -73,7 +74,7 @@ export function fakeAdo(options: { now?: () => number } = {}) {
   const calls: AdoCall[] = []
   const overrides: Override[] = []
   const changedAt = new Map<number, number>()
-  const state = { wiql: [1204, 1207, 1205, 1208], staleStatus: 412 }
+  const state = { wiql: [1204, 1207, 1205, 1208], staleStatus: 412, nextId: 6001 }
 
   function answerWiql(call: AdoCall, members: readonly number[]): Response {
     const query: string = call.body.query
@@ -101,6 +102,7 @@ export function fakeAdo(options: { now?: () => number } = {}) {
     if (method === 'GET' && path === `${work}/boards/${STORIES}`) return json(200, fixture('board-stories'))
     if (method === 'GET' && path === `${work}/boards/${FEATURES}`) return json(200, fixture('board-features'))
     if (method === 'GET' && path === `${work}/teamsettings/teamfieldvalues`) return json(200, fixture('team-field-values'))
+    if (method === 'GET' && path === `/${ORG}/_apis/projects/${PROJECT}/teams/${TEAM}/members`) return json(200, fixture('team-members'))
     const states = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workitemtypes/([^/]+)/states$`).exec(path)
     if (method === 'GET' && states && TYPE_STATES[states[1]]) return json(200, fixture(TYPE_STATES[states[1]]))
     if (method === 'POST' && path === `/${ORG}/${PROJECT}/${TEAM}/_apis/wit/wiql`) return answerWiql(call, state.wiql)
@@ -116,6 +118,8 @@ export function fakeAdo(options: { now?: () => number } = {}) {
     if (method === 'GET' && path === `/${ORG}/${PROJECT}/_apis/policy/evaluations`) return json(200, fixture('policy-evaluations'))
     const patch = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workitems/(\\d+)$`).exec(path)
     if (method === 'PATCH' && patch) return applyPatch(Number(patch[1]), call.body)
+    const create = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workitems/\\$([^/]+)$`).exec(path)
+    if (method === 'POST' && create) return createItem(create[1], call)
     const comments = new RegExp(`^/${ORG}/${PROJECT}/_apis/wit/workItems/(\\d+)/comments$`).exec(path)
     if (comments && method === 'GET') return json(200, { totalCount: 0, comments: [] })
     if (comments && method === 'POST') {
@@ -133,11 +137,40 @@ export function fakeAdo(options: { now?: () => number } = {}) {
     if (guard && guard.value !== raw.rev) return json(state.staleStatus, { message: 'TF26071: This work item has been changed by someone else since you opened it.' })
     for (const op of ops) {
       if (op.op === 'replace' && op.path.startsWith('/fields/')) raw.fields[op.path.slice('/fields/'.length)] = op.value
+      if (op.op === 'add' && op.path.startsWith('/fields/')) addField(raw, op.path.slice('/fields/'.length), op.value)
       if (op.op === 'add' && op.path === '/relations/-') raw.relations = [...(raw.relations ?? []), op.value]
     }
     raw.rev += 1
     changedAt.set(id, now())
     return json(200, raw)
+  }
+
+  function createItem(type: string, call: AdoCall): Response {
+    const id = state.nextId++
+    const raw: RawWorkItem = {
+      id,
+      rev: 1,
+      url: `${ORG_URL}/${PROJECT}/_apis/wit/workItems/${id}`,
+      fields: { 'System.Id': id, 'System.TeamProject': 'Fabrikam Web', 'System.WorkItemType': type, 'System.State': 'New' },
+      relations: []
+    }
+    for (const op of call.body as { op: string; path: string; value: any }[]) {
+      if (op.op === 'add' && op.path.startsWith('/fields/')) addField(raw, op.path.slice('/fields/'.length), op.value)
+      if (op.op === 'add' && op.path === '/relations/-') raw.relations!.push(op.value)
+    }
+    const link = raw.relations!.find(relation => relation.rel === PARENT_LINK)
+    const parent = link ? items.get(Number(/(\d+)$/.exec(link.url)?.[1])) : undefined
+    if (link && !parent) return json(400, { message: 'TF201036: The work item link target does not exist.' })
+    if (parent) {
+      raw.fields['System.Parent'] = parent.id
+      parent.relations = [...(parent.relations ?? []), { rel: CHILD_LINK, url: `${ORG_URL}/_apis/wit/workItems/${id}`, attributes: { name: 'Child' } }]
+      parent.rev += 1
+      changedAt.set(parent.id, now())
+    }
+    items.set(id, raw)
+    changedAt.set(id, now())
+    const { relations, ...bare } = raw
+    return json(200, call.query.get('$expand') === 'relations' ? { ...bare, relations } : bare)
   }
 
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -237,6 +270,12 @@ function openPullRequests(): { status: string }[] {
   return Object.values(PULL_REQUESTS)
     .map(name => fixture<{ status: string }>(name))
     .filter(pr => pr.status === 'active')
+}
+
+function addField(raw: RawWorkItem, name: string, value: unknown): void {
+  const identity = name === 'System.AssignedTo' && typeof value === 'string' ? /^(.*)<([^<>]+)>$/.exec(value) : null
+  if (name === 'System.AssignedTo' && value === '') delete raw.fields[name]
+  else raw.fields[name] = identity ? { displayName: identity[1], uniqueName: identity[2] } : value
 }
 
 function onlyFields(raw: RawWorkItem, names: string[]): RawWorkItem {

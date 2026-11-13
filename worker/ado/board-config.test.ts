@@ -7,6 +7,7 @@ const ORG = 'contoso'
 const PROJECT = '4f1a2c3d-1111-4a2b-9c3d-0e1f2a3b4c5d'
 const TEAM = '6a7b8c9d-2222-4b3c-8d4e-1f2a3b4c5d6e'
 const STORIES_BOARD = 'e2c3d4e5-5555-4e6f-9a7b-4c5d6e7f8091'
+const FEATURES_BOARD = 'd1b2c3d4-4444-4d5e-8f6a-3b4c5d6e7f80'
 
 function fixture(name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')) as Record<string, unknown>
@@ -80,19 +81,50 @@ test('picks the requirement-level board by default', async () => {
   assert.equal(requested.filter(url => url.includes('/boards/')).length, 1)
 })
 
-test('loads the board named by boardId without the backlog configuration or the board list', async () => {
+test('loads the board named by boardId with the backlog configuration but without the board list', async () => {
   const { http, requested } = server()
   const config = await loadBoardConfig(http, { ...ARGS, boardId: STORIES_BOARD })
   assert.equal(config.boardId, STORIES_BOARD)
-  assert.equal(requested.some(url => url.includes('/backlogconfiguration')), false)
+  assert.equal(requested.filter(url => url.includes('/backlogconfiguration')).length, 1)
   assert.equal(requested.some(url => url.endsWith('/_apis/work/boards?api-version=7.1')), false)
 })
 
-test("the default board carries the task backlog's types; a board named by id leaves them out", async () => {
-  const byDefault = await loadBoardConfig(server().http, ARGS)
-  assert.deepEqual(byDefault.taskTypes, ['Task'])
-  const named = await loadBoardConfig(server().http, { ...ARGS, boardId: STORIES_BOARD })
-  assert.equal('taskTypes' in named, false)
+test('a named requirement board carries the task types, the default first, and a Features board has none', async () => {
+  const backlog = fixture('backlog-configuration') as { taskBacklog: Record<string, unknown>; requirementBacklog: Record<string, unknown> }
+  const twoTypes = { ...backlog, taskBacklog: { ...backlog.taskBacklog, workItemTypes: [{ name: 'Review' }, { name: 'Task' }], defaultWorkItemType: { name: 'Task' } } }
+  const routes = withRoute('backlogconfiguration', twoTypes)
+  routes[`${WORK}/boards/${FEATURES_BOARD}`] = fixture('board-features')
+  routes[statesRoute(PROJECT, 'Feature')] = fixture('states-user-story')
+
+  assert.deepEqual((await loadBoardConfig(server(routes).http, { ...ARGS, boardId: STORIES_BOARD })).taskTypes, ['Task', 'Review'])
+  assert.deepEqual((await loadBoardConfig(server(routes).http, ARGS)).taskTypes, ['Task', 'Review'])
+  assert.deepEqual((await loadBoardConfig(server(routes).http, { ...ARGS, boardId: FEATURES_BOARD })).taskTypes, [])
+
+  const upper = { ...twoTypes, requirementBacklog: { ...twoTypes.requirementBacklog, name: 'STORIES' } }
+  const ignoringCase = await loadBoardConfig(server(withRoute('backlogconfiguration', upper)).http, { ...ARGS, boardId: STORIES_BOARD })
+  assert.deepEqual(ignoringCase.taskTypes, ['Task', 'Review'])
+})
+
+test('a named board whose backlog read fails still loads, without task types', async () => {
+  const routes = routesFor(PROJECT, TEAM)
+  delete routes[`${WORK}/backlogconfiguration`]
+  const missing = await loadBoardConfig(server(routes).http, { ...ARGS, boardId: STORIES_BOARD })
+  assert.equal(missing.boardId, STORIES_BOARD)
+  assert.equal('taskTypes' in missing, false)
+
+  const malformed = await loadBoardConfig(server(withRoute('backlogconfiguration', {})).http, { ...ARGS, boardId: STORIES_BOARD })
+  assert.equal('taskTypes' in malformed, false)
+
+  const throttled = createAdoHttp({
+    fetch: (async (input: RequestInfo | URL) => {
+      const [path] = String(input).split('?')
+      if (path.endsWith('/backlogconfiguration')) return new Response(JSON.stringify({ message: 'slow down' }), { status: 429, headers: { 'retry-after': '1' } })
+      return new Response(JSON.stringify(routesFor(PROJECT, TEAM)[path]), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof globalThis.fetch,
+    authHeader: async () => 'Bearer secret-token-value',
+    sleep: async () => {}
+  })
+  assert.equal((await failure(loadBoardConfig(throttled, { ...ARGS, boardId: STORIES_BOARD }))).code, 'rate_limited')
 })
 
 test("bugs managed as tasks add the bug category's types to the task types, from the same read", async () => {

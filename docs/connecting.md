@@ -18,17 +18,18 @@ Each organisation is pinned to the account you sign in with. The panel shows `si
 - **Microsoft:** the refresh token for each organisation is kept in Orca's encrypted secrets, which needs an OS keyring; access tokens stay in memory and are renewed before they expire. Sign out deletes it. It doesn't sign you out of Microsoft in your browser.
 - **PAT:** stored in Orca's encrypted secrets for this plugin. Sign out deletes it. This needs an OS keyring for Orca's encrypted secrets, which may be unavailable on some Linux setups.
 - **Saved views:** the last view of each tab, kept in the plugin's storage for the account that saw it so the tabs show at once when Orca starts. Sign out and removing the organisation delete them (see [Saved data](reference.md#saved-data)).
+- **Git:** **Clone from Azure DevOps…** runs `git clone` in your own terminal, so git signs in with this computer's git credentials, such as a credential helper or your SSH keys, as when you clone by hand. The plugin never hands git its own sign-in, and keeps nothing for it.
 - **Teams webhook URLs:** stored in the same encrypted secrets, one per channel. The panel can't read a URL back, and it never goes into logs, settings or messages. Sign out doesn't remove channels; **Remove** in the channel manager does.
 
 ### PAT scopes
 
 What exists so far is expected to work with:
 
-- **Project and team: Read** (`vso.project`) for the project and team lists.
-- **Work Items: Read & write** (`vso.work_write`) for the Work tab and board, moves, comments and links.
-- **Code: Read** (`vso.code`) for pull request chips, the PRs tab and linking a pull request. Without it, chips are off for that organisation and the Work and PRs tabs say so.
+- **Project and team: Read** (`vso.project`) for the project and team lists, and your team's people when you reassign an item.
+- **Work Items: Read & write** (`vso.work_write`) for the Work tab and board, moves, comments, links, reassigning, ticking off tasks and adding tasks.
+- **Code: Read** (`vso.code`) for pull request chips, the PRs tab, linking a pull request and the repository list of **Clone from Azure DevOps…**. Without it, chips are off for that organisation and the Work and PRs tabs say so.
 - **Code: Read & write** (`vso.code_write`) for Approve, Auto-complete and adding reviewers. It also covers the votes and comments in a pull request review.
-- **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message, email or add as reviewers.
+- **Graph: Read** (`vso.graph`) and **Identity: Read** (`vso.identity`) for finding people to message, email, add as reviewers or assign an item to.
 - **Build: Read & execute** (`vso.build_execute`) for the Pipelines tab and the run tab: runs, logs, rerun, cancel and approvals. Without Build access the tab says so and pauses for 10 minutes. Approvals may need a scope this list doesn't name yet. Without access to them the runs still load, and the tab says Needs me may be incomplete.
 - **Wiki: Read & write** (`vso.wiki_write`) for the Wiki tab: reading pages and publishing edits. Search may need a further scope this list doesn't name yet.
 
