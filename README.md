@@ -1,8 +1,8 @@
 # Azure DevOps for Orca
 
-![Azure DevOps for Orca: boards, pull requests, pipelines and wikis in the Orca sidebar](assets/cover.jpg)
+![Azure DevOps for Orca: a board you can work in, one-click agents, and pull requests, pipelines and wikis](assets/cover.jpg)
 
-Azure DevOps work items, boards, pull requests, pipelines and wikis in the [Orca](https://github.com/stablyai/orca) sidebar. Connect any number of organisations with the Azure CLI, a Microsoft account or a personal access token, and each one stays pinned to the account you signed in with.
+Azure DevOps work items, pull requests, pipelines and wikis in the [Orca](https://github.com/stablyai/orca) sidebar, a full-tab board you can work in, and a workspace and agent started from any item in one click. Connect any number of organisations with the Azure CLI, a Microsoft account or a personal access token, and each one stays pinned to the account you signed in with.
 
 Unofficial: not made or endorsed by Microsoft. Azure DevOps is a trademark of Microsoft.
 
@@ -30,11 +30,17 @@ Then open **Azure DevOps** in Orca's sidebar and connect an organisation, as [Co
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/screenshots/work.jpg" alt="The Work tab by board column, with tasks inside their story, and by the board's swimlanes"></td>
+    <td colspan="2"><img src="assets/screenshots/board.jpg" alt="The full-tab board with a card's details open: description, tasks, a pull request and its check, a comment and the start footer"></td>
+  </tr>
+  <tr>
+    <td colspan="2">A board you can work in: open a card to comment, reassign, tick off tasks or start an agent.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/work.jpg" alt="The Work tab by board column, and an item's details with Clone from Azure DevOps and Start a workspace and agent"></td>
     <td width="50%"><img src="assets/screenshots/pull-requests.jpg" alt="The PRs tab with release sets grouped by project, and the To review list"></td>
   </tr>
   <tr>
-    <td>Your board in the sidebar, by column or by swimlane, with tasks inside their story.</td>
+    <td>Start a workspace and agent from any item, in a repository in Orca or one it clones.</td>
     <td>Pull requests grouped by project, ready to share, approve or review.</td>
   </tr>
   <tr>

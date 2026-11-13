@@ -45,6 +45,8 @@ Run these from a clean working tree at the commit to release, and name that comm
 
 5. **Images.** The icon and screenshots meet Orca's rules, which `worker/manifest.test.ts` checks, and the screenshots show fixture data only.
 
+   The cover and screenshots are composed from `orca plugin shot` scenario and editor shots of fixture data, with a kit kept outside this repository, and each is encoded to JPEG once.
+
 6. **The docs.** The settings list in [docs/reference.md](reference.md) matches the manifest, the pending live checks in [docs/development.md](development.md) are current, and the README stays a short landing page.
 
 7. **The license.** MIT ([Plan 1](https://github.com/kloppers-labs/orca-azure-devops/blob/v0.3.0/docs/superpowers/plans/2026-11-03-plan-1-foundation.md)'s call). The user confirms it.
