@@ -134,7 +134,7 @@ Microsoft sign-in and network:
 - Sign out, then Reconnect, which needs the browser again.
 - A proxy, only on a network that has one.
 - On the client organisation, read-only: Sign in with Microsoft with the client tenant's app, when one exists.
-- Screenshots of the Work, PRs and Pipelines views in both themes, taken with Orca minimised.
+- The board and the Work, PRs and Pipelines views in both themes on a real organisation. The cover and screenshots show fixture data in the dark theme only.
 
 Panel overhaul:
 

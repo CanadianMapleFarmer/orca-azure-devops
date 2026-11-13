@@ -1,11 +1,12 @@
 import { defineCheck } from 'orca/testing'
 import type { OrgStatus } from '../shared/types'
-import type { WorkSnapshot } from '../shared/work'
+import type { StartRepos, WorkItemDetails, WorkSnapshot } from '../shared/work'
 import { approvalOf, MINUTE, NOW as RUN_NOW, runOf, runsSnapshotOf, stageOf, waitingRun } from './pipelines/fixtures'
 import { workViewKey } from './prefs'
 import { prOf as summaryOf, reviewerOf, setOf, snapshotOf } from './prs/fixtures'
 import { OPEN_REVIEW, reviewOf } from './prs/review/fixtures'
 import { CARDS_CONTENT, draftOf, LEVELS, OPEN_PAGE, pageOf, PROJECT_WIKI } from './wiki/fixtures'
+import { openDetails } from './work/item-details'
 import { board, BOARDS, item, LANES, listOf, parentOf, pr, snapshotOf as snapshotOfWork, task, workTask } from './work/fixtures'
 
 function org(name: string, over: Partial<OrgStatus> = {}): OrgStatus {
@@ -61,6 +62,32 @@ const workLanesSnapshot: WorkSnapshot = {
   board: board('contoso', { lanes: LANES }),
   mine: workSnapshot.mine.map(each => (each.id === 102 ? { ...each, lane: 'Expedite' } : each)),
   families: { ...workSnapshot.families, parents: workSnapshot.families.parents.map(parent => ({ ...parent, lane: 'Expedite' })) }
+}
+
+const startDetails: WorkItemDetails = {
+  item: workSnapshot.mine[0],
+  descriptionMd: 'People land on the **wrong page** after signing in.',
+  acceptanceMd: '',
+  assignee: null,
+  comments: [{ id: 1, author: 'Grace Hopper', createdAt: NOW - 3_600_000, textMd: 'Reproduced on staging.' }],
+  links: [],
+  tasks: [],
+  moreTasks: 0,
+  tasksRead: true,
+  prs: [],
+  taskTypes: [],
+  taskType: null,
+  readAt: NOW
+}
+
+const startRepos: StartRepos = {
+  repos: [
+    { key: 'contoso/fabrikam web/web-app', name: 'web-app', detail: 'Fabrikam Web', source: 'pr' },
+    { key: 'contoso/fabrikam web/fabrikam-api', name: 'fabrikam-api', detail: 'Fabrikam Web', source: 'last' },
+    { key: 'contoso/contoso tools/web-app', name: 'web-app', detail: 'Contoso Tools', source: 'org' }
+  ],
+  selected: 'contoso/fabrikam web/web-app',
+  clone: { folder: '~/orca/repos' }
 }
 
 const WEB_API = { repoId: 'repo-api', repoName: 'fabrikam-api' }
@@ -167,6 +194,19 @@ export default defineCheck({
       'orgs.list': [org('contoso', { boards: BOARDS })],
       'ui.visibility': { ok: true },
       'work.snapshot': workLanesSnapshot
+    }
+  },
+  workStart: {
+    requests: {
+      'orgs.list': [org('contoso', { boards: BOARDS })],
+      'ui.visibility': { ok: true },
+      'work.snapshot': () => {
+        openDetails('contoso', 101)
+        return workSnapshot
+      },
+      'work.details': startDetails,
+      'work.itemWorkspace': { workspace: null, unsupported: null },
+      'work.startRepos': startRepos
     }
   },
   prs: {
