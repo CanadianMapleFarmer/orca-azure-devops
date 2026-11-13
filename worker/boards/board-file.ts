@@ -1,4 +1,5 @@
 import * as path from 'node:path'
+import { boardFileText } from '../../src/board/ref'
 import { NO_BOARDS } from '../../src/shared/messages'
 import { isValidOrgName } from '../ado/org'
 import { BAD_BOARD, badRequest, NO_LOCAL_WORKSPACE } from '../messages'
@@ -20,8 +21,7 @@ export function boardFilePath(workspacePath: string, org: string, teamId: string
 }
 
 export async function writeBoardFile(fs: BoardFileFs, workspacePath: string, content: BoardFileContent): Promise<string> {
-  const text = `${JSON.stringify({ org: content.org, projectId: content.projectId, teamId: content.teamId, boardId: content.boardId }, null, 2)}\n`
-  return writeTabFile(fs, workspacePath, fileName(content.org, content.teamId), text)
+  return writeTabFile(fs, workspacePath, fileName(content.org, content.teamId), boardFileText(content))
 }
 
 export async function openBoard(

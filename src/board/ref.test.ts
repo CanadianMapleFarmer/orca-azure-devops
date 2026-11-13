@@ -1,7 +1,8 @@
 import { assert, test } from 'orca/testing'
-import { parseBoardRef } from './ref'
+import { boardFileText, parseBoardRef } from './ref'
 
 const REF = { org: 'contoso', projectId: 'proj-web', teamId: 'team-web', boardId: 'board-stories' }
+const TEXT = '{\n  "org": "contoso",\n  "projectId": "proj-web",\n  "teamId": "team-web",\n  "boardId": "board-stories"\n}\n'
 
 test('parseBoardRef reads the board a backing file names', () => {
   assert.deepEqual(parseBoardRef(JSON.stringify(REF, null, 2)), REF)
@@ -17,4 +18,10 @@ test('parseBoardRef answers null for an empty, invalid or incomplete document', 
   const { boardId: __, ...withoutBoard } = REF
   assert.equal(parseBoardRef(JSON.stringify(withoutBoard)), null)
   assert.equal(parseBoardRef(JSON.stringify({ ...REF, boardId: 12 })), null)
+})
+
+test('boardFileText writes only the four fields as pretty JSON with a trailing newline, which parseBoardRef reads back', () => {
+  const withExtra = { ...REF, note: 'dropped' }
+  assert.equal(boardFileText(withExtra), TEXT)
+  assert.deepEqual(parseBoardRef(TEXT), REF)
 })

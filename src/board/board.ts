@@ -1,11 +1,11 @@
-import type { EditorDocument } from 'orca/frame'
 import { messageOf } from '../shared/messages'
 import type { BoardConfig, WorkItemSummary } from '../shared/work'
 import { moveFor } from './dnd'
+import { followDocument } from './document'
 import { attachDrag } from './drag'
 import { layoutBoard, parentOptions, withParent, type Cell } from './layout'
 import { showPicker } from './picker'
-import { parseBoardRef, type BoardRef } from './ref'
+import type { BoardRef } from './ref'
 import { boardGrid, button, createCards, createToolbar, el, focusSelectorOf, noteText } from './render'
 
 interface State {
@@ -20,6 +20,7 @@ interface State {
   parent: number | null
   toggled: Set<string>
   banner: string | null
+  notice: string | null
   failure: string | null
   loading: boolean
 }
@@ -57,7 +58,6 @@ const drag = attachDrag(scroller, {
 })
 
 let state: State | null = null
-let shownText: string | null = null
 let reported: BoardRef | null = null
 let seq = 0
 let deferred = false
@@ -82,7 +82,8 @@ function paint(): void {
   if (current.banner) banner.append(el('span', '', current.banner), button('Dismiss', () => dismissBanner(), 'button secondary'))
   const items = withParent(all, current.parent)
   const empty = Boolean(current.board) && items.length === 0 && !current.loading
-  note.textContent = noteText({ stale: current.stale, updatedAt: current.updatedAt, message: current.message, empty }, Date.now(), orca.locale)
+  const status = noteText({ stale: current.stale, updatedAt: current.updatedAt, message: current.message, empty }, Date.now(), orca.locale)
+  note.textContent = [current.notice, status].filter(Boolean).join(' · ')
   note.hidden = note.textContent === ''
   cards.keep(new Set(all.map(item => item.id)))
   const focused = focusedSelector()
@@ -185,30 +186,28 @@ function sameBoard(a: BoardRef, b: BoardRef | null): boolean {
 }
 
 function openRef(ref: BoardRef): void {
-  state = { ref, board: null, base: [], pending: new Map(), message: undefined, stale: false, updatedAt: null, everyone: null, parent: null, toggled: new Set(), banner: null, failure: null, loading: false }
+  state = { ref, board: null, base: [], pending: new Map(), message: undefined, stale: false, updatedAt: null, everyone: null, parent: null, toggled: new Set(), banner: null, notice: null, failure: null, loading: false }
   root.replaceChildren(toolbar.node, banner, note, scroller)
   reportVisibility()
   void load()
 }
 
-function openText(text: string): void {
-  if (text === shownText) return
-  shownText = text
-  const ref = parseBoardRef(text)
-  if (ref) return openRef(ref)
+function openPicker(picked: (ref: BoardRef) => void): void {
   state = null
   reportVisibility()
-  showPicker(root, openRef)
+  showPicker(root, picked)
+}
+
+function showNotice(text: string): void {
+  if (!state) return
+  state.notice = text
+  paint()
 }
 
 function showReadFailure(): void {
   banner.replaceChildren(el('span', '', READ_FAILED))
   banner.hidden = false
   root.replaceChildren(banner)
-}
-
-function textOf(doc: EditorDocument): string {
-  return doc.content.kind === 'text' ? doc.content.text : ''
 }
 
 function applyTheme(colorScheme: 'light' | 'dark'): void {
@@ -239,10 +238,7 @@ async function start(): Promise<void> {
     root.replaceChildren(el('p', 'muted', 'This view opens only as the Azure DevOps board editor.'))
     return
   }
-  const first = await doc.get().catch(() => null)
-  if (first) openText(textOf(first))
-  else showReadFailure()
-  doc.onDidChange(next => openText(textOf(next)))
+  await followDocument(doc, { board: openRef, picker: openPicker, note: showNotice, readFailed: showReadFailure })
 }
 
 void start()

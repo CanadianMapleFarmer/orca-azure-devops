@@ -21,6 +21,7 @@ The tests use fixtures and fakes. These haven't been checked against a real orga
 Boards:
 
 - The board opens as an editor and `git status` stays clean.
+- **+ → Azure DevOps board**: the board picked in the dialog is written into the file, Orca marks it unsaved, and switching away and back to the tab opens the board, not the dialog. Also whether Orca echoes the written text back through `onDidChange`.
 - Dragging a card moves it, and a split column writes Doing and Done correctly.
 - The workspace hook names the branch, and **Start an agent** launches your default agent with its prompt.
 - On the client organisation, the delta query with `timePrecision=true` is accepted and returns only the items changed since the watermark.
